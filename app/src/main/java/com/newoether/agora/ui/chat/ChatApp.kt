@@ -43,18 +43,21 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.newoether.agora.R
 import com.newoether.agora.util.gradientBlur
+import com.newoether.agora.model.ModelId
 import com.newoether.agora.model.Participant
+import com.newoether.agora.model.apiModelName
 import com.newoether.agora.ui.chat.bottombar.ChatBottomBar
 import com.newoether.agora.ui.chat.message.hasActiveAnswerSegment
 import com.newoether.agora.ui.components.AnimatedBlobBackground
 import com.newoether.agora.ui.components.clearFocusOnTap
-import com.newoether.agora.ui.components.TypewriterText
+import com.newoether.agora.ui.components.TypewriterTexts
 import com.newoether.agora.ui.common.LocalAgoraHaptics
 import com.newoether.agora.ui.common.rememberAgoraHaptics
 import com.newoether.agora.model.MessageStatus
@@ -88,6 +91,7 @@ fun ChatApp(
     onSnackbarOffsetChanged: (androidx.compose.ui.unit.Dp) -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
 
@@ -108,6 +112,13 @@ fun ChatApp(
     val currentConversationId by viewModel.currentConversationId.collectAsState()
     val generatingInConversationId by viewModel.generatingInConversationId.collectAsState()
     val selectedModel by viewModel.currentActiveModel.collectAsState()
+    val welcomeMessagesRaw by viewModel.settings.welcomeMessages.collectAsState()
+    val welcomeDisplayMode by viewModel.settings.welcomeDisplayMode.collectAsState()
+    val defaultWelcome = stringResource(R.string.welcome_to_agora)
+    val welcomeLines = remember(welcomeMessagesRaw, defaultWelcome) {
+        welcomeMessagesRaw.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            .ifEmpty { listOf(defaultWelcome) }
+    }
     val modelsDevCapabilities by viewModel.modelsDevCapabilities.collectAsState()
     val modelFastSupport by viewModel.settings.modelFastSupport.collectAsState()
     val selectedModelCapabilities = remember(selectedModel, modelsDevCapabilities, modelFastSupport) {
@@ -519,6 +530,16 @@ fun ChatApp(
                             haptics.selection()
                             viewModel.setActiveModel(model)
                         },
+                        onModelLongPress = { model ->
+                            haptics.longPress()
+                            viewModel.setActiveModel(model)
+                            viewModel.settings.setSelectedModel(model)
+                            val label = modelAliases[model]
+                                ?: ModelId.parse(model).apiModelName
+                            viewModel.emitSnackbar(
+                                context.getString(R.string.default_model_set, label)
+                            )
+                        },
                         onThinkingSelect = { effort ->
                             haptics.selection()
                             viewModel.updateConversationSetting(currentConversationId) { current ->
@@ -658,8 +679,9 @@ fun ChatApp(
                                         .verticalScroll(rememberScrollState()),
                                     contentAlignment = Alignment.TopCenter
                                 ) {
-                                    TypewriterText(
-                                        text = stringResource(R.string.welcome_to_agora),
+                                    TypewriterTexts(
+                                        texts = welcomeLines,
+                                        mode = welcomeDisplayMode,
                                         style = MaterialTheme.typography.headlineMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onBackground,

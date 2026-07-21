@@ -528,20 +528,34 @@ internal fun TimelineSegmentsContent(
                         previousVisibleWasAnswer = false
                         index = blockEnd
                     } else {
-                        val currentDetailIndex = detailIndex
-                        detailIndex++
+                        // Stitch consecutive timeline items into one card with dividers
+                        // between rows, instead of rendering each tool as a separate chip.
+                        val blockSegments = mutableListOf<MessageSegment>()
+                        val blockDetailIndices = mutableListOf<Int>()
+                        var blockEnd = index
+                        while (blockEnd < segments.size && !segments[blockEnd].isVisibleAnswerSegment()) {
+                            val blockSeg = segments[blockEnd]
+                            if (blockSeg.isInfoSegment()) {
+                                blockSegments.add(blockSeg)
+                                blockDetailIndices.add(detailIndex)
+                                detailIndex++
+                            }
+                            blockEnd++
+                        }
+                        val firstDetail = blockDetailIndices.firstOrNull() ?: index
+                        val timelineKey = "${message.id}:timeline:$firstDetail"
                         val cardTopPaddingExtra = if (previousVisibleWasAnswer) 8.dp else 0.dp
                         val cardContent: @Composable () -> Unit = {
-                            TimelineInfoSegmentCard(
-                                seg = seg,
+                            TimelineInfoSegmentGroup(
+                                segs = blockSegments,
+                                detailIndices = blockDetailIndices,
                                 detailSegments = detailSegments,
-                                detailIndex = currentDetailIndex,
-                                isStreaming = isStreaming && index == segments.lastIndex,
+                                isStreaming = isStreaming,
+                                isLiveTail = isStreaming && blockDetailIndices.lastOrNull() == detailSegments.lastIndex,
                                 topPaddingExtra = cardTopPaddingExtra,
-                                onClick = { onSegmentClick(listOf(currentDetailIndex)) }
+                                onSegmentClick = { detailIdx -> onSegmentClick(listOf(detailIdx)) }
                             )
                         }
-                        val timelineKey = "${message.id}:timeline:$currentDetailIndex"
                         AnimatedTimelineBlockAppearance(
                             animationKey = timelineKey,
                             animate = timelineKey in animatedBlockKeys
@@ -549,11 +563,102 @@ internal fun TimelineSegmentsContent(
                             cardContent()
                         }
                         previousVisibleWasAnswer = false
-                        index++
+                        index = blockEnd
                     }
                 }
                 else -> {
                     index++
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun TimelineInfoSegmentGroup(
+    segs: List<MessageSegment>,
+    detailIndices: List<Int>,
+    detailSegments: List<MessageSegment>,
+    isStreaming: Boolean,
+    isLiveTail: Boolean,
+    topPaddingExtra: Dp = 0.dp,
+    onSegmentClick: (Int) -> Unit
+) {
+    if (segs.isEmpty()) return
+    Surface(
+        tonalElevation = 2.dp,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp + topPaddingExtra, bottom = 6.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .noOpBringIntoView()
+    ) {
+        Column {
+            segs.forEachIndexed { idx, seg ->
+                val detailIndex = detailIndices.getOrElse(idx) { idx }
+                val live = isLiveTail && idx == segs.lastIndex
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSegmentClick(detailIndex) }
+                        .padding(horizontal = 10.dp, vertical = 9.dp)
+                ) {
+                    val isTool = seg.type == "tool"
+                    val isTranscription = seg.type == "transcription"
+                    if (isTool) {
+                        Icon(Icons.Default.Build, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+                    } else if (isTranscription) {
+                        Icon(Icons.Filled.Image, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+                    } else {
+                        Icon(androidx.compose.ui.res.painterResource(id = com.newoether.agora.R.drawable.neurology_24), null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = when (seg.type) {
+                                "tool" -> toolDisplayName(seg.toolName)
+                                "transcription" -> transcriptionLabel(detailSegments, detailIndex)
+                                else -> stringResource(R.string.tool_thinking)
+                            },
+                            style = ChatType.meta,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val summary = when (seg.type) {
+                            "tool" -> toolSummary(seg)
+                            "transcription" -> seg.content.takeIf { it.isNotBlank() } ?: "Image transcription is empty."
+                            else -> {
+                                val flat = seg.content.replace('\n', ' ')
+                                if (live && isStreaming && flat.length > 60) "…${flat.takeLast(60)}" else flat
+                            }
+                        }
+                        if (summary.isNotBlank()) {
+                            Text(
+                                text = summary,
+                                style = ChatType.metaNormal,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                }
+                if (idx < segs.lastIndex) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
+                    )
                 }
             }
         }

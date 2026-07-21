@@ -103,6 +103,7 @@ data class MessageEntity(
     val status: MessageStatus = MessageStatus.SUCCESS,
     val participant: Participant,
     val timestamp: Long,
+    val completedAt: Long? = null,
     val thoughtTimeMs: Long? = null,
     val modelName: String? = null,
     val toolCallJson: String? = null,
@@ -204,7 +205,7 @@ abstract class ChatDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
 
     companion object {
-        const val CURRENT_VERSION = 12
+        const val CURRENT_VERSION = 13
         const val DB_NAME = "agora_db"
 
         val ALL_MIGRATIONS = listOf(
@@ -275,6 +276,11 @@ abstract class ChatDatabase : RoomDatabase() {
             object : Migration(11, 12) {
                 override fun migrate(db: SupportSQLiteDatabase) {
                     db.execSQL("ALTER TABLE messages ADD COLUMN attachmentMeta TEXT")
+                }
+            },
+            object : Migration(12, 13) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE messages ADD COLUMN completedAt INTEGER")
                 }
             }
         )

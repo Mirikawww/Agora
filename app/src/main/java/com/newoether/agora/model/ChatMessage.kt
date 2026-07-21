@@ -59,6 +59,8 @@ data class ChatMessage(
     val status: MessageStatus = MessageStatus.SUCCESS, // Default to SUCCESS for old messages
     val participant: Participant,
     val timestamp: Long = System.currentTimeMillis(),
+    /** Wall-clock time when generation finished (model msgs). Null while streaming / for legacy rows. */
+    val completedAt: Long? = null,
     val thoughtTimeMs: Long? = null,
     val modelName: String? = null,
     val toolCall: ToolCallData? = null,

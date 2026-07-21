@@ -188,6 +188,7 @@ private val settingsGroups = listOf(
         SettingsCategory("datacontrol", R.string.settings_data_control, R.string.settings_data_control_desc, Icons.Default.Storage),
     )),
     SettingsGroupData(titleRes = R.string.settings_group_appearance_language, items = listOf(
+        SettingsCategory("personalization", R.string.settings_personalization, R.string.settings_personalization_desc, Icons.Default.Person),
         SettingsCategory("appearance", R.string.settings_appearance, R.string.settings_appearance_desc, Icons.Default.Palette),
         SettingsCategory("language", R.string.language_title, R.string.language_desc, Icons.Default.Translate),
     )),
@@ -240,6 +241,7 @@ fun SettingsScreen(
                 "search" -> SettingsSearchPage(viewModel, onBack = { onSelectedCategoryChange(null) })
                 "memory" -> SettingsMemoryPage(viewModel, onBack = { onSelectedCategoryChange(null) })
                 "datacontrol" -> SettingsDataControlPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "personalization" -> SettingsPersonalizationPage(viewModel, onBack = { onSelectedCategoryChange(null) })
                 "appearance" -> SettingsAppearancePage(viewModel, onBack = { onSelectedCategoryChange(null) })
                 "about" -> SettingsAboutPage(viewModel, onBack = { onSelectedCategoryChange(null) })
                 else -> {

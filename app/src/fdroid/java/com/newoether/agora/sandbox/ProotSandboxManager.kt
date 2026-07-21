@@ -86,9 +86,23 @@ class ProotSandboxManager(private val context: Context) : SandboxManager {
     private fun ensureShell(): Boolean {
         val sh = File(rootfsDir, "bin/sh")
         if (sh.exists()) return true
+        val usrSh = File(rootfsDir, "usr/bin/sh")
+        if (usrSh.exists()) {
+            // Ensure /bin/sh exists for proot entrypoint even if only /usr/bin/sh is present.
+            try {
+                sh.parentFile?.mkdirs()
+                usrSh.copyTo(sh, overwrite = true)
+                sh.setExecutable(true)
+                return true
+            } catch (_: Throwable) {
+                return usrSh.exists()
+            }
+        }
         try {
-            val busybox = File(rootfsDir, "bin/busybox")
-            if (busybox.isFile && busybox.canRead()) {
+            val busybox = listOf("bin/busybox", "usr/bin/busybox")
+                .map { File(rootfsDir, it) }
+                .firstOrNull { it.isFile && it.canRead() }
+            if (busybox != null) {
                 // Delete broken symlink if present (exists()=false but symlink entry exists)
                 sh.delete()
                 busybox.copyTo(sh, false); sh.setExecutable(true)
@@ -100,59 +114,56 @@ class ProotSandboxManager(private val context: Context) : SandboxManager {
 
     override fun isAvailableSync(): Boolean {
         if (!rootfsDir.isDirectory) return false
-        if (!File(rootfsDir, "bin/sh").exists()) return false
-        return listOf("lib/ld-musl-aarch64.so.1", "usr/lib/ld-musl-aarch64.so.1")
-            .map { File(rootfsDir, it) }.any { it.exists() }
+        if (!File(rootfsDir, "bin/sh").exists() && !File(rootfsDir, "usr/bin/sh").exists()) return false
+        return hasDynamicLinker()
     }
 
     override suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
         if (!rootfsDir.isDirectory) { lastError = "rootfs not found: ${rootfsDir.absolutePath}"; return@withContext false }
         if (!ensureShell()) { lastError = "/bin/sh missing"; return@withContext false }
-        val linker = listOf("lib/ld-musl-aarch64.so.1", "usr/lib/ld-musl-aarch64.so.1").map { File(rootfsDir, it) }.any { it.exists() }
-        if (!linker) { lastError = "musl linker missing"; return@withContext false }
+        if (!hasDynamicLinker()) { lastError = "dynamic linker missing (need musl or glibc)"; return@withContext false }
         ensureSandboxMountTargets()
         ensurePackageMetadata()
         ensureRootHome()
         true
     }
 
+    /** Accept both Alpine (musl) and common glibc rootfs layouts. */
+    private fun hasDynamicLinker(): Boolean {
+        val candidates = listOf(
+            "lib/ld-musl-aarch64.so.1",
+            "usr/lib/ld-musl-aarch64.so.1",
+            "lib/ld-linux-aarch64.so.1",
+            "lib64/ld-linux-aarch64.so.1",
+            "usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+            "lib/ld-linux-armhf.so.3",
+            "lib/ld-linux.so.2",
+            "lib64/ld-linux-x86-64.so.2",
+        )
+        return candidates.any { File(rootfsDir, it).exists() }
+    }
+
     override suspend fun install(): Boolean = withContext(Dispatchers.IO) {
         try {
-            if (rootfsDir.exists()) { rootfsDir.deleteRecursively(); if (rootfsDir.exists()) { error("Cannot delete stale rootfs") } }
-            rootfsDir.mkdirs()
-
             val tmpTar = File(context.filesDir, "alpine-rootfs.tar.gz")
             try {
                 // Fetch the base rootfs on-device (not shipped in the APK) and verify its checksum.
                 _terminalOutput.value += "Downloading Alpine minirootfs…\n"
-                downloadRootfs(rootfsUrl, tmpTar)
+                downloadRootfs(rootfsUrl, tmpTar, expectedSha256 = rootfsSha256)
                 // Switch the bar to indeterminate while we extract.
                 _downloadProgress.value = null
                 _terminalOutput.value += "Extracting rootfs…\n"
+                if (rootfsDir.exists()) {
+                    rootfsDir.deleteRecursively()
+                    if (rootfsDir.exists()) error("Cannot delete stale rootfs")
+                }
+                rootfsDir.mkdirs()
                 java.util.zip.GZIPInputStream(tmpTar.inputStream()).use { gz ->
                     org.apache.commons.compress.archivers.tar.TarArchiveInputStream(gz).use { tar -> extractTarEntries(tar, rootfsDir) }
                 }
             } finally { tmpTar.delete() }
 
-            File(rootfsDir, "tmp").mkdirs()
-            File(rootfsDir, "run").mkdirs()
-            ensureSandboxMountTargets()
-            listOf("var/cache/apk", "etc/apk/cache", "var/lock").forEach { File(rootfsDir, it).mkdirs() }
-            val rc = File(rootfsDir, "etc/resolv.conf"); rc.parentFile?.mkdirs()
-            rc.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
-            // Alpine repository config
-            val repos = File(rootfsDir, "etc/apk/repositories"); repos.parentFile?.mkdirs()
-            repos.writeText("$alpineMirror\n")
-            // Ensure all binaries are executable recursively
-            listOf("bin", "usr/bin", "sbin", "usr/sbin", "usr/libexec").forEach { dir ->
-                val d = File(rootfsDir, dir)
-                if (d.isDirectory) d.walkTopDown().filter { it.isFile }.forEach { it.setExecutable(true) }
-            }
-            // No auto `apk upgrade` here: the freshly-downloaded minirootfs is already a coherent
-            // pinned release. Running upgrade immediately makes apk re-resolve /bin/sh and dead-locks
-            // on the busybox-binsh vs yash-binsh `cmd:sh` conflict. Packages upgrade on demand.
-            captureBaseWorld(force = true)
-            writeExplicitPackages(emptySet())
+            finalizeInstalledRootfs(isAlpineDefault = true)
             isAvailable()
         } catch (e: Throwable) { e.printStackTrace(); lastError = e.message; false }
     }
@@ -178,12 +189,132 @@ class ProotSandboxManager(private val context: Context) : SandboxManager {
         }
     }
 
-    /** Download [url] to [dest], streaming SHA-256 + progress, then verify against [rootfsSha256]. */
-    private fun downloadRootfs(url: String, dest: File) {
+    override fun installCustomRootfsFromUrl(url: String) {
+        val cleaned = url.trim()
+        if (cleaned.isBlank() || _isInstallingRootfs.value) return
+        sandboxScope.launch {
+            _isInstallingRootfs.value = true
+            _downloadProgress.value = null
+            _terminalOutput.value = ""
+            _packageList.value = emptyList()
+            val tmp = File(context.filesDir, "custom-rootfs-import.tar")
+            try {
+                _terminalOutput.value += "Downloading custom rootfs…\n"
+                downloadRootfs(cleaned, tmp, expectedSha256 = null)
+                _downloadProgress.value = null
+                installCustomRootfsArchive(tmp)
+            } catch (e: Throwable) {
+                e.printStackTrace()
+                lastError = e.message
+                _terminalOutput.value += "✗ ${e.message}\n"
+                _snackbarMessage.value = context.getString(R.string.sandbox_snackbar_error, e.message ?: "")
+            } finally {
+                tmp.delete()
+                _isInstallingRootfs.value = false
+                _downloadProgress.value = null
+            }
+        }
+    }
+
+    override fun installCustomRootfsFromFile(archive: File) {
+        if (_isInstallingRootfs.value) return
+        sandboxScope.launch {
+            _isInstallingRootfs.value = true
+            _downloadProgress.value = null
+            _terminalOutput.value = ""
+            _packageList.value = emptyList()
+            try {
+                installCustomRootfsArchive(archive)
+            } catch (e: Throwable) {
+                e.printStackTrace()
+                lastError = e.message
+                _terminalOutput.value += "✗ ${e.message}\n"
+                _snackbarMessage.value = context.getString(R.string.sandbox_snackbar_error, e.message ?: "")
+            } finally {
+                // Clean SAF/URL staging copies left in app filesDir.
+                if (archive.name.startsWith("custom-rootfs")) {
+                    try { archive.delete() } catch (_: Throwable) {}
+                }
+                _isInstallingRootfs.value = false
+                _downloadProgress.value = null
+            }
+        }
+    }
+
+    private suspend fun installCustomRootfsArchive(archive: File) {
+        _terminalOutput.value += "Importing custom rootfs from ${archive.name}…\n"
+        val result = RootfsArchiveInstaller.install(
+            archive = archive,
+            rootfsDir = rootfsDir,
+            preferredArch = "arm64",
+        ) { line ->
+            _terminalOutput.value += line + "\n"
+        }
+        _terminalOutput.value += "Applied ${result.kind}" +
+            (result.imageRef?.let { " · $it" } ?: "") +
+            (result.architecture?.let { " · $it" } ?: "") +
+            (if (result.layerCount > 0) " · ${result.layerCount} layers" else "") +
+            "\n"
+        finalizeInstalledRootfs(isAlpineDefault = false)
+        val ok = isAvailable()
+        if (ok) {
+            refreshPackageList()
+            _terminalOutput.value += "✓ Custom rootfs ready\n"
+            _snackbarMessage.value = context.getString(R.string.sandbox_snackbar_custom_rootfs_ok)
+        } else {
+            error(lastError ?: "Custom rootfs failed validation")
+        }
+    }
+
+    /**
+     * Post-extract fixups shared by Alpine default install and custom imports.
+     * Custom images keep their own package manager; Alpine-specific repos are
+     * only written for the default minirootfs path.
+     */
+    private fun finalizeInstalledRootfs(isAlpineDefault: Boolean) {
+        File(rootfsDir, "tmp").mkdirs()
+        File(rootfsDir, "run").mkdirs()
+        ensureSandboxMountTargets()
+        listOf("var/cache/apk", "etc/apk/cache", "var/lock", "var/tmp").forEach { File(rootfsDir, it).mkdirs() }
+
+        val rc = File(rootfsDir, "etc/resolv.conf")
+        rc.parentFile?.mkdirs()
+        // Replace symlink resolv.conf (common in container images) with a plain file.
+        if (rc.exists()) rc.delete()
+        rc.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+
+        val hosts = File(rootfsDir, "etc/hosts")
+        if (!hosts.exists()) {
+            hosts.parentFile?.mkdirs()
+            hosts.writeText(
+                "127.0.0.1\tlocalhost\n" +
+                    "::1\tlocalhost ip6-localhost ip6-loopback\n"
+            )
+        }
+
+        if (isAlpineDefault || File(rootfsDir, "sbin/apk").exists() || File(rootfsDir, "usr/bin/apk").exists()) {
+            val repos = File(rootfsDir, "etc/apk/repositories")
+            repos.parentFile?.mkdirs()
+            if (!repos.exists() || isAlpineDefault) {
+                repos.writeText("$alpineMirror\n")
+            }
+        }
+
+        listOf("bin", "usr/bin", "sbin", "usr/sbin", "usr/libexec").forEach { dir ->
+            val d = File(rootfsDir, dir)
+            if (d.isDirectory) d.walkTopDown().filter { it.isFile }.forEach { it.setExecutable(true) }
+        }
+        ensureShell()
+        captureBaseWorld(force = true)
+        writeExplicitPackages(emptySet())
+    }
+
+    /** Download [url] to [dest]. When [expectedSha256] is set, verify the checksum. */
+    private fun downloadRootfs(url: String, dest: File, expectedSha256: String?) {
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 30000
-            conn.readTimeout = 60000
+            conn.readTimeout = 120000
             conn.instanceFollowRedirects = true
             conn.connect()
             if (conn.responseCode !in 200..299) error("HTTP ${conn.responseCode} fetching rootfs")
@@ -204,9 +335,9 @@ class ProotSandboxManager(private val context: Context) : SandboxManager {
                 }
             }
             val hex = digest.digest().joinToString("") { "%02x".format(it) }
-            if (!hex.equals(rootfsSha256, ignoreCase = true)) {
+            if (expectedSha256 != null && !hex.equals(expectedSha256, ignoreCase = true)) {
                 dest.delete()
-                error("rootfs checksum mismatch (expected $rootfsSha256, got $hex)")
+                error("rootfs checksum mismatch (expected $expectedSha256, got $hex)")
             }
         } finally { conn.disconnect() }
     }

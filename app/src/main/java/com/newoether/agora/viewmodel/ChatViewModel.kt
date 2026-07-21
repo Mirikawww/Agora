@@ -584,6 +584,7 @@ class ChatViewModel(
                                 status = it.status,
                                 participant = it.participant,
                                 timestamp = it.timestamp,
+                                completedAt = it.completedAt,
                                 thoughtTimeMs = it.thoughtTimeMs,
                                 modelName = it.modelName,
                                 segments = it.toolCallJson?.let { json ->
@@ -855,6 +856,34 @@ class ChatViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             convRepo.deleteConversation(id)
             if (_currentConversationId.value == id) createNewChat()
+        }
+    }
+
+    /**
+     * Delete every conversation and related message data.
+     * Stops any in-flight generation, wipes the chat DB, then returns UI to new-chat mode.
+     */
+    fun deleteAllConversations(onDone: ((Boolean) -> Unit)? = null) {
+        stopGeneration()
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = try {
+                convRepo.deleteAllConversations()
+                true
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
+            if (ok) {
+                // UI state updates on Main so Compose observers stay consistent.
+                withContext(Dispatchers.Main) {
+                    createNewChat()
+                    refreshDataCounts()
+                }
+                emitSnackbar(getApplication<Application>().getString(R.string.data_delete_all_chats_done))
+            } else {
+                emitSnackbar(getApplication<Application>().getString(R.string.data_delete_all_chats_failed))
+            }
+            onDone?.invoke(ok)
         }
     }
 

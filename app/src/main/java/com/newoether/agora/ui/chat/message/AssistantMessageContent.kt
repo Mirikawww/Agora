@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image
@@ -145,8 +147,16 @@ internal fun AssistantMessageContent(
                 }
                 val toolCallingStatus = stringResource(R.string.tool_calling_ellipsis)
                 val transcribingStatus = stringResource(R.string.transcription_ellipsis)
+                val finishedTokenText = if (message.tokenCount > 0) {
+                    stringResource(R.string.cost_tokens, message.tokenCount)
+                } else {
+                    null
+                }
                 val statusText = when {
-                    message.status == MessageStatus.SUCCESS -> if (message.tokenCount > 0) stringResource(R.string.cost_tokens, message.tokenCount) else null
+                    // Finished replies (success / stop / error) all show token usage when available.
+                    message.status == MessageStatus.SUCCESS ||
+                        message.status == MessageStatus.STOPPED ||
+                        message.status == MessageStatus.ERROR -> finishedTokenText
                     isStreaming && isTranscribing -> transcribingStatus
                     isStreaming && isToolCalling -> toolCallingStatus
                     isStreaming && thinkingNow -> thinkingStatus
@@ -188,12 +198,40 @@ internal fun AssistantMessageContent(
                                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
                                 )
                             } else {
-                                val icon = when (message.status) {
-                                    MessageStatus.SUCCESS -> Icons.Default.CheckCircle
-                                    MessageStatus.STOPPED -> Icons.Default.Stop
-                                    else -> Icons.Default.Info
+                                when (message.status) {
+                                    MessageStatus.SUCCESS -> {
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            null,
+                                            modifier = Modifier.size(14.dp),
+                                            tint = MaterialTheme.colorScheme.tertiary
+                                        )
+                                    }
+                                    MessageStatus.STOPPED, MessageStatus.ERROR -> {
+                                        // Red circle + X for incomplete finishes (stop / error).
+                                        Box(
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .background(MaterialTheme.colorScheme.error, CircleShape),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                null,
+                                                modifier = Modifier.size(10.dp),
+                                                tint = MaterialTheme.colorScheme.onError
+                                            )
+                                        }
+                                    }
+                                    else -> {
+                                        Icon(
+                                            Icons.Default.Info,
+                                            null,
+                                            modifier = Modifier.size(14.dp),
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    }
                                 }
-                                Icon(icon, null, modifier = Modifier.size(14.dp), tint = if (message.status == MessageStatus.SUCCESS) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error)
                             }
                         }
                         Spacer(modifier = Modifier.width(8.dp))
@@ -620,6 +658,9 @@ internal fun AssistantMessageContent(
                         enter = fadeIn(tween(400)) + expandVertically(tween(400)),
                         exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
                     ) {
+                        val timeLabel = remember(message.timestamp, message.completedAt) {
+                            formatMessageClockTime(message.completedAt ?: message.timestamp)
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -655,6 +696,13 @@ internal fun AssistantMessageContent(
                                     )
                                 }
                             }
+                            // Time hugs the more-button on its right side.
+                            Text(
+                                text = timeLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                                modifier = Modifier.padding(start = 2.dp)
+                            )
 
                             if (totalBranches > 1) {
                                 Row(

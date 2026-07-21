@@ -74,6 +74,7 @@ class DataExporter(
         val status: String = "SUCCESS",
         val participant: String = "MODEL",
         val timestamp: Long,
+        val completedAt: Long? = null,
         val thoughtTimeMs: Long? = null,
         val modelName: String? = null,
         val toolCallJson: String? = null,
@@ -243,7 +244,7 @@ class DataExporter(
                     val exportedImages = imageMap[m.id] ?: emptyList()
                     ExportMessageEntity(m.id, m.conversationId, m.parentId, m.text, exportedImages,
                         m.thoughts, m.thoughtTitle, m.tokenCount, m.status.name, m.participant.name,
-                        m.timestamp, m.thoughtTimeMs, m.modelName, m.toolCallJson, m.attachmentMeta)
+                        m.timestamp, m.completedAt, m.thoughtTimeMs, m.modelName, m.toolCallJson, m.attachmentMeta)
                 }
                 zip.putNextEntry(ZipEntry("conversations.json"))
                 Json.encodeToStream(ExportConversations(conversations, messages), zip)

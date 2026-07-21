@@ -8,8 +8,13 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.ripple
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.offset
@@ -33,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -100,6 +106,7 @@ fun GroupedModelMenuContent(
     builtInSearchEnabled: Boolean,
     externalSearchEnabled: Boolean,
     onModelSelect: (String) -> Unit,
+    onModelLongPress: (String) -> Unit = {},
     onThinkingSelect: (String?) -> Unit,
     onFastToggle: (Boolean) -> Unit,
     onSearchModeSelect: (builtIn: Boolean, external: Boolean) -> Unit,
@@ -207,23 +214,39 @@ fun GroupedModelMenuContent(
                                     val item = ModelId.parse(model)
                                     val label = modelAliases[model] ?: item.apiModelName
                                     val isSelected = model == selectedModel
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                label,
-                                                color = if (isSelected) {
-                                                    MaterialTheme.colorScheme.primary
-                                                } else {
-                                                    MaterialTheme.colorScheme.onSurface
+                                    val interaction = remember(model) { MutableInteractionSource() }
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .combinedClickable(
+                                                interactionSource = interaction,
+                                                indication = ripple(),
+                                                onClick = {
+                                                    onModelSelect(model)
+                                                    expandedProvider = null
+                                                    onDismissAll()
+                                                },
+                                                onLongClick = {
+                                                    onModelLongPress(model)
+                                                    expandedProvider = null
+                                                    onDismissAll()
                                                 }
                                             )
-                                        },
-                                        onClick = {
-                                            onModelSelect(model)
-                                            expandedProvider = null
-                                            onDismissAll()
-                                        }
-                                    )
+                                            // Match DropdownMenuItem defaults so label size/padding
+                                            // stay consistent with first-level menu rows.
+                                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (isSelected) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }

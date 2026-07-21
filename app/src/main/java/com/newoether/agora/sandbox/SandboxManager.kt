@@ -39,6 +39,19 @@ interface SandboxManager {
      *  own scope so it survives navigation; observe [isInstallingRootfs] / [downloadProgress]. */
     fun installRootfs()
 
+    /**
+     * Fire-and-forget custom rootfs install from a remote archive URL
+     * (plain rootfs tar[.gz], OCI image layout tar, or `docker save` tar).
+     * Observe [isInstallingRootfs] / [downloadProgress] / [terminalOutput].
+     */
+    fun installCustomRootfsFromUrl(url: String)
+
+    /**
+     * Fire-and-forget custom rootfs install from a local archive already
+     * copied into app storage (or a content URI staged by the UI).
+     */
+    fun installCustomRootfsFromFile(archive: File)
+
     /** Last typed package name — persisted across navigation. */
     var pendingPkgName: String
 

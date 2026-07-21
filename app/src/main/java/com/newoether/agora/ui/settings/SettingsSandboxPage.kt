@@ -1,6 +1,8 @@
 package com.newoether.agora.ui.settings
 
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
@@ -45,7 +47,10 @@ import androidx.compose.ui.unit.sp
 import com.newoether.agora.R
 import com.newoether.agora.sandbox.openSandboxHome
 import com.newoether.agora.sandbox.SandboxManager
+import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,8 +68,37 @@ fun SettingsSandboxPage(sandboxManager: SandboxManager, onBack: () -> Unit, show
     var lastInstallResult by remember { mutableStateOf<Boolean?>(null) } // local: success/fail for button state
     var deleteConfirm by remember { mutableStateOf<String?>(null) }
     var resetConfirm by remember { mutableStateOf(false) }
+    var customRootfsSourceDialog by remember { mutableStateOf(false) }
+    var customRootfsUrlDialog by remember { mutableStateOf(false) }
+    var customRootfsUrl by rememberSaveable { mutableStateOf("") }
+    var customRootfsBusy by remember { mutableStateOf(false) }
     // Sync persisted text field back to sandbox manager
     LaunchedEffect(installPkg) { sandboxManager.pendingPkgName = installPkg }
+
+    val customRootfsPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        customRootfsBusy = true
+        attemptedInstall = true
+        installError = null
+        scope.launch {
+            try {
+                val staged = withContext(Dispatchers.IO) {
+                    val dest = File(ctx.filesDir, "custom-rootfs-saf-import.tar")
+                    ctx.contentResolver.openInputStream(uri)?.use { input ->
+                        dest.outputStream().use { output -> input.copyTo(output) }
+                    } ?: error("Cannot open selected file")
+                    dest
+                }
+                // Manager owns the install job and will read the staged file asynchronously.
+                sandboxManager.installCustomRootfsFromFile(staged)
+            } catch (e: Exception) {
+                installError = e.message
+                customRootfsBusy = false
+            }
+        }
+    }
 
     // Collected from sandbox manager backend
     val terminalOutput by sandboxManager.terminalOutput.collectAsState()
@@ -97,13 +131,16 @@ fun SettingsSandboxPage(sandboxManager: SandboxManager, onBack: () -> Unit, show
 
     // When a user-initiated rootfs install finishes, re-check availability and surface any error.
     LaunchedEffect(installingRootfs) {
-        if (!installingRootfs && attemptedInstall) {
-            attemptedInstall = false
-            try {
-                available = sandboxManager.isAvailable()
-                if (available) { installError = null; sandboxManager.refreshPackageList() }
-                else installError = sandboxManager.lastError ?: ctx.getString(R.string.sandbox_install_failed)
-            } catch (e: Exception) { installError = e.message }
+        if (!installingRootfs) {
+            customRootfsBusy = false
+            if (attemptedInstall) {
+                attemptedInstall = false
+                try {
+                    available = sandboxManager.isAvailable()
+                    if (available) { installError = null; sandboxManager.refreshPackageList() }
+                    else installError = sandboxManager.lastError ?: ctx.getString(R.string.sandbox_install_failed)
+                } catch (e: Exception) { installError = e.message }
+            }
         }
     }
 
@@ -179,7 +216,7 @@ fun SettingsSandboxPage(sandboxManager: SandboxManager, onBack: () -> Unit, show
                                     )
                                 },
                                 trailingContent = {
-                                    if (!installingRootfs && !isBusy) {
+                                    if (!installingRootfs && !isBusy && !customRootfsBusy) {
                                         TextButton(onClick = {
                                             clearAllState()
                                             attemptedInstall = true
@@ -238,6 +275,52 @@ fun SettingsSandboxPage(sandboxManager: SandboxManager, onBack: () -> Unit, show
                                 }
                             )
                         }
+                    }))
+                }
+
+                // ═══ Custom RootFS ═══
+                item {
+                    SettingsGroup(title = stringResource(R.string.sandbox_custom_rootfs_group), items = listOf({
+                        SettingsItem(
+                            headlineContent = {
+                                Text(
+                                    stringResource(R.string.sandbox_custom_rootfs),
+                                    fontWeight = FontWeight.Medium
+                                )
+                            },
+                            supportingContent = {
+                                Column {
+                                    Text(
+                                        stringResource(R.string.sandbox_custom_rootfs_desc),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    if (installingRootfs || customRootfsBusy) {
+                                        Spacer(Modifier.height(8.dp))
+                                        val p = downloadProgress
+                                        if (p != null) {
+                                            LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().height(4.dp))
+                                        } else {
+                                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(4.dp))
+                                        }
+                                    }
+                                }
+                            },
+                            leadingContent = {
+                                Icon(
+                                    Icons.Default.Inventory2,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            trailingContent = {
+                                TextButton(
+                                    onClick = { customRootfsSourceDialog = true },
+                                    enabled = !installingRootfs && !isBusy && !customRootfsBusy
+                                ) {
+                                    Text(stringResource(R.string.sandbox_custom_rootfs_choose), style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        )
                     }))
                 }
 
@@ -563,6 +646,84 @@ fun SettingsSandboxPage(sandboxManager: SandboxManager, onBack: () -> Unit, show
             },
             dismissButton = {
                 TextButton(onClick = { resetConfirm = false }) { Text(stringResource(R.string.cancel)) }
+            }
+        )
+    }
+
+    // ── Custom RootFS source picker ──
+    if (customRootfsSourceDialog) {
+        AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            onDismissRequest = { customRootfsSourceDialog = false },
+            title = { Text(stringResource(R.string.sandbox_custom_rootfs), fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.sandbox_custom_rootfs_source_prompt))
+                    Text(
+                        stringResource(R.string.sandbox_custom_rootfs_formats),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    customRootfsSourceDialog = false
+                    customRootfsUrlDialog = true
+                }) { Text(stringResource(R.string.sandbox_custom_rootfs_from_url)) }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        customRootfsSourceDialog = false
+                        customRootfsPicker.launch(
+                            arrayOf(
+                                "application/x-tar",
+                                "application/gzip",
+                                "application/x-gzip",
+                                "application/octet-stream",
+                                "*/*",
+                            )
+                        )
+                    }) { Text(stringResource(R.string.sandbox_custom_rootfs_from_local)) }
+                    TextButton(onClick = { customRootfsSourceDialog = false }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                }
+            }
+        )
+    }
+
+    if (customRootfsUrlDialog) {
+        AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            onDismissRequest = { if (!installingRootfs) customRootfsUrlDialog = false },
+            title = { Text(stringResource(R.string.sandbox_custom_rootfs_from_url), fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = customRootfsUrl,
+                    onValueChange = { customRootfsUrl = it },
+                    label = { Text(stringResource(R.string.sandbox_custom_rootfs_url_label)) },
+                    placeholder = { Text(stringResource(R.string.sandbox_custom_rootfs_url_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val url = customRootfsUrl.trim()
+                        if (url.isBlank()) return@TextButton
+                        customRootfsUrlDialog = false
+                        clearAllState()
+                        attemptedInstall = true
+                        sandboxManager.installCustomRootfsFromUrl(url)
+                    },
+                    enabled = customRootfsUrl.trim().isNotBlank() && !installingRootfs
+                ) { Text(stringResource(R.string.sandbox_install)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { customRootfsUrlDialog = false }) { Text(stringResource(R.string.cancel)) }
             }
         )
     }

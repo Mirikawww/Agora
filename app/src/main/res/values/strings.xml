@@ -507,6 +507,17 @@
     <string name="sandbox_installed_fmt">Installed Packages (%d)</string>
     <string name="sandbox_browse_files">Browse Files</string>
     <string name="sandbox_browse_files_desc">Open sandbox directory in system file manager</string>
+    <string name="sandbox_custom_rootfs_group">Custom RootFS</string>
+    <string name="sandbox_custom_rootfs">Choose custom RootFS</string>
+    <string name="sandbox_custom_rootfs_desc">Replace the sandbox with a plain rootfs tarball, OCI image layout, or docker save archive</string>
+    <string name="sandbox_custom_rootfs_choose">Choose</string>
+    <string name="sandbox_custom_rootfs_source_prompt">Download from a remote URL, or pick a local image archive with the system file picker.</string>
+    <string name="sandbox_custom_rootfs_formats">Supported: rootfs .tar/.tar.gz, OCI layout tar, docker save tar. Prefer aarch64/arm64 images.</string>
+    <string name="sandbox_custom_rootfs_from_url">Remote URL</string>
+    <string name="sandbox_custom_rootfs_from_local">Local image</string>
+    <string name="sandbox_custom_rootfs_url_label">Archive URL</string>
+    <string name="sandbox_custom_rootfs_url_hint">https://example.com/rootfs.tar.gz</string>
+    <string name="sandbox_snackbar_custom_rootfs_ok">Custom RootFS installed</string>
 
     <!-- Settings - Title Generation -->
     <string name="title_gen_auto">Auto-Generate Title</string>
@@ -567,6 +578,22 @@
     <string name="snackbar_title_error">Error encountered when generating title.</string>
 
     <!-- Appearance -->
+    <string name="settings_personalization">Personalization</string>
+    <string name="settings_personalization_desc">Your profile for model replies</string>
+    <string name="personalization_profile_title">Profile</string>
+    <string name="personalization_nickname">Nickname</string>
+    <string name="personalization_nickname_hint">How the model should address you</string>
+    <string name="personalization_gender">Gender</string>
+    <string name="personalization_gender_hint">Optional</string>
+    <string name="personalization_age">Age</string>
+    <string name="personalization_age_hint">Optional</string>
+    <string name="personalization_height">Height</string>
+    <string name="personalization_height_hint">e.g. 175 cm</string>
+    <string name="personalization_occupation">Occupation</string>
+    <string name="personalization_occupation_hint">Optional</string>
+    <string name="personalization_other">Other</string>
+    <string name="personalization_other_hint">Anything else the model should know</string>
+    <string name="personalization_inject_hint">Filled fields are added to the system prompt for every reply. Leave blank to skip.</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_appearance_desc">Theme, color scheme, and dynamic color</string>
     <string name="appearance_title">Appearance</string>
@@ -584,6 +611,7 @@
     <string name="color_scheme_lavender">Lavender</string>
     <string name="color_scheme_slate">Slate</string>
     <string name="color_scheme_ocean">Ocean</string>
+    <string name="color_scheme_monochrome">Monochrome</string>
     <string name="scheme_style">Scheme Style</string>
     <string name="scheme_style_tonal_spot">Tonal Spot</string>
     <string name="scheme_style_expressive">Expressive</string>
@@ -706,6 +734,13 @@
     <string name="video_preview">Video preview</string>
     <string name="total_tokens">Total: %1$d tokens</string>
     <string name="welcome_to_agora">Welcome to Agora.</string>
+    <string name="default_model_set">Default model set to %1$s</string>
+    <string name="welcome_messages_title">Home welcome messages</string>
+    <string name="welcome_messages_desc">One message per line. After a full cycle finishes, the next cycle is drawn again (random reshuffles).</string>
+    <string name="welcome_messages_placeholder">Welcome to Agora.\nHello.\nWhat shall we build today?</string>
+    <string name="welcome_display_mode">Play order</string>
+    <string name="welcome_display_sequential">Sequential</string>
+    <string name="welcome_display_random">Random</string>
     <string name="database_incompatible">Database Incompatible</string>
     <string name="database_incompatible_desc">The database is incompatible with this version of Agora. Please clear the database and restart the app.</string>
     <string name="quit">Quit</string>
@@ -792,6 +827,13 @@
     <string name="data_export_subtitle">Save conversations, memories, prompts, and settings to a file.</string>
     <string name="data_import_title">Import Data</string>
     <string name="data_import_subtitle">Restore from a previous .agora export file.</string>
+    <string name="data_danger_zone">Danger Zone</string>
+    <string name="data_delete_all_chats">Delete All Chat History</string>
+    <string name="data_delete_all_chats_desc">Permanently remove all conversations and messages (%1$d)</string>
+    <string name="data_delete_all_chats_confirm">This will permanently delete all %1$d conversations, their messages, attachments, and embeddings. This cannot be undone.</string>
+    <string name="data_delete_all_chats_progress">Deleting chat history…</string>
+    <string name="data_delete_all_chats_done">All chat history deleted</string>
+    <string name="data_delete_all_chats_failed">Failed to delete chat history</string>
     <string name="export_category_conversations">Conversations &amp; Messages</string>
     <string name="export_category_memories">Memories</string>
     <string name="export_category_system_prompts">System Prompts</string>

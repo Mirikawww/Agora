@@ -70,6 +70,8 @@ fun SettingsDataControlPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     var gptFileUri by remember { mutableStateOf<Uri?>(null) }
     var gptFileName by remember { mutableStateOf<String?>(null) }
     var showGptSuccessDialog by remember { mutableStateOf(false) }
+    var showDeleteAllChatsConfirm by remember { mutableStateOf(false) }
+    var isDeletingAllChats by remember { mutableStateOf(false) }
 
     // Auto Backup
     val autoBackupEnabled by viewModel.settings.autoBackupEnabled.collectAsState()
@@ -209,9 +211,51 @@ fun SettingsDataControlPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 // Auto Backup group
                 // ═══════════════════════════════════════════════
                 AutoBackupSection(viewModel)
+
+                // ═══════════════════════════════════════════════
+                // Danger Zone
+                // ═══════════════════════════════════════════════
+                SettingsGroup(
+                    title = stringResource(R.string.data_danger_zone),
+                    bottomPadding = 0.dp,
+                    items = listOf({
+                        SettingsItem(
+                            headlineContent = {
+                                Text(
+                                    stringResource(R.string.data_delete_all_chats),
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            },
+                            supportingContent = {
+                                Text(
+                                    stringResource(
+                                        R.string.data_delete_all_chats_desc,
+                                        conversationCount
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            leadingContent = {
+                                Icon(
+                                    Icons.Default.DeleteForever,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            },
+                            modifier = Modifier.clickable(
+                                enabled = !isDeletingAllChats && conversationCount > 0
+                            ) {
+                                showDeleteAllChatsConfirm = true
+                            }
+                        )
+                    })
+                )
+                Spacer(Modifier.height(16.dp))
                 }
 
                 // Show Claude import dialog when preview is loaded
+
                 LaunchedEffect(claudeImportPreview) {
                     if (claudeImportPreview != null) {
                         showClaudeImportDialog = true
@@ -272,9 +316,73 @@ fun SettingsDataControlPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 confirmButton = { }
             )
         }
+
+        if (isDeletingAllChats) {
+            AlertDialog(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                onDismissRequest = { },
+                title = {
+                    Text(
+                        stringResource(R.string.data_delete_all_chats),
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Spacer(Modifier.height(8.dp))
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.data_delete_all_chats_progress),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                confirmButton = { }
+            )
+        }
+    }
+
+    // Delete all chats — secondary confirmation
+    if (showDeleteAllChatsConfirm) {
+        AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            onDismissRequest = { if (!isDeletingAllChats) showDeleteAllChatsConfirm = false },
+            title = {
+                Text(
+                    stringResource(R.string.data_delete_all_chats),
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(stringResource(R.string.data_delete_all_chats_confirm, conversationCount))
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteAllChatsConfirm = false
+                        isDeletingAllChats = true
+                        viewModel.deleteAllConversations { _ ->
+                            isDeletingAllChats = false
+                        }
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text(stringResource(R.string.delete)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showDeleteAllChatsConfirm = false },
+                    enabled = !isDeletingAllChats
+                ) { Text(stringResource(R.string.cancel)) }
+            }
+        )
     }
 
     // Export dialog
+
     if (showExportDialog) {
         ExportDataDialog(
             conversationCount = conversationCount,

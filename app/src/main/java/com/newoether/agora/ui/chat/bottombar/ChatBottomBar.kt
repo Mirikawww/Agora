@@ -24,7 +24,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Image
 
-import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -53,7 +52,6 @@ private fun AttachmentMenuButton(
     size: Dp,
     iconSize: Dp,
     onPhotos: () -> Unit,
-    onVideos: () -> Unit,
     onFiles: () -> Unit,
 ) {
     val haptics = LocalAgoraHaptics.current
@@ -117,21 +115,6 @@ private fun AttachmentMenuButton(
                     showAddMenu = false
                     lastAddDismissTime = 0L
                     onPhotos()
-                }
-            )
-            DropdownMenuItem(
-                text = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Videocam, null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(stringResource(R.string.videos))
-                    }
-                },
-                onClick = {
-                    haptics.selection()
-                    showAddMenu = false
-                    lastAddDismissTime = 0L
-                    onVideos()
                 }
             )
             DropdownMenuItem(
@@ -201,12 +184,19 @@ fun ChatBottomBar(
         }
     }
 
-    val photoLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+    val mediaLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia()
-    ) { uris -> composer.onPickImages(uris) }
-    val videoLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia()
-    ) { uris -> composer.onPickVideos(uris) }
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val images = mutableListOf<android.net.Uri>()
+        val videos = mutableListOf<android.net.Uri>()
+        uris.forEach { uri ->
+            val mime = try { context.contentResolver.getType(uri) } catch (_: Exception) { null }
+            if (mime?.startsWith("video/") == true) videos += uri else images += uri
+        }
+        if (images.isNotEmpty()) composer.onPickImages(images)
+        if (videos.isNotEmpty()) composer.onPickVideos(videos)
+    }
     val fileLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()
     ) { uris -> composer.onPickFiles(uris, onInitPdfSelection) }
@@ -315,10 +305,11 @@ fun ChatBottomBar(
                         size = 46.dp,
                         iconSize = 24.dp,
                         onPhotos = {
-                            photoLauncher.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        },
-                        onVideos = {
-                            videoLauncher.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.VideoOnly))
+                            mediaLauncher.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageAndVideo
+                                )
+                            )
                         },
                         onFiles = { fileLauncher.launch("*/*") }
                     )

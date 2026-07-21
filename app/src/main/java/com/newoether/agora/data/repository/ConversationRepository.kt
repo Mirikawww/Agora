@@ -113,8 +113,21 @@ class ConversationRepository(
     suspend fun upsertEmbedding(entity: EmbeddingEntity) =
         chatDao.upsertEmbedding(entity)
 
-    suspend fun deleteAllConversations() =
+    /**
+     * Wipe every conversation, message, attachment file, and embedding.
+     * Messages cascade from conversations via Room FK; embeddings and
+     * on-disk attachments are cleaned explicitly.
+     */
+    suspend fun deleteAllConversations() {
+        val messages = chatDao.getAllMessagesList()
+        deleteAttachmentFilesFromEntities(messages)
+        // Purge embeddings known for each conversation, then wipe conversations
+        // (messages cascade via FK), and finally clear any leftover orphans.
+        val conversations = chatDao.getAllConversationsList()
+        conversations.forEach { chatDao.deleteEmbeddingsByConversation(it.id) }
         chatDao.deleteAllConversations()
+        chatDao.deleteOrphanedEmbeddings()
+    }
 
     suspend fun findExistingMessageIds(ids: List<String>): List<String> =
         chatDao.findExistingMessageIds(ids)

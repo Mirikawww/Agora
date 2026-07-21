@@ -124,13 +124,14 @@ fun MessageItem(
     }
 
     val backgroundColor = when (message.participant) {
-        Participant.USER -> MaterialTheme.colorScheme.primaryContainer
+        // Match conversation-list selected row background (secondaryContainer).
+        Participant.USER -> MaterialTheme.colorScheme.secondaryContainer
         Participant.MODEL -> Color.Transparent
         Participant.ERROR -> MaterialTheme.colorScheme.errorContainer
     }
 
     val textColor = when (message.participant) {
-        Participant.USER -> MaterialTheme.colorScheme.onPrimaryContainer
+        Participant.USER -> MaterialTheme.colorScheme.onSecondaryContainer
         Participant.MODEL -> MaterialTheme.colorScheme.onSurface
         Participant.ERROR -> MaterialTheme.colorScheme.onErrorContainer
     }

@@ -72,6 +72,13 @@
     <string name="thought_for_minutes_called_tools">思考了 %1$d 分 %2$d 秒，调用 %3$d 个工具</string>
     <string name="called_n_tools">调用 %1$d 个工具</string>
     <string name="welcome_to_agora">欢迎使用 Agora。</string>
+    <string name="default_model_set">已将默认模型设为 %1$s</string>
+    <string name="welcome_messages_title">主页欢迎语</string>
+    <string name="welcome_messages_desc">每行一条。完整轮回结束后再抽取下一轮（随机模式会重新洗牌）。</string>
+    <string name="welcome_messages_placeholder">欢迎使用 Agora。\n你好。\n今天想做什么？</string>
+    <string name="welcome_display_mode">展示方式</string>
+    <string name="welcome_display_sequential">顺序</string>
+    <string name="welcome_display_random">随机</string>
     <string name="failed_to_generate">生成失败。</string>
     <string name="generation_stopped">生成已停止。</string>
     <string name="import_invalid_gguf_title">无效的 GGUF 文件</string>
@@ -377,6 +384,17 @@
     <string name="sandbox_installed_fmt">已安装包 (%d)</string>
     <string name="sandbox_browse_files">浏览文件</string>
     <string name="sandbox_browse_files_desc">在系统文件管理器中打开沙箱目录</string>
+    <string name="sandbox_custom_rootfs_group">自定义 RootFS</string>
+    <string name="sandbox_custom_rootfs">选择自定义 RootFS</string>
+    <string name="sandbox_custom_rootfs_desc">用普通 rootfs tar、OCI 镜像布局或 docker save 归档替换沙箱系统盘</string>
+    <string name="sandbox_custom_rootfs_choose">选择</string>
+    <string name="sandbox_custom_rootfs_source_prompt">从远程 URL 下载，或通过系统文件选择器（SAF）选择本地镜像。</string>
+    <string name="sandbox_custom_rootfs_formats">支持：rootfs .tar/.tar.gz、OCI layout tar、docker save tar。建议使用 aarch64/arm64 镜像。</string>
+    <string name="sandbox_custom_rootfs_from_url">远程 URL</string>
+    <string name="sandbox_custom_rootfs_from_local">本地镜像</string>
+    <string name="sandbox_custom_rootfs_url_label">归档 URL</string>
+    <string name="sandbox_custom_rootfs_url_hint">https://example.com/rootfs.tar.gz</string>
+    <string name="sandbox_snackbar_custom_rootfs_ok">自定义 RootFS 已安装</string>
 
     <!-- Settings - Title Generation -->
     <string name="title_gen_auto">自动生成标题</string>
@@ -437,6 +455,22 @@
     <string name="snackbar_title_error">生成标题时遇到错误。</string>
 
     <!-- Appearance -->
+    <string name="settings_personalization">个性化</string>
+    <string name="settings_personalization_desc">写入模型系统提示的个人信息</string>
+    <string name="personalization_profile_title">个人信息</string>
+    <string name="personalization_nickname">昵称</string>
+    <string name="personalization_nickname_hint">模型如何称呼你</string>
+    <string name="personalization_gender">性别</string>
+    <string name="personalization_gender_hint">可选</string>
+    <string name="personalization_age">年龄</string>
+    <string name="personalization_age_hint">可选</string>
+    <string name="personalization_height">身高</string>
+    <string name="personalization_height_hint">例如 175 cm</string>
+    <string name="personalization_occupation">职业</string>
+    <string name="personalization_occupation_hint">可选</string>
+    <string name="personalization_other">其他</string>
+    <string name="personalization_other_hint">其他希望模型了解的信息</string>
+    <string name="personalization_inject_hint">已填写的字段会注入到每次回复的系统提示中，留空则跳过。</string>
     <string name="settings_appearance">外观</string>
     <string name="settings_appearance_desc">主题、配色方案和动态颜色</string>
     <string name="appearance_title">外观</string>
@@ -453,6 +487,7 @@
     <string name="color_scheme_lavender">薰衣草</string>
     <string name="color_scheme_slate">岩灰</string>
     <string name="color_scheme_ocean">海洋</string>
+    <string name="color_scheme_monochrome">黑白</string>
     <string name="scheme_style">方案风格</string>
     <string name="scheme_style_tonal_spot">色调聚焦</string>
     <string name="scheme_style_expressive">活泼</string>
@@ -772,6 +807,13 @@
     <string name="data_export_subtitle">将对话、记忆、提示词和设置保存到文件。</string>
     <string name="data_import_title">导入数据</string>
     <string name="data_import_subtitle">从之前的 .agora 导出文件恢复。</string>
+    <string name="data_danger_zone">危险区域</string>
+    <string name="data_delete_all_chats">删除所有聊天记录</string>
+    <string name="data_delete_all_chats_desc">永久删除全部对话与消息（%1$d）</string>
+    <string name="data_delete_all_chats_confirm">将永久删除全部 %1$d 个对话及其消息、附件和嵌入索引。此操作无法撤销。</string>
+    <string name="data_delete_all_chats_progress">正在删除聊天记录…</string>
+    <string name="data_delete_all_chats_done">已删除全部聊天记录</string>
+    <string name="data_delete_all_chats_failed">删除聊天记录失败</string>
     <string name="export_category_conversations">对话与消息</string>
     <string name="export_category_memories">记忆</string>
     <string name="export_category_system_prompts">系统提示词</string>

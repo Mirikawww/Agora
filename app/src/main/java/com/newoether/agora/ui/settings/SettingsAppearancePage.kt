@@ -52,6 +52,8 @@ fun SettingsAppearancePage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val customFontPath by viewModel.settings.customFontPath.collectAsState()
     val customFontName by viewModel.settings.customFontName.collectAsState()
     val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
+    val welcomeMessages by viewModel.settings.welcomeMessages.collectAsState()
+    val welcomeDisplayMode by viewModel.settings.welcomeDisplayMode.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -342,7 +344,13 @@ fun SettingsAppearancePage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                                     trailingIcon = {
                                                         Box(modifier = Modifier.size(20.dp).clip(CircleShape).background(presetPrimary))
                                                     },
-                                                    onClick = { viewModel.settings.setColorScheme(preset.name); expanded = false }
+                                                    onClick = {
+                                                        viewModel.settings.setColorScheme(preset.name)
+                                                        if (preset == ColorSchemePreset.MONOCHROME && dynamicColor) {
+                                                            viewModel.settings.setDynamicColor(false)
+                                                        }
+                                                        expanded = false
+                                                    }
                                                 )
                                             }
                                         }
@@ -477,6 +485,67 @@ fun SettingsAppearancePage(viewModel: ChatViewModel, onBack: () -> Unit) {
                     }
                 )
             }
+
+                // ── Home welcome messages ──
+                SettingsGroup(
+                    title = stringResource(R.string.welcome_messages_title),
+                    items = buildList {
+                        add {
+                            var draft by remember(welcomeMessages) { mutableStateOf(welcomeMessages) }
+                            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                                Text(
+                                    text = stringResource(R.string.welcome_messages_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = draft,
+                                    onValueChange = { draft = it },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
+                                    minLines = 4,
+                                    maxLines = 10,
+                                    placeholder = { Text(stringResource(R.string.welcome_messages_placeholder)) }
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                    TextButton(
+                                        onClick = { viewModel.settings.setWelcomeMessages(draft) },
+                                        enabled = draft != welcomeMessages
+                                    ) { Text(stringResource(R.string.save)) }
+                                }
+                            }
+                        }
+                        add {
+                            val isSequential = welcomeDisplayMode == "sequential"
+                            SettingsItem(
+                                headlineContent = { Text(stringResource(R.string.welcome_display_mode)) },
+                                supportingContent = {
+                                    Text(
+                                        if (isSequential) stringResource(R.string.welcome_display_sequential)
+                                        else stringResource(R.string.welcome_display_random)
+                                    )
+                                },
+                                trailingContent = {
+                                    Switch(
+                                        checked = isSequential,
+                                        onCheckedChange = { checked ->
+                                            viewModel.settings.setWelcomeDisplayMode(
+                                                if (checked) "sequential" else "random"
+                                            )
+                                        }
+                                    )
+                                },
+                                modifier = Modifier.clickable {
+                                    viewModel.settings.setWelcomeDisplayMode(
+                                        if (isSequential) "random" else "sequential"
+                                    )
+                                }
+                            )
+                        }
+                    }
+                )
+
             if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
     }
 }
@@ -491,6 +560,7 @@ private fun presetDisplayName(preset: ColorSchemePreset): String = when (preset)
     ColorSchemePreset.LAVENDER -> stringResource(R.string.color_scheme_lavender)
     ColorSchemePreset.SLATE -> stringResource(R.string.color_scheme_slate)
     ColorSchemePreset.OCEAN -> stringResource(R.string.color_scheme_ocean)
+    ColorSchemePreset.MONOCHROME -> stringResource(R.string.color_scheme_monochrome)
 }
 
 @Composable

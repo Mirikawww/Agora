@@ -40,6 +40,9 @@ import com.newoether.agora.ui.chat.findMetaForIndex
 import com.newoether.agora.ui.chat.resolveAttachmentType
 import com.newoether.agora.ui.common.LocalAgoraHaptics
 import com.newoether.agora.ui.theme.ChatType
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * The right-aligned user message bubble: attachment thumbnails, the message text
@@ -242,10 +245,19 @@ internal fun UserMessageBubble(
         }
 
         if (!isEditing) {
+            val timeLabel = remember(message.timestamp, message.completedAt) {
+                formatMessageClockTime(message.completedAt ?: message.timestamp)
+            }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.then(contextAlpha)
             ) {
+                Text(
+                    text = timeLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                    modifier = Modifier.padding(end = 6.dp)
+                )
                 IconButton(onClick = { clipboardManager.setText(AnnotatedString(message.text)); haptics.success() }, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.copy), modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
                 }
@@ -279,4 +291,9 @@ internal fun UserMessageBubble(
             }
         }
     }
+}
+
+internal fun formatMessageClockTime(epochMs: Long): String {
+    // 24-hour clock, precise to seconds (e.g. 14:05:09)
+    return SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(epochMs))
 }

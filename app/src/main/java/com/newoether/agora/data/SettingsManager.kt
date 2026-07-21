@@ -247,6 +247,15 @@ class SettingsManager(private val context: Context) {
         val FIRST_LAUNCH_TIME = longPreferencesKey("first_launch_time")
         val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
         val SHOW_DOCUMENTATION_FAB = booleanPreferencesKey("show_documentation_fab")
+        val WELCOME_MESSAGES = stringPreferencesKey("welcome_messages")
+        val WELCOME_DISPLAY_MODE = stringPreferencesKey("welcome_display_mode") // sequential | random
+        // User personalization profile — injected into the effective system prompt.
+        val USER_PROFILE_NICKNAME = stringPreferencesKey("user_profile_nickname")
+        val USER_PROFILE_GENDER = stringPreferencesKey("user_profile_gender")
+        val USER_PROFILE_AGE = stringPreferencesKey("user_profile_age")
+        val USER_PROFILE_HEIGHT = stringPreferencesKey("user_profile_height")
+        val USER_PROFILE_OCCUPATION = stringPreferencesKey("user_profile_occupation")
+        val USER_PROFILE_OTHER = stringPreferencesKey("user_profile_other")
         val DEFAULT_TEMPERATURE = stringPreferencesKey("default_temperature")
         val DEFAULT_MAX_TOKENS = intPreferencesKey("default_max_tokens")
         val DEFAULT_TOP_P = stringPreferencesKey("default_top_p")
@@ -429,6 +438,17 @@ class SettingsManager(private val context: Context) {
     val customFontName: Flow<String> = context.dataStore.data.map { it[CUSTOM_FONT_NAME] ?: "" }
     val firstLaunchTime: Flow<Long?> = context.dataStore.data.map { it[FIRST_LAUNCH_TIME] }
     val onboardingCompleted: Flow<Boolean> = context.dataStore.data.map { it[ONBOARDING_COMPLETED] ?: false }
+    val welcomeMessages: Flow<String> = context.dataStore.data.map { it[WELCOME_MESSAGES] ?: "" }
+    val welcomeDisplayMode: Flow<String> = context.dataStore.data.map {
+        val mode = it[WELCOME_DISPLAY_MODE] ?: "random"
+        if (mode == "sequential") "sequential" else "random"
+    }
+    val userProfileNickname: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_NICKNAME] ?: "" }
+    val userProfileGender: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_GENDER] ?: "" }
+    val userProfileAge: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_AGE] ?: "" }
+    val userProfileHeight: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_HEIGHT] ?: "" }
+    val userProfileOccupation: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_OCCUPATION] ?: "" }
+    val userProfileOther: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_OTHER] ?: "" }
 
     // ── Auto Backup ───────────────────────────────────────────
     val autoBackupEnabled: Flow<Boolean> = context.dataStore.data.map { it[AUTO_BACKUP_ENABLED] ?: true }
@@ -787,6 +807,16 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[SHOW_DOCUMENTATION_FAB] = enabled }
     }
 
+    suspend fun saveWelcomeMessages(value: String) {
+        context.dataStore.edit { it[WELCOME_MESSAGES] = value }
+    }
+
+    suspend fun saveWelcomeDisplayMode(mode: String) {
+        context.dataStore.edit {
+            it[WELCOME_DISPLAY_MODE] = if (mode == "sequential") "sequential" else "random"
+        }
+    }
+
     suspend fun saveShellEnabled(enabled: Boolean) {
         context.dataStore.edit { it[SHELL_ENABLED] = enabled }
     }
@@ -880,6 +910,26 @@ class SettingsManager(private val context: Context) {
 
 
 
+
+
+    suspend fun saveUserProfileNickname(value: String) {
+        context.dataStore.edit { it[USER_PROFILE_NICKNAME] = value }
+    }
+    suspend fun saveUserProfileGender(value: String) {
+        context.dataStore.edit { it[USER_PROFILE_GENDER] = value }
+    }
+    suspend fun saveUserProfileAge(value: String) {
+        context.dataStore.edit { it[USER_PROFILE_AGE] = value }
+    }
+    suspend fun saveUserProfileHeight(value: String) {
+        context.dataStore.edit { it[USER_PROFILE_HEIGHT] = value }
+    }
+    suspend fun saveUserProfileOccupation(value: String) {
+        context.dataStore.edit { it[USER_PROFILE_OCCUPATION] = value }
+    }
+    suspend fun saveUserProfileOther(value: String) {
+        context.dataStore.edit { it[USER_PROFILE_OTHER] = value }
+    }
 
     // ── Auto Backup ───────────────────────────────────────────
     suspend fun saveAutoBackupEnabled(enabled: Boolean) {

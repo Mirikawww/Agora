@@ -375,7 +375,7 @@ class GenerationManager(
             val combinedText = if (attachmentText.isNotBlank()) it.text + attachmentText else it.text
             val hasTranscription = ctx.imageTranscriptionEnabled && meta != null && meta.items.any { item -> !item.transcription.isNullOrBlank() }
             val effectiveImages = if (hasTranscription) emptyList() else it.images
-            ChatMessage(id = it.id, parentId = it.parentId, text = combinedText, images = effectiveImages, thoughts = it.thoughts, thoughtTitle = it.thoughtTitle, tokenCount = it.tokenCount, status = it.status, participant = it.participant, timestamp = it.timestamp, thoughtTimeMs = it.thoughtTimeMs, segments = segs, toolCall = toolCall)
+            ChatMessage(id = it.id, parentId = it.parentId, text = combinedText, images = effectiveImages, thoughts = it.thoughts, thoughtTitle = it.thoughtTitle, tokenCount = it.tokenCount, status = it.status, participant = it.participant, timestamp = it.timestamp, completedAt = it.completedAt, thoughtTimeMs = it.thoughtTimeMs, segments = segs, toolCall = toolCall)
         }.filter { it.participant != Participant.ERROR }
             .let { path ->
                 if (isRegenerate && replaceMessageId != null) {
@@ -798,12 +798,14 @@ class GenerationManager(
                                 ?: segments.toList().ifEmpty { null }
                             val segmentsJson = finalSegments?.let { Json.encodeToString(it) }
                             val effectiveParentId = parentId
+                            val finishedAt = System.currentTimeMillis()
                             conversations.upsertMessage(MessageEntity(
                                 id = modelMessageId, conversationId = conversationId, parentId = effectiveParentId,
                                 text = totalText, images = generatedImages.toList(),
                                 thoughts = totalThoughts.ifBlank { null },
                                 thoughtTitle = totalThoughtTitle, tokenCount = totalTokenCount,
                                 status = currentStatus, participant = Participant.MODEL, timestamp = startTime,
+                                completedAt = finishedAt,
                                 thoughtTimeMs = totalThoughtTimeMs, modelName = modelName, toolCallJson = segmentsJson
                             ))
                             if (totalText.isNotBlank()) {

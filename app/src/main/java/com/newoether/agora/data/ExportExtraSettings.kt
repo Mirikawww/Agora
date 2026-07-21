@@ -67,6 +67,14 @@ object ExportExtraSettings {
         }
 
         put("showDocumentationFab", JsonPrimitive(sm.showDocumentationFab.first()))
+        put("welcomeMessages", JsonPrimitive(sm.welcomeMessages.first()))
+        put("welcomeDisplayMode", JsonPrimitive(sm.welcomeDisplayMode.first()))
+        put("userProfileNickname", JsonPrimitive(sm.userProfileNickname.first()))
+        put("userProfileGender", JsonPrimitive(sm.userProfileGender.first()))
+        put("userProfileAge", JsonPrimitive(sm.userProfileAge.first()))
+        put("userProfileHeight", JsonPrimitive(sm.userProfileHeight.first()))
+        put("userProfileOccupation", JsonPrimitive(sm.userProfileOccupation.first()))
+        put("userProfileOther", JsonPrimitive(sm.userProfileOther.first()))
         put("disabledProviders", JsonPrimitive(sm.disabledProviders.first().joinToString(",")))
         put("themeMode", JsonPrimitive(sm.themeMode.first()))
         put("colorScheme", JsonPrimitive(sm.colorScheme.first()))
@@ -135,6 +143,14 @@ object ExportExtraSettings {
             if (!cs.isAllNull()) sm.saveConversationSettings(convId, cs)
         }
         obj["showDocumentationFab"]?.jsonPrimitive?.boolean?.let { sm.saveShowDocumentationFab(it) }
+        obj["welcomeMessages"]?.jsonPrimitive?.contentOrNull?.let { sm.saveWelcomeMessages(it) }
+        obj["welcomeDisplayMode"]?.jsonPrimitive?.contentOrNull?.let { sm.saveWelcomeDisplayMode(it) }
+        obj["userProfileNickname"]?.jsonPrimitive?.contentOrNull?.let { sm.saveUserProfileNickname(it) }
+        obj["userProfileGender"]?.jsonPrimitive?.contentOrNull?.let { sm.saveUserProfileGender(it) }
+        obj["userProfileAge"]?.jsonPrimitive?.contentOrNull?.let { sm.saveUserProfileAge(it) }
+        obj["userProfileHeight"]?.jsonPrimitive?.contentOrNull?.let { sm.saveUserProfileHeight(it) }
+        obj["userProfileOccupation"]?.jsonPrimitive?.contentOrNull?.let { sm.saveUserProfileOccupation(it) }
+        obj["userProfileOther"]?.jsonPrimitive?.contentOrNull?.let { sm.saveUserProfileOther(it) }
         obj["disabledProviders"]?.jsonPrimitive?.contentOrNull?.let {
             sm.saveDisabledProviders(it.split(",").filter { s -> s.isNotBlank() }.toSet())
         }

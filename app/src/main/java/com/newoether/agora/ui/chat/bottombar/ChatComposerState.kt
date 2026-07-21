@@ -161,7 +161,7 @@ class ChatComposerState(
         }
     }
 
-    /** Handle images picked from the photo picker. */
+    /** Handle media picked from the visual picker (images and/or videos). */
     fun onPickImages(uris: List<Uri>) {
         if (uris.isNotEmpty()) haptics.selection()
         selectedAttachments = selectedAttachments + uris.map {
@@ -172,7 +172,7 @@ class ChatComposerState(
         }
     }
 
-    /** Handle videos picked from the video picker; queues them and kicks off the slice dialog. */
+    /** Handle videos picked from the media picker; queues them and kicks off the slice dialog. */
     fun onPickVideos(uris: List<Uri>) {
         if (uris.isNotEmpty()) haptics.selection()
         val urisToQueue = uris.map { it.toString() }

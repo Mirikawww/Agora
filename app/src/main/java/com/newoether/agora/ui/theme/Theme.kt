@@ -90,6 +90,11 @@ fun AgoraTheme(
     }
 
     val colorScheme = when {
+        // Monochrome always wins over wallpaper dynamic color — otherwise the UI
+        // would pick up system accent hues and stop being black/white/gray only.
+        colorSchemePreset == ColorSchemePreset.MONOCHROME -> {
+            remember(darkTheme) { monochromeColorScheme(darkTheme) }
+        }
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)

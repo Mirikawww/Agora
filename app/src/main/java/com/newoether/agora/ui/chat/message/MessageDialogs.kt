@@ -32,7 +32,7 @@ internal fun MessageInfoDialog(
     onDismiss: () -> Unit
 ) {
     val sdf = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
-    val dateString = sdf.format(Date(message.timestamp))
+    val dateString = sdf.format(Date(message.completedAt ?: message.timestamp))
     val modelDisplay = if (message.modelName != null) {
         val parsed = message.modelName?.let { com.newoether.agora.model.ModelId.parse(it) }
         val modelId = parsed?.apiModelName ?: message.modelName
