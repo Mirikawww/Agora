@@ -6,6 +6,7 @@ import com.newoether.agora.data.ConversationSettings
 import com.newoether.agora.data.MemoryManager
 import com.newoether.agora.data.PredefinedVariables
 import com.newoether.agora.data.repository.ConversationRepository
+import com.newoether.agora.data.repository.ModelsDevRepository
 import com.newoether.agora.data.repository.SettingsRepository
 import com.newoether.agora.model.ModelId
 import com.newoether.agora.model.apiModelName
@@ -22,6 +23,7 @@ class GenerationRequestBuilder(
     private val memoryManager: MemoryManager,
     private val providerRegistry: ProviderRegistry,
     private val ragManager: RagManager,
+    private val modelsDevRepository: ModelsDevRepository,
     private val appContext: Context,
     // currentActiveModel 是一个 StateFlow,buildGenerationPair / buildEffectiveSystemPrompt 用到它的 .value
     private val currentActiveModel: StateFlow<String>,
@@ -95,7 +97,8 @@ class GenerationRequestBuilder(
             thinkingLevel = overrides.thinkingLevel ?: settings.thinkingLevel.value,
             thinkingBudgetEnabled = overrides.thinkingBudgetEnabled ?: settings.thinkingBudgetEnabled.value,
             thinkingBudgetTokens = overrides.thinkingBudgetTokens ?: settings.thinkingBudgetTokens.value,
-            webSearchEnabled = if (settings.webSearchEnabled.value) (overrides.webSearchEnabled ?: true) else false,
+            fastEnabled = overrides.fastEnabled ?: false,
+            webSearchEnabled = overrides.webSearchEnabled ?: settings.webSearchEnabled.value,
             shellEnabled = if (settings.shellEnabled.value) (overrides.shellEnabled ?: true) else false
         )
     }
@@ -110,18 +113,26 @@ class GenerationRequestBuilder(
         effectiveSettings: ConversationSettings,
         currentId: String
     ): Pair<GenerationConfig, GenerationContext> {
+        val parsedModel = ModelId.parse(modelId)
+        val providerModelId = ModelId(providerName, parsedModel.apiModelName).prefixed
+        val capabilities = modelsDevRepository.capabilitiesFor(
+            providerName,
+            parsedModel.apiModelName,
+            providerFast = settings.modelFastSupport.value[providerModelId],
+        )
         val config = GenerationConfig(
             providerName = providerName,
-            modelId = ModelId.parse(modelId).modelName,
+            modelId = parsedModel.modelName,
             apiKey = activeKey,
             effectiveSystemPrompt = resolvedSystemPrompt,
             maxContextWindow = effectiveSettings.contextWindow ?: settings.maxContextWindow.value,
             codeExecutionEnabled = effectiveSettings.codeExecutionEnabled ?: settings.codeExecutionEnabled.value,
             googleSearchEnabled = effectiveSettings.googleSearchEnabled ?: settings.googleSearchEnabled.value,
-            thinkingEnabled = effectiveSettings.thinkingEnabled ?: settings.thinkingEnabled.value,
+            thinkingEnabled = (effectiveSettings.thinkingEnabled ?: settings.thinkingEnabled.value) && capabilities.reasoning,
             thinkingLevel = effectiveSettings.thinkingLevel ?: settings.thinkingLevel.value,
             thinkingBudgetEnabled = effectiveSettings.thinkingBudgetEnabled ?: settings.thinkingBudgetEnabled.value,
             thinkingBudgetTokens = effectiveSettings.thinkingBudgetTokens ?: settings.thinkingBudgetTokens.value,
+            fastEnabled = effectiveSettings.fastEnabled == true && capabilities.fast,
             baseUrl = providerRegistry.getEffectiveBaseUrl(providerName),
             userPrepend = resolvedUserPrepend,
             userPostpend = resolvedUserPostpend,
@@ -154,6 +165,8 @@ class GenerationRequestBuilder(
             imageGenSize = settings.imageGenSize.value,
             shellEnabled = effectiveSettings.shellEnabled ?: settings.shellEnabled.value,
             shellDevices = settings.shellDevices.value,
+            mcpEnabled = settings.mcpEnabled.value,
+            mcpServers = settings.mcpServers.value,
             sandboxEnabled = settings.sandboxEnabled.value,
             imageTranscriptionEnabled = settings.imageTranscriptionEnabledModels.value.contains(currentActiveModel.value),
             imageTranscriptionModel = settings.imageTranscriptionModel.value,

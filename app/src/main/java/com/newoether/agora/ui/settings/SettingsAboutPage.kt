@@ -3,26 +3,18 @@ package com.newoether.agora.ui.settings
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.newoether.agora.R
 import com.newoether.agora.viewmodel.ChatViewModel
-import com.newoether.agora.util.UpdateInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -42,8 +34,6 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     var isChecking by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    val focusManager = LocalFocusManager.current
-
     fun openUrl(url: String) {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     }
@@ -52,9 +42,9 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
         title = stringResource(R.string.about_title),
         onBack = onBack
     ) {
-            SettingsGroupColumn {
-                // -- App Info --
-                SettingsGroup(title = stringResource(R.string.about_info), items = listOf({
+        SettingsGroupColumn {
+            // -- App Info --
+            SettingsGroup(title = stringResource(R.string.about_info), items = listOf({
                 SettingsItem(
                     headlineContent = { Text(stringResource(R.string.about_developer)) },
                     supportingContent = { Text(stringResource(R.string.about_developer_name)) },
@@ -156,28 +146,6 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                     modifier = Modifier.clickable { openUrl("https://github.com/newo-ether/Agora/blob/master/PRIVACY.md") }
                 )
             }))
-
-            // -- Rating Section (title + card as one unit so the title stays tight to the card) --
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = stringResource(R.string.rating_category),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                )
-                Surface(
-                    shape = RoundedCornerShape(28.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 1.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp)
-                    ) {
-                        RatingForm()
-                    }
-                }
-            }
-            }
+        }
     }
 }

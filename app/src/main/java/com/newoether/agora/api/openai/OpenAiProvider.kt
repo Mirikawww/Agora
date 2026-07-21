@@ -13,10 +13,12 @@ class OpenAiProvider : BaseOpenAiProvider() {
             config.modelId.startsWith("o3") ||
             config.modelId.startsWith("o4") ||
             config.modelId.startsWith("gpt-5")
-        return if (config.thinkingEnabled && isReasoningModel) {
+        var customized = request
+        if (config.thinkingEnabled && isReasoningModel) {
             val effort = ThinkingLevels.openAiEffort(config.thinkingLevel)
-            request.copy(reasoningEffort = effort)
-        } else request
+            customized = customized.copy(reasoningEffort = effort)
+        }
+        return customized
     }
     // Reasoning/content parsing uses BaseOpenAiProvider's default (reasoning_content + content).
 }

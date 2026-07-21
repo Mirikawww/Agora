@@ -416,6 +416,8 @@ class DataImporter(
                         settingsManager.saveRagThreshold(s.ragThreshold)
                         settingsManager.saveShellEnabled(s.shellEnabled)
                         settingsManager.saveShellDevices(s.shellDevices)
+                        settingsManager.saveMcpEnabled(s.mcpEnabled)
+                        settingsManager.saveMcpServers(s.mcpServers)
                         // Skip local chat models — GGUF files don't exist on this device
                         s.activeSystemPromptId?.let { settingsManager.setActiveSystemPromptId(it) }
                         settingsImported = true
@@ -501,9 +503,9 @@ class DataImporter(
                             }
                             if (changed) settingsManager.saveShellDevices(currentDevices)
                         }
-                        // Apply active key IDs
-                        for ((provider, id) in data.activeApiKeyIds) {
-                            settingsManager.setActiveApiKeyId(provider, id)
+                        // Apply enabled key IDs (multi-select; legacy single-id maps are decoded by Serializer)
+                        for ((provider, ids) in data.activeApiKeyIds) {
+                            settingsManager.setActiveApiKeyIds(provider, ids)
                         }
                         apiKeysImported = true
                     }
@@ -596,6 +598,8 @@ class DataImporter(
         val ragThreshold: Float = 0.5f,
         val shellEnabled: Boolean = false,
         val shellDevices: List<ShellDeviceConfig> = emptyList(),
+        val mcpEnabled: Boolean = false,
+        val mcpServers: List<McpServerConfig> = emptyList(),
         val customProviders: List<CustomProviderConfig> = emptyList(),
         val localChatModels: List<LocalChatModelConfig> = emptyList(),
         @SerialName("active_system_prompt_id") val activeSystemPromptId: String? = null
@@ -604,7 +608,8 @@ class DataImporter(
     @Serializable
     private data class ExportApiKeys(
         val apiKeys: List<ApiKeyEntry> = emptyList(),
-        val activeApiKeyIds: Map<String, String> = emptyMap(),
+        @Serializable(with = ActiveApiKeyIds.Serializer::class)
+        val activeApiKeyIds: Map<String, List<String>> = emptyMap(),
         val webSearchApiKeys: Map<String, String> = emptyMap(),
         val shellApiKeys: Map<String, String> = emptyMap()
     )

@@ -306,7 +306,6 @@
     <string name="gen_thinking_level_low">Низкий</string>
     <string name="gen_thinking_level_medium">Средний</string>
     <string name="gen_thinking_level_high">Высокий</string>
-    <string name="gen_thinking_level_minimal">Очень низкий</string>
     <string name="gen_thinking_level_xhigh">Очень высокий</string>
     <string name="gen_thinking_level_max">Максимум</string>
     <string name="thinking_effort_label">Глубина размышления</string>
@@ -699,7 +698,6 @@
     <string name="settings_group_responses">Ответы</string>
     <string name="settings_group_tools">Инструменты</string>
     <string name="settings_group_about">О приложении</string>
-    <string name="rating_category">Оценить</string>
 
     <!-- About -->
     <string name="settings_about">О приложении</string>
@@ -715,8 +713,6 @@
     <string name="about_privacy_policy">Политика конфиденциальности</string>
     <string name="about_source_code">Исходный код</string>
     <string name="about_version">Версия</string>
-    <string name="about_rating">Оценить приложение</string>
-    <string name="about_rating_desc">Этот проект разработан одним человеком. Я искренне ценю ваши отзывы.</string>
     <string name="about_updates">Обновления</string>
     <string name="about_check_updates">Проверить обновления</string>
     <string name="about_check_updates_desc">Проверить последнюю версию на GitHub</string>
@@ -728,16 +724,6 @@
     <string name="about_available_body">На GitHub доступна новая версия Agora.</string>
     <string name="about_view_release">Посмотреть выпуск</string>
     <string name="about_later">Позже</string>
-    <string name="rating_title">Оценить Agora</string>
-    <string name="rating_star">%1$d звёзд</string>
-    <string name="rating_your_name">Ваше имя (необязательно)</string>
-    <string name="rating_your_email">Ваш e-mail (необязательно)</string>
-    <string name="rating_comment">Комментарий (необязательно)</string>
-    <string name="rating_submit">Отправить</string>
-    <string name="rating_submitting">Отправка…</string>
-    <string name="rating_success">Спасибо за ваш отзыв!</string>
-    <string name="rating_failed">Не удалось отправить. Попробуйте ещё раз.</string>
-    <string name="rating_privacy">Ваша оценка будет анонимно загружена на newoether.space. Передаются только заполненные вами поля. Никакие другие данные не собираются.</string>
 
     <!-- Data Control -->
     <string name="settings_data_control">Управление данными</string>

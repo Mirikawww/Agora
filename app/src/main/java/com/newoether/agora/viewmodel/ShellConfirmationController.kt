@@ -29,8 +29,12 @@ class ShellConfirmationController(private val settings: SettingsRepository) {
     private val sessionAllowedServers = Collections.synchronizedSet(mutableSetOf<String>())
 
     /** Suspends until the user resolves the prompt; returns whether the command may run. */
-    suspend fun confirm(server: String, summary: String): Boolean {
-        if (!settings.shellConfirmEnabled.value) return true
+    suspend fun confirm(
+        server: String,
+        summary: String,
+        enabled: Boolean = settings.shellConfirmEnabled.value,
+    ): Boolean {
+        if (!enabled) return true
         if (sessionAllowedServers.contains(server)) return true
         val deferred = CompletableDeferred<Boolean>()
         _pendingShellCommand.value = PendingShellCommand(server, summary, deferred)

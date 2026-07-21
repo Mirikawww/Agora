@@ -306,7 +306,6 @@
     <string name="gen_thinking_level_low">منخفض</string>
     <string name="gen_thinking_level_medium">متوسط</string>
     <string name="gen_thinking_level_high">عالٍ</string>
-    <string name="gen_thinking_level_minimal">منخفض جدًا</string>
     <string name="gen_thinking_level_xhigh">عالٍ جدًا</string>
     <string name="gen_thinking_level_max">الحد الأقصى</string>
     <string name="thinking_effort_label">جهد التفكير</string>
@@ -699,11 +698,10 @@
     <string name="settings_group_responses">الردود</string>
     <string name="settings_group_tools">الأدوات</string>
     <string name="settings_group_about">حول</string>
-    <string name="rating_category">تقييم</string>
 
     <!-- About -->
     <string name="settings_about">حول</string>
-    <string name="settings_about_desc">معلومات التطبيق والروابط وتقييم التطبيق</string>
+    <string name="settings_about_desc">معلومات التطبيق والروابط</string>
     <string name="about_title">حول</string>
     <string name="about_info">معلومات</string>
     <string name="about_links">روابط</string>
@@ -715,8 +713,6 @@
     <string name="about_privacy_policy">سياسة الخصوصية</string>
     <string name="about_source_code">الكود المصدري</string>
     <string name="about_version">الإصدار</string>
-    <string name="about_rating">قيّم التطبيق</string>
-    <string name="about_rating_desc">طُوِّر هذا المشروع بواسطة شخص واحد. أقدّر ملاحظاتك حقًا.</string>
     <string name="about_updates">التحديثات</string>
     <string name="about_check_updates">التحقق من التحديثات</string>
     <string name="about_check_updates_desc">تحقق من أحدث إصدار على GitHub</string>
@@ -728,16 +724,6 @@
     <string name="about_available_body">يتوفر إصدار جديد من Agora على GitHub.</string>
     <string name="about_view_release">عرض الإصدار</string>
     <string name="about_later">لاحقًا</string>
-    <string name="rating_title">قيّم Agora</string>
-    <string name="rating_star">%1$d نجمة</string>
-    <string name="rating_your_name">اسمك (اختياري)</string>
-    <string name="rating_your_email">بريدك الإلكتروني (اختياري)</string>
-    <string name="rating_comment">تعليق (اختياري)</string>
-    <string name="rating_submit">إرسال</string>
-    <string name="rating_submitting">جارٍ الإرسال…</string>
-    <string name="rating_success">شكرًا على ملاحظاتك!</string>
-    <string name="rating_failed">فشل الإرسال. يرجى المحاولة مرة أخرى.</string>
-    <string name="rating_privacy">سيتم رفع تقييمك بشكل مجهول إلى newoether.space. تُرسَل الحقول التي تملؤها فقط. لا يتم جمع أي بيانات أخرى.</string>
 
     <!-- Data Control -->
     <string name="settings_data_control">التحكم في البيانات</string>

@@ -32,7 +32,8 @@ internal data class ApiGenerateContentRequest(
     @SerialName("system_instruction") val systemInstruction: ApiRequestContent? = null,
     val tools: List<ApiTool>? = null,
     @SerialName("toolConfig") val toolConfig: ApiToolConfig? = null,
-    @SerialName("generationConfig") val generationConfig: ApiGenerationConfig? = null
+    @SerialName("generationConfig") val generationConfig: ApiGenerationConfig? = null,
+    @SerialName("service_tier") val serviceTier: String? = null,
 )
 
 @Serializable
@@ -266,31 +267,7 @@ class GeminiProvider : LlmProvider {
             GeminiFunctionDeclaration(
                 name = td.function.name,
                 description = td.function.description,
-                parameters = JsonObject(
-                    mapOf(
-                        "type" to JsonPrimitive(td.function.parameters.type),
-                        "properties" to JsonObject(
-                            td.function.parameters.properties.mapValues { (_, prop) ->
-                                val propMap = mutableMapOf<String, kotlinx.serialization.json.JsonElement>(
-                                    "type" to JsonPrimitive(prop.type),
-                                    "description" to JsonPrimitive(prop.description)
-                                )
-                                if (prop.items != null) {
-                                    propMap["items"] = JsonObject(
-                                        mapOf(
-                                            "type" to JsonPrimitive(prop.items.type),
-                                            "description" to JsonPrimitive(prop.items.description)
-                                        )
-                                    )
-                                }
-                                JsonObject(propMap)
-                            }
-                        ),
-                        "required" to kotlinx.serialization.json.JsonArray(
-                            td.function.parameters.required.map { JsonPrimitive(it) }
-                        )
-                    )
-                )
+                parameters = td.function.parameters.asJsonObject()
             )
         }
         if (!functionDeclarations.isNullOrEmpty()) {
@@ -336,7 +313,8 @@ class GeminiProvider : LlmProvider {
             systemInstruction = systemInstruction,
             tools = if (tools.isNotEmpty()) tools else null,
             toolConfig = toolConfig,
-            generationConfig = genConfig
+            generationConfig = genConfig,
+            serviceTier = "priority".takeIf { config.fastEnabled },
         )
 
         try {
@@ -496,7 +474,10 @@ class GeminiProvider : LlmProvider {
         }
     }.flowOn(Dispatchers.IO)
 
-    override suspend fun fetchModels(apiKey: String, baseUrl: String?): List<String> = kotlinx.coroutines.withContext(Dispatchers.IO) {
+    override suspend fun fetchModels(apiKey: String, baseUrl: String?): List<String> =
+        fetchModelCatalog(apiKey, baseUrl).map { it.id }
+
+    override suspend fun fetchModelCatalog(apiKey: String, baseUrl: String?): List<FetchedModel> = kotlinx.coroutines.withContext(Dispatchers.IO) {
         try {
             val effectiveBaseUrl = baseUrl?.trimEnd('/') ?: defaultBaseUrl
             val finalUrlString = if (effectiveBaseUrl.contains("/v1") || effectiveBaseUrl.contains("/v1beta")) {
@@ -513,9 +494,20 @@ class GeminiProvider : LlmProvider {
                 return@withContext emptyList()
             }
             val json = Json { ignoreUnknownKeys = true }
-            json.decodeFromString<ModelListResponse>(responseText).models
-                .filter { it.supportedGenerationMethods.contains("generateContent") }
-                .map { it.name.removePrefix("models/") }
+            val root = json.parseToJsonElement(responseText) as? JsonObject
+                ?: return@withContext emptyList()
+            val models = root["models"] as? JsonArray ?: return@withContext emptyList()
+            models.mapNotNull { element ->
+                val model = element as? JsonObject ?: return@mapNotNull null
+                val methods = (model["supportedGenerationMethods"] as? JsonArray)
+                    ?.mapNotNull { (it as? JsonPrimitive)?.content }
+                    .orEmpty()
+                if ("generateContent" !in methods) return@mapNotNull null
+                val id = (model["name"] as? JsonPrimitive)?.content
+                    ?.removePrefix("models/")
+                    ?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                FetchedModel(id = id, fast = explicitFastSupport(model))
+            }
         } catch (e: Exception) {
             emptyList()
         }

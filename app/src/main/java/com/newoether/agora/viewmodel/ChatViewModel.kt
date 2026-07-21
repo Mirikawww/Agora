@@ -93,6 +93,13 @@ class ChatViewModel(
     }
 
     val settings: SettingsRepository = settingsRepository
+    private val modelsDevRepository = com.newoether.agora.data.repository.ModelsDevRepository(appContext)
+    val modelsDevCapabilities = modelsDevRepository.capabilities
+
+    fun modelCapabilitiesFor(modelId: String) = modelsDevRepository.capabilitiesFor(
+        modelId = modelId,
+        providerFast = settings.modelFastSupport.value[modelId],
+    )
 
     /**
      * Conversation/message persistence behind the repository layer. CRUD, cascade-delete,
@@ -167,19 +174,17 @@ class ChatViewModel(
             )
             kotlinx.coroutines.flow.combine(proxyFlows) { it }.collect { applyProxy() }
         }
-        // Auto-check for updates on launch (at most once per day)
+        // Auto-check for updates on launch (no daily throttle).
         viewModelScope.launch(Dispatchers.IO) {
             if (settings.getAutoUpdateCheck()) {
-                val lastCheck = settings.getLastUpdateCheckTime()
-                val now = System.currentTimeMillis()
-                if (now - lastCheck > 24 * 60 * 60 * 1000L) {
-                    settings.saveLastUpdateCheckTime(now)
-                    val info = UpdateChecker.check(getCurrentVersion())
-                    if (info != null) {
-                        _updateDialogData.value = info
-                    }
+                val info = UpdateChecker.check(getCurrentVersion())
+                if (info != null) {
+                    _updateDialogData.value = info
                 }
             }
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            modelsDevRepository.loadAndRefresh()
         }
         viewModelScope.launch(Dispatchers.IO) {
             val models = settings.getEmbeddingModels()
@@ -249,13 +254,14 @@ class ChatViewModel(
     // ownership tokens) lives in [GenerationSession]; declared below once the
     // generation StateFlows it shares are initialized.
 
-    private val generationManager by lazy {
+    private val generationManagerDelegate = lazy {
         GenerationManager(
             app = application,
             conversations = convRepo,
             memoryManager = memoryManager,
             providers = providerRegistry.all,
             context = appContext,
+            settings = settings,
             sandboxFactory = sandboxFactory
         ).also { gm ->
             gm.onMessagePersisted = { messageId, text ->
@@ -264,8 +270,10 @@ class ChatViewModel(
                 }
             }
             gm.onConfirmShellCommand = { server, summary -> shellConfirmation.confirm(server, summary) }
+            gm.onConfirmMcpTool = { server, summary -> shellConfirmation.confirm(server, summary, enabled = true) }
         }
     }
+    private val generationManager by generationManagerDelegate
 
     val sandboxManager: SandboxManager? by lazy {
         sandboxFactory?.create()
@@ -278,9 +286,24 @@ class ChatViewModel(
         localProvider.close()
         session.cancelScope()
         autoBackupManager.destroy()
+        if (generationManagerDelegate.isInitialized()) generationManager.close()
     }
 
     fun getProviderInstance(name: String): LlmProvider = providerRegistry.getInstance(name)
+
+    suspend fun testMcpServer(server: com.newoether.agora.data.McpServerConfig) =
+        generationManager.testMcpServer(server)
+
+    val mcpStatuses get() = generationManager.mcpStatuses
+
+    fun startMcpAuthorization(server: com.newoether.agora.data.McpServerConfig) =
+        generationManager.startMcpAuthorization(server)
+
+    fun cancelMcpAuthorization(serverId: String) = generationManager.cancelMcpAuthorization(serverId)
+
+    fun clearMcpAuthorization(server: com.newoether.agora.data.McpServerConfig) = viewModelScope.launch {
+        generationManager.clearMcpAuthorization(server)
+    }
 
 
 
@@ -441,6 +464,7 @@ class ChatViewModel(
         memoryManager = memoryManager,
         providerRegistry = providerRegistry,
         ragManager = ragManager,
+        modelsDevRepository = modelsDevRepository,
         appContext = appContext,
         currentActiveModel = currentActiveModel,
         pendingConversationSettings = _pendingConversationSettings,
@@ -924,6 +948,10 @@ class ChatViewModel(
             val message = try {
                 providerRegistry.all.forEach { (name, _) ->
                     if (name == Constants.PROVIDER_LOCAL) return@forEach
+                    if (!settings.isProviderEnabled(name)) {
+                        skippedCount++
+                        return@forEach
+                    }
 
                     try {
                         if (!providerRegistry.isConfigured(name, settings.resolveActiveKey(name) ?: "")) {

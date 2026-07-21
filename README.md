@@ -78,7 +78,7 @@
 - ECDH key exchange + AES-256-GCM encryption + HMAC-SHA256 signing
 - Token bucket rate limiting and nonce-based anti-replay protection
 - **Multi-device support** — configure and switch between multiple remote servers
-- **MCP integration** — Conch as a Claude Desktop MCP server
+- **MCP host/client** — persistent Streamable HTTP/SSE connections with OAuth 2.1, per-tool controls, resources, and prompts; Conch also works as a Claude Desktop MCP server
 
 ### Knowledge Management
 - **RAG semantic search** across all past conversations using cosine similarity

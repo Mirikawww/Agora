@@ -37,7 +37,8 @@ internal data class AnthropicRequest(
     @SerialName("output_config") val outputConfig: AnthropicOutputConfig? = null,
     val tools: List<AnthropicTool>? = null,
     val temperature: Float? = null,
-    @SerialName("top_p") val topP: Float? = null
+    @SerialName("top_p") val topP: Float? = null,
+    val speed: String? = null
 )
 
 @Serializable
@@ -205,31 +206,7 @@ class AnthropicProvider : LlmProvider {
             AnthropicTool(
                 name = td.function.name,
                 description = td.function.description,
-                inputSchema = JsonObject(
-                    mapOf(
-                        "type" to JsonPrimitive(td.function.parameters.type),
-                        "properties" to JsonObject(
-                            td.function.parameters.properties.mapValues { (_, prop) ->
-                                val propMap = mutableMapOf<String, kotlinx.serialization.json.JsonElement>(
-                                    "type" to JsonPrimitive(prop.type),
-                                    "description" to JsonPrimitive(prop.description)
-                                )
-                                if (prop.items != null) {
-                                    propMap["items"] = JsonObject(
-                                        mapOf(
-                                            "type" to JsonPrimitive(prop.items.type),
-                                            "description" to JsonPrimitive(prop.items.description)
-                                        )
-                                    )
-                                }
-                                JsonObject(propMap)
-                            }
-                        ),
-                        "required" to kotlinx.serialization.json.JsonArray(
-                            td.function.parameters.required.map { JsonPrimitive(it) }
-                        )
-                    )
-                )
+                inputSchema = td.function.parameters.asJsonObject()
             )
         }
 
@@ -242,7 +219,8 @@ class AnthropicProvider : LlmProvider {
             maxTokens = config.maxTokens ?: if (thinking?.budgetTokens != null) maxOf(thinking.budgetTokens + 1024, 4096) else 4096,
             tools = anthropicTools,
             temperature = config.temperature,
-            topP = config.topP
+            topP = config.topP,
+            speed = if (config.fastEnabled) "fast" else null
         )
 
         try {
@@ -250,6 +228,7 @@ class AnthropicProvider : LlmProvider {
             val headers = mutableMapOf("Content-Type" to "application/json")
             headers["x-api-key"] = config.apiKey
             headers["anthropic-version"] = "2023-06-01"
+            if (config.fastEnabled) headers["anthropic-beta"] = "fast-mode-2026-02-01"
             val requestBodyJson = json.encodeToString(AnthropicRequest.serializer(), requestBody)
             DebugLog.d("AgoraAPI", "[Anthropic] REQ → $baseUrl/messages | model=$modelName | msgs=${apiMessages.size} | thinking=${thinking != null} | tools=${anthropicTools?.size ?: 0}")
             DebugLog.d("AgoraAPI", "[Anthropic] BODY: ${requestBodyJson.take(4000)}")
@@ -437,7 +416,10 @@ class AnthropicProvider : LlmProvider {
         return AnthropicMessage(role = role, content = parts)
     }
 
-    override suspend fun fetchModels(apiKey: String, baseUrl: String?): List<String> = kotlinx.coroutines.withContext(Dispatchers.IO) {
+    override suspend fun fetchModels(apiKey: String, baseUrl: String?): List<String> =
+        fetchModelCatalog(apiKey, baseUrl).map { it.id }
+
+    override suspend fun fetchModelCatalog(apiKey: String, baseUrl: String?): List<FetchedModel> = kotlinx.coroutines.withContext(Dispatchers.IO) {
         try {
             val effectiveBaseUrl = baseUrl?.trimEnd('/') ?: "https://api.anthropic.com/v1"
             val responseText = HttpClient.fetchModels(
@@ -447,7 +429,15 @@ class AnthropicProvider : LlmProvider {
                 DebugLog.e("AgoraAPI", "Failed to fetch Anthropic models: empty response")
                 return@withContext emptyList()
             }
-            json.decodeFromString<AnthropicModelsResponse>(responseText).data.map { it.id }
+            val root = json.parseToJsonElement(responseText) as? JsonObject
+                ?: return@withContext emptyList()
+            val data = root["data"] as? JsonArray ?: return@withContext emptyList()
+            data.mapNotNull { element ->
+                val model = element as? JsonObject ?: return@mapNotNull null
+                val id = (model["id"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    ?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                FetchedModel(id = id, fast = explicitFastSupport(model))
+            }
         } catch (e: Exception) {
             DebugLog.e("AgoraAPI", "Failed to fetch Anthropic models", e)
             emptyList()

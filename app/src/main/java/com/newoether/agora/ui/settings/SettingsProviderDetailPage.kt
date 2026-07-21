@@ -55,6 +55,7 @@ fun SettingsProviderDetailPage(
     val providerBaseUrls by viewModel.settings.providerBaseUrls.collectAsState()
     val customProviders by viewModel.settings.customProviders.collectAsState()
     val localChatModels by viewModel.settings.localChatModels.collectAsState()
+    val disabledProviders by viewModel.settings.disabledProviders.collectAsState()
 
     val isLocal = providerName == Constants.PROVIDER_LOCAL
     val isCustom = customProviders.any { it.name == providerName }
@@ -124,6 +125,30 @@ fun SettingsProviderDetailPage(
         }
     ) {
             SettingsGroupColumn {
+                // Enable/disable switch sits under the provider title (non-Local only).
+                if (!isLocal) {
+                    val providerOn = providerName !in disabledProviders
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 32.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Switch(
+                            checked = providerOn,
+                            onCheckedChange = { viewModel.settings.setProviderEnabled(providerName, it) }
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = stringResource(
+                                if (providerOn) R.string.provider_enabled else R.string.provider_disabled
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (providerOn) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
                 // Base URL (non-Local only)
                 if (!isLocal) {
                 val providerInstance = viewModel.getProviderInstance(providerName)
@@ -305,12 +330,20 @@ fun SettingsProviderDetailPage(
                         items = buildList {
                             providerKeys.forEach { entry ->
                                 var showMenu by remember { mutableStateOf(false) }
-                                val isCurrentActive = entry.id == activeApiKeyIds[providerName]
+                                val isEnabled = entry.id in activeApiKeyIds[providerName].orEmpty()
                                 add {
                                     SettingsItem(
                                         headlineContent = { Text(entry.name, fontWeight = FontWeight.Medium) },
                                         supportingContent = { Text(entry.key.take(4) + "••••••••" + entry.key.takeLast(4)) },
-                                        leadingContent = { Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) { RadioButton(selected = isCurrentActive, onClick = { viewModel.settings.setActiveApiKey(providerName, entry.id) }, modifier = Modifier.size(20.dp)) } },
+                                        leadingContent = {
+                                            Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                                                Checkbox(
+                                                    checked = isEnabled,
+                                                    onCheckedChange = { viewModel.settings.setApiKeyEnabled(providerName, entry.id, it) },
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        },
                                         trailingContent = {
                                             Box {
                                                 IconButton(onClick = { showMenu = true }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.MoreVert, stringResource(R.string.options), modifier = Modifier.size(18.dp)) }
@@ -321,7 +354,7 @@ fun SettingsProviderDetailPage(
                                             }
                                         },
                                         modifier = Modifier
-                                            .clickable { viewModel.settings.setActiveApiKey(providerName, entry.id) }
+                                            .clickable { viewModel.settings.setApiKeyEnabled(providerName, entry.id, !isEnabled) }
                                     )
                                 }
                             }

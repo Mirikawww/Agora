@@ -1,0 +1,15 @@
+{
+  "name": "agora-update-check",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cloudflare Worker that proxies latest-release checks for a private GitHub repo",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.112.0"
+  }
+}

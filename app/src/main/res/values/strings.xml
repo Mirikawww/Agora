@@ -272,6 +272,9 @@
     <string name="models_sync">Sync from All Providers</string>
     <string name="models_sync_desc">Fetch the latest model list for all configured APIs</string>
     <string name="models_count">%1$d models available</string>
+    <string name="models_change_badge">Changed</string>
+    <string name="models_added_badge">Added</string>
+    <string name="models_removed_badge">Removed</string>
     <string name="models_rename">Rename Model</string>
     <string name="models_rename_current">Current ID: %1$s</string>
     <string name="models_alias_hint">Alias</string>
@@ -303,7 +306,6 @@
     <string name="gen_thinking_enabled_desc">Enable model thinking/reasoning capability</string>
     <string name="gen_thinking_level">Thinking Level</string>
     <string name="gen_thinking_level_desc">Controls thinking depth; higher = more thorough reasoning</string>
-    <string name="gen_thinking_level_minimal">Minimal</string>
     <string name="gen_thinking_level_low">Low</string>
     <string name="gen_thinking_level_medium">Medium</string>
     <string name="gen_thinking_level_high">High</string>
@@ -313,9 +315,16 @@
     <string name="thinking_effort_desc">Controls how thoroughly the model reasons before answering</string>
     <string name="thinking_use_budget">Use Thinking Budget</string>
     <string name="thinking_budget_input_label">Budget (tokens)</string>
-    <string name="thinking_control_off">Off</string>
+    <string name="thinking_control_off">No thinking</string>
     <string name="thinking_control_auto">Auto</string>
-    <string name="thinking_control_quick">Quick</string>
+    <string name="thinking_control_quick">Fast</string>
+    <string name="model_menu_web_search">Web Search</string>
+    <string name="model_menu_search_off">Search Off</string>
+    <string name="model_menu_search_builtin">Built-in Search</string>
+    <string name="model_menu_search_external">External Search</string>
+    <string name="model_menu_search_hybrid">Hybrid Search</string>
+    <string name="model_menu_models_config">Model settings</string>
+    <string name="model_menu_providers_config">Provider settings</string>
     <string name="thinking_control_balanced">Balanced</string>
     <string name="thinking_control_deep">Deep</string>
     <string name="thinking_control_extreme">Extreme</string>
@@ -368,6 +377,54 @@
     <string name="web_search_searxng_url_hint">https://searx.be</string>
 
     <!-- Settings - Shell Page -->
+    <!-- Settings - MCP Page -->
+    <string name="mcp_title">MCP</string>
+    <string name="mcp_desc">Connect external tools, resources, and prompts</string>
+    <string name="mcp_enable">Enable MCP</string>
+    <string name="mcp_enable_desc">Expose tools, resources, and prompts from configured MCP servers to the assistant</string>
+    <string name="mcp_servers">MCP Servers</string>
+    <string name="mcp_no_servers">No MCP servers configured</string>
+    <string name="mcp_no_servers_desc">Add a remote Streamable HTTP or SSE endpoint.</string>
+    <string name="mcp_add_server">Add MCP Server</string>
+    <string name="mcp_unnamed_server">Unnamed server</string>
+    <string name="mcp_url_missing">URL not configured</string>
+    <string name="mcp_delete_title">Delete MCP Server</string>
+    <string name="mcp_delete_message">This removes the endpoint and its stored credentials.</string>
+    <string name="mcp_server_editor">MCP Server</string>
+    <string name="mcp_server_name">Name</string>
+    <string name="mcp_server_url">Endpoint URL</string>
+    <string name="mcp_transport_value">Transport: %1$s</string>
+    <string name="mcp_bearer_token">Bearer token (optional)</string>
+    <string name="mcp_custom_headers">Custom headers</string>
+    <string name="mcp_custom_headers_desc">One “Name: value” header per line. Protocol-controlled headers are ignored.</string>
+    <string name="mcp_timeout">Request timeout (seconds)</string>
+    <string name="mcp_confirm_tools">Confirm every remote tool call</string>
+    <string name="mcp_expose_resources">Allow resource access</string>
+    <string name="mcp_expose_prompts">Allow prompt access</string>
+    <string name="mcp_test_connection">Test connection</string>
+    <string name="mcp_testing">Testing…</string>
+    <string name="mcp_import">Import MCP JSON</string>
+    <string name="mcp_import_desc">Paste a standard configuration containing a remote “mcpServers” object. Local stdio commands are skipped on Android.</string>
+    <string name="mcp_oauth_enable">Use OAuth 2.1</string>
+    <string name="mcp_oauth_client_id">OAuth client ID (optional)</string>
+    <string name="mcp_oauth_client_id_desc">Leave blank to use dynamic client registration when the authorization server supports it.</string>
+    <string name="mcp_oauth_client_secret">OAuth client secret (optional)</string>
+    <string name="mcp_oauth_scope">OAuth scopes (optional)</string>
+    <string name="mcp_oauth_authorize">Authorize</string>
+    <string name="mcp_oauth_authorizing">Authorizing…</string>
+    <string name="mcp_oauth_clear">Clear authorization</string>
+    <string name="mcp_tools">Synchronized tools</string>
+    <string name="mcp_tool_enabled">Enabled</string>
+    <string name="mcp_tool_confirm">Confirm before calling</string>
+    <string name="mcp_tool_parameters">Parameters: %1$s</string>
+    <string name="mcp_tool_count">%1$d/%2$d tools enabled</string>
+    <string name="mcp_status_idle">Idle</string>
+    <string name="mcp_status_connecting">Connecting…</string>
+    <string name="mcp_status_connected">Connected</string>
+    <string name="mcp_status_reconnecting">Reconnecting %1$d/%2$d…</string>
+    <string name="mcp_status_needs_authorization">OAuth authorization required</string>
+    <string name="mcp_status_authorizing">Waiting for OAuth authorization…</string>
+
     <string name="shell_title">Shell</string>
     <string name="shell_desc">Remote shell command execution</string>
     <string name="shell_enable">Enable Shell Tool</string>
@@ -671,6 +728,8 @@
     <string name="local_chat_models_count">%1$d model(s) imported</string>
     <string name="local_title">Local</string>
     <string name="not_configured">Not configured</string>
+    <string name="provider_enabled">Enabled</string>
+    <string name="provider_disabled">Disabled</string>
     <string name="provider_built_in">Built-in Providers</string>
     <string name="custom_provider_section">Custom Providers</string>
     <string name="provider_local_models_summary">%1$d local model(s)</string>
@@ -699,11 +758,10 @@
     <string name="settings_group_responses">Responses</string>
     <string name="settings_group_tools">Tools</string>
     <string name="settings_group_about">About</string>
-    <string name="rating_category">Rate</string>
 
     <!-- About -->
     <string name="settings_about">About</string>
-    <string name="settings_about_desc">App info, links, and rate the app</string>
+    <string name="settings_about_desc">App info and links</string>
     <string name="about_title">About</string>
     <string name="about_info">Info</string>
     <string name="about_links">Links</string>
@@ -715,29 +773,17 @@
     <string name="about_privacy_policy">Privacy Policy</string>
     <string name="about_source_code">Source Code</string>
     <string name="about_version">Version</string>
-    <string name="about_rating">Rate the App</string>
-    <string name="about_rating_desc">This project was developed by a single person. I truly appreciate your feedback.</string>
     <string name="about_updates">Updates</string>
     <string name="about_check_updates">Check for Updates</string>
-    <string name="about_check_updates_desc">Check GitHub for the latest release</string>
+    <string name="about_check_updates_desc">Check the update server for the latest release</string>
     <string name="about_auto_update">Auto-check for updates</string>
-    <string name="about_auto_update_desc">Check on app launch (at most once per day)</string>
+    <string name="about_auto_update_desc">Check on every app launch</string>
     <string name="about_update_available">Update available: v%1$s</string>
     <string name="about_up_to_date">You\'re up to date (v%1$s)</string>
     <string name="about_checking">Checking...</string>
-    <string name="about_available_body">A new version of Agora is available on GitHub.</string>
+    <string name="about_available_body">A new version of Agora is available.</string>
     <string name="about_view_release">View Release</string>
     <string name="about_later">Later</string>
-    <string name="rating_title">Rate Agora</string>
-    <string name="rating_star">%1$d star(s)</string>
-    <string name="rating_your_name">Your Name (optional)</string>
-    <string name="rating_your_email">Your Email (optional)</string>
-    <string name="rating_comment">Comment (optional)</string>
-    <string name="rating_submit">Submit</string>
-    <string name="rating_submitting">Submitting…</string>
-    <string name="rating_success">Thanks for your feedback!</string>
-    <string name="rating_failed">Failed to submit. Please try again.</string>
-    <string name="rating_privacy">Your rating will be uploaded anonymously to newoether.space. Only the fields you fill in are transmitted. No other data is collected.</string>
 
     <!-- Data Control -->
     <string name="settings_data_control">Data Control</string>

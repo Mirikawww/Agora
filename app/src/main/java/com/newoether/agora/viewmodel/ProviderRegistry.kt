@@ -16,8 +16,12 @@ import com.newoether.agora.util.Constants
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.cancellation.CancellationException
 import java.util.concurrent.ConcurrentHashMap
+
+private const val MODEL_CATALOG_SCHEMA_VERSION = 2
 
 /**
  * Owns the set of LLM providers — built-in plus user-defined custom OpenAI-compatible
@@ -112,10 +116,15 @@ class ProviderRegistry(
      */
     suspend fun fetchModelsForProvider(name: String): List<String> {
         if (name == Constants.PROVIDER_LOCAL) return emptyList()
+        if (!settings.isProviderEnabled(name)) return emptyList()
         ensureCustomProvidersRegistered()
         val provider = providers[name] ?: return emptyList()
-        val activeKey = settings.apiKeys.value.find { it.id == settings.activeApiKeyIds.value[name] }?.key ?: ""
-        if (!isConfigured(name, activeKey)) return emptyList()
+        // Multi-enable: try every enabled key and union model IDs. Different keys on the
+        // same provider may expose different catalogs (or one may be rate-limited / invalid).
+        val activeKeys = settings.resolveActiveKeys(name)
+        val probeKey = activeKeys.firstOrNull() ?: ""
+        if (!isConfigured(name, probeKey)) return emptyList()
+        val keysToTry = if (activeKeys.isNotEmpty()) activeKeys else listOf("")
         val baseUrl = if (!isBuiltIn(name)) {
             settings.providerBaseUrls.value[name]?.takeIf { it.isNotBlank() } ?: provider.defaultBaseUrl
         } else {
@@ -133,13 +142,43 @@ class ProviderRegistry(
                 listOf(baseUrl)
 
         for (candidate in candidates) {
-            val raw = withTimeout(Constants.MODEL_FETCH_TIMEOUT_MS) { provider.fetchModels(activeKey, candidate) }
-            if (raw.isEmpty()) continue
+            val merged = linkedMapOf<String, Boolean?>()
+            for (key in keysToTry) {
+                val raw = try {
+                    withTimeout(Constants.MODEL_FETCH_TIMEOUT_MS) {
+                        provider.fetchModelCatalog(key, candidate)
+                    }
+                } catch (_: TimeoutCancellationException) {
+                    emptyList()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    emptyList()
+                }
+                raw.forEach { fetched ->
+                    val modelId = fetched.id.removePrefix("models/")
+                    val alreadyPresent = merged.containsKey(modelId)
+                    val previous = merged[modelId]
+                    merged[modelId] = when {
+                        !alreadyPresent -> fetched.fast
+                        previous == fetched.fast -> previous
+                        previous == null -> fetched.fast
+                        fetched.fast == null -> previous
+                        else -> null // Conflicting explicit declarations remain unknown.
+                    }
+                }
+            }
+            if (merged.isEmpty()) continue
             // Persist the working form when it differs from what was stored, so the
             // ambiguity is never re-litigated at request time.
             if (candidate != null && candidate != baseUrl) settings.setProviderBaseUrl(name, candidate)
-            val prefixed = raw.map { "$name:${it.removePrefix("models/")}" }
+            val prefixed = merged.keys.map { "$name:$it" }
             settings.saveAvailableModels(name, prefixed)
+            settings.saveModelFastSupport(
+                provider = name,
+                support = merged.mapNotNull { (modelId, fast) ->
+                    fast?.let { "$name:$modelId" to it }
+                }.toMap()
+            )
             return prefixed
         }
         return emptyList()
@@ -147,9 +186,10 @@ class ProviderRegistry(
 
     /** Identity fingerprint of all providers' credentials/URLs — used to skip redundant syncs. */
     fun computeFingerprint(): String = providers.map { (name, _) ->
-        val keyId = settings.activeApiKeyIds.value[name] ?: ""
+        val keyIds = settings.activeApiKeyIds.value[name].orEmpty().sorted().joinToString("+")
         val url = settings.providerBaseUrls.value[name] ?: ""
-        "$name|$keyId|$url"
+        val enabled = if (settings.isProviderEnabled(name)) "1" else "0"
+        "$name|$keyIds|$url|$enabled|catalog=$MODEL_CATALOG_SCHEMA_VERSION"
     }.sorted().joinToString(",").hashCode().toString()
 
     /** Starts the long-lived collectors that keep the provider map and caches consistent. */
@@ -177,7 +217,8 @@ class ProviderRegistry(
 
                     val current = mutableMapOf<String, Boolean>()
                     providers.toMap().forEach { (name, _) ->
-                        val activeKey = keys.find { it.id == activeIds[name] }?.key ?: ""
+                        val enabledIds = activeIds[name].orEmpty()
+                        val activeKey = enabledIds.firstNotNullOfOrNull { id -> keys.find { it.id == id }?.key } ?: ""
                         current[name] = isConfigured(name, activeKey)
                     }
 

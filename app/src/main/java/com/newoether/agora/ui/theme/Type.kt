@@ -195,8 +195,6 @@ object ChatType {
     // Sheet
     val detailTitle get() = TextStyle(fontFamily = chatFontFamily, fontWeight = FontWeight.Bold, fontSize = 22.sp, lineHeight = 28.sp)
 
-    // Rating
-    val ratingTitle get() = TextStyle(fontFamily = chatFontFamily, fontWeight = FontWeight.Bold, fontSize = 28.sp, lineHeight = 35.sp)
 
     // Drawer
     val conversationsTitle get() = TextStyle(fontFamily = chatFontFamily, fontWeight = FontWeight.Bold, fontSize = 25.sp, lineHeight = 32.sp)

@@ -13,6 +13,13 @@ data class UpdateInfo(
 )
 
 object UpdateChecker {
+    /**
+     * Cloudflare Worker that proxies latest-release checks for the private
+     * GitHub repository. Token never ships in the APK.
+     */
+    private const val UPDATE_ENDPOINT =
+        "https://agora-update-check.mirikawww.workers.dev/latest"
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
@@ -21,24 +28,37 @@ object UpdateChecker {
     private val json = Json { ignoreUnknownKeys = true }
 
     @Serializable
-    private data class GitHubRelease(
+    private data class LatestRelease(
         val tag_name: String,
         val html_url: String,
-        val body: String? = null
+        val body: String? = null,
+        // Optional Worker-only fields (ignored if absent)
+        val version: String? = null,
+        val download_url: String? = null,
     )
 
     /**
-     * Check GitHub for a newer release. Returns [UpdateInfo] if an update is available,
-     * or null if the current version is up-to-date or the check fails.
+     * Check the update endpoint for a newer release. Returns [UpdateInfo] if an
+     * update is available, or null if the current version is up-to-date or the
+     * check fails.
      */
     fun check(currentVersion: String): UpdateInfo? {
         return try {
+            if (UPDATE_ENDPOINT.contains("CHANGE_ME")) {
+                // Endpoint not configured yet — skip quietly.
+                return null
+            }
+
             val request = Request.Builder()
-                .url("https://api.github.com/repos/newo-ether/Agora/releases/latest")
-                .header("Accept", "application/vnd.github+json")
+                .url(UPDATE_ENDPOINT)
+                .header("Accept", "application/json")
                 .build()
 
             val response = client.newCall(request).execute()
+            if (response.code == 204) {
+                response.close()
+                return null
+            }
             if (!response.isSuccessful) {
                 response.close()
                 return null
@@ -47,13 +67,16 @@ object UpdateChecker {
             val body = response.body.string()
             response.close()
 
-            val release = json.decodeFromString<GitHubRelease>(body)
-            val latestVersion = release.tag_name.removePrefix("v")
+            val release = json.decodeFromString<LatestRelease>(body)
+            val latestVersion = (release.version?.takeIf { it.isNotBlank() }
+                ?: release.tag_name.removePrefix("v").removePrefix("V"))
 
             if (compareVersions(latestVersion, currentVersion) > 0) {
                 UpdateInfo(
                     version = latestVersion,
-                    url = release.html_url,
+                    // Prefer Worker-proxied APK download when available (private assets),
+                    // otherwise fall back to the release page URL.
+                    url = release.download_url?.takeIf { it.isNotBlank() } ?: release.html_url,
                     body = release.body.orEmpty()
                 )
             } else {

@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -103,7 +105,8 @@ abstract class BaseOpenAiProvider : LlmProvider {
             maxTokens = config.maxTokens,
             topP = config.topP,
             frequencyPenalty = config.frequencyPenalty,
-            presencePenalty = config.presencePenalty
+            presencePenalty = config.presencePenalty,
+            serviceTier = "priority".takeIf { config.fastEnabled }
         )
         request = customizeRequest(request, config)
 
@@ -285,7 +288,10 @@ abstract class BaseOpenAiProvider : LlmProvider {
     private fun authHeaders(apiKey: String): Map<String, String> =
         if (apiKey.isBlank()) emptyMap() else mapOf("Authorization" to "Bearer $apiKey")
 
-    override suspend fun fetchModels(apiKey: String, baseUrl: String?): List<String> = withContext(Dispatchers.IO) {
+    override suspend fun fetchModels(apiKey: String, baseUrl: String?): List<String> =
+        fetchModelCatalog(apiKey, baseUrl).map { it.id }
+
+    override suspend fun fetchModelCatalog(apiKey: String, baseUrl: String?): List<FetchedModel> = withContext(Dispatchers.IO) {
         try {
             val effectiveBaseUrl = baseUrl?.trimEnd('/') ?: defaultBaseUrl
             val endpointUrls = endpointCandidates(effectiveBaseUrl, "models")
@@ -302,8 +308,16 @@ abstract class BaseOpenAiProvider : LlmProvider {
                 }
 
                 try {
-                    return@withContext json.decodeFromString<OpenAiModelListResponse>(responseText)
-                        .data.map { it.id }.sorted()
+                    val root = json.parseToJsonElement(responseText) as? JsonObject
+                        ?: error("Model catalog root is not an object")
+                    val data = root["data"] as? JsonArray
+                        ?: error("Model catalog has no data array")
+                    return@withContext data.mapNotNull { element ->
+                        val model = element as? JsonObject ?: return@mapNotNull null
+                        val id = (model["id"] as? JsonPrimitive)?.content
+                            ?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                        FetchedModel(id = id, fast = explicitFastSupport(model))
+                    }.sortedBy { it.id }
                 } catch (e: Exception) {
                     lastParseError = e
                     if (index < endpointUrls.lastIndex) {

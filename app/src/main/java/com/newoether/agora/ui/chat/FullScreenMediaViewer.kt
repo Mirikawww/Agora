@@ -1,7 +1,6 @@
 package com.newoether.agora.ui.chat
 
 import android.net.Uri
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -55,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import com.newoether.agora.R
 import com.newoether.agora.ui.common.AgoraHaptics
 import com.newoether.agora.ui.common.NoOpAgoraHaptics
+import com.newoether.agora.ui.common.PredictiveBackContainer
 import com.newoether.agora.ui.common.rememberAgoraHaptics
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -87,21 +87,26 @@ fun FullScreenMediaViewer(
     if (isSingleVideo && urls.size == 1) {
         var showOverlay by remember { mutableStateOf(true) }
         var closing by remember { mutableStateOf(false) }
-        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-            VideoPlayer(uri = url, onClose = onClose, closing = closing)
-            AnimatedVisibility(
-                visible = showOverlay,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(24.dp)
-            ) {
-                Surface(
-                    onClick = { closing = true },
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier.shadow(8.dp, CircleShape)
+        PredictiveBackContainer(
+            enabled = true,
+            onBack = { closing = true }
+        ) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+                VideoPlayer(uri = url, onClose = onClose, closing = closing)
+                AnimatedVisibility(
+                    visible = showOverlay,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(24.dp)
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                    Surface(
+                        onClick = { closing = true },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.shadow(8.dp, CircleShape)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                    }
                 }
             }
         }
@@ -141,85 +146,89 @@ private fun PdfPager(
         val idx = pagerState.currentPage
         if (idx in pdfPages.indices) onNavigate(idx)
     }
-    BackHandler { onClose() }
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.9f))
+    PredictiveBackContainer(
+        enabled = true,
+        onBack = onClose
     ) {
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxSize(),
-            beyondViewportPageCount = 1,
-            userScrollEnabled = currentScale <= 1.05f
-        ) { page ->
-            ZoomableImageItem(
-                url = pdfPages[page],
-                onTap = { showOverlay = !showOverlay },
-                onScaleChanged = { if (page == pagerState.currentPage) currentScale = it },
-                consumeConditionally = true
-            )
-        }
-        AnimatedVisibility(
-            visible = showOverlay,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(horizontal = 20.dp, vertical = 24.dp)
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.9f))
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier.shadow(8.dp, RoundedCornerShape(50))
-                ) {
-                    Text(
-                        "${pagerState.currentPage + 1} / ${pdfPages.size}",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                Surface(
-                    onClick = { onClose() },
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier.shadow(8.dp, CircleShape)
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
-                }
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                beyondViewportPageCount = 1,
+                userScrollEnabled = currentScale <= 1.05f
+            ) { page ->
+                ZoomableImageItem(
+                    url = pdfPages[page],
+                    onTap = { showOverlay = !showOverlay },
+                    onScaleChanged = { if (page == pagerState.currentPage) currentScale = it },
+                    consumeConditionally = true
+                )
             }
-        }
-
-        // Bottom-left selection capsule
-        if (pdfSelectedPages != null && onTogglePdfPage != null) {
-            val currentPage = pagerState.currentPage
             AnimatedVisibility(
                 visible = showOverlay,
                 enter = fadeIn(),
                 exit = fadeOut(),
-                modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(24.dp)
+                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(horizontal = 20.dp, vertical = 24.dp)
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Checkbox(
-                        checked = currentPage in pdfSelectedPages,
-                        onCheckedChange = { onTogglePdfPage(currentPage) },
-                        modifier = Modifier.size(32.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "${pdfSelectedPages.size} / ${pdfPages.size} ${stringResource(R.string.pdf_selected)}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(end = 10.dp)
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.shadow(8.dp, RoundedCornerShape(50))
+                    ) {
+                        Text(
+                            "${pagerState.currentPage + 1} / ${pdfPages.size}",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Surface(
+                        onClick = { onClose() },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.shadow(8.dp, CircleShape)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                    }
+                }
+            }
+
+            // Bottom-left selection capsule
+            if (pdfSelectedPages != null && onTogglePdfPage != null) {
+                val currentPage = pagerState.currentPage
+                AnimatedVisibility(
+                    visible = showOverlay,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(24.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Checkbox(
+                            checked = currentPage in pdfSelectedPages,
+                            onCheckedChange = { onTogglePdfPage(currentPage) },
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "${pdfSelectedPages.size} / ${pdfPages.size} ${stringResource(R.string.pdf_selected)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(end = 10.dp)
+                        )
+                    }
                 }
             }
         }
@@ -245,70 +254,74 @@ private fun MediaPager(
     val pagerState = rememberPagerState(initialPage = initialIndex.coerceIn(0, urls.size - 1)) { urls.size }
     LaunchedEffect(pagerState.currentPage) { onNavigate(pagerState.currentPage) }
     LaunchedEffect(closing) { if (closing) { kotlinx.coroutines.delay(400); onClose() } }
-    BackHandler { closing = true }
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.9f))
+    PredictiveBackContainer(
+        enabled = true,
+        onBack = { closing = true }
     ) {
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxSize(),
-            beyondViewportPageCount = 1,
-            userScrollEnabled = currentScale <= 1.05f
-        ) { page ->
-            val mediaUrl = urls[page]
-            val isVideo = remember(mediaUrl) {
-                val mt = try { context.contentResolver.getType(Uri.parse(mediaUrl)) } catch (_: Exception) { null }
-                mt?.startsWith("video/") == true || mediaUrl.endsWith(".mp4", true) ||
-                    mediaUrl.endsWith(".webm", true) || mediaUrl.endsWith(".mov", true) ||
-                    mediaUrl.endsWith(".avi", true) || mediaUrl.contains("vid_original_")
-            }
-            if (isVideo) {
-                if (page == pagerState.currentPage) {
-                    VideoPlayer(uri = mediaUrl, onClose = onClose, closing = closing)
-                }
-            } else {
-                ZoomableImageItem(
-                    url = mediaUrl,
-                    onTap = { showOverlay = !showOverlay },
-                    onScaleChanged = { if (page == pagerState.currentPage) currentScale = it },
-                    onLongPress = { haptics.longPress(); actionsForUrl = mediaUrl },
-                    consumeConditionally = true
-                )
-            }
-        }
-        actionsForUrl?.let { ImageActionsSheet(url = it, onMessage = onMessage, onDismiss = { actionsForUrl = null }) }
-        AnimatedVisibility(
-            visible = showOverlay,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(horizontal = 20.dp, vertical = 24.dp)
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.9f))
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (urls.size > 1) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        modifier = Modifier.shadow(8.dp, RoundedCornerShape(50))
-                    ) {
-                        Text(
-                            "${pagerState.currentPage + 1} / ${urls.size}",
-                            color = MaterialTheme.colorScheme.onSurface,
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
-                        )
-                    }
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                beyondViewportPageCount = 1,
+                userScrollEnabled = currentScale <= 1.05f
+            ) { page ->
+                val mediaUrl = urls[page]
+                val isVideo = remember(mediaUrl) {
+                    val mt = try { context.contentResolver.getType(Uri.parse(mediaUrl)) } catch (_: Exception) { null }
+                    mt?.startsWith("video/") == true || mediaUrl.endsWith(".mp4", true) ||
+                        mediaUrl.endsWith(".webm", true) || mediaUrl.endsWith(".mov", true) ||
+                        mediaUrl.endsWith(".avi", true) || mediaUrl.contains("vid_original_")
                 }
-                Spacer(Modifier.weight(1f))
-                Surface(
-                    onClick = { closing = true },
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier.shadow(8.dp, CircleShape)
+                if (isVideo) {
+                    if (page == pagerState.currentPage) {
+                        VideoPlayer(uri = mediaUrl, onClose = onClose, closing = closing)
+                    }
+                } else {
+                    ZoomableImageItem(
+                        url = mediaUrl,
+                        onTap = { showOverlay = !showOverlay },
+                        onScaleChanged = { if (page == pagerState.currentPage) currentScale = it },
+                        onLongPress = { haptics.longPress(); actionsForUrl = mediaUrl },
+                        consumeConditionally = true
+                    )
+                }
+            }
+            actionsForUrl?.let { ImageActionsSheet(url = it, onMessage = onMessage, onDismiss = { actionsForUrl = null }) }
+            AnimatedVisibility(
+                visible = showOverlay,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(horizontal = 20.dp, vertical = 24.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                    if (urls.size > 1) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier.shadow(8.dp, RoundedCornerShape(50))
+                        ) {
+                            Text(
+                                "${pagerState.currentPage + 1} / ${urls.size}",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Surface(
+                        onClick = { closing = true },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.shadow(8.dp, CircleShape)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                    }
                 }
             }
         }
@@ -327,30 +340,33 @@ private fun SingleImage(
     var showOverlay by remember { mutableStateOf(true) }
     var showActions by remember { mutableStateOf(false) }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.9f))) {
-        ZoomableImageItem(
-            url = url,
-            onTap = { showOverlay = !showOverlay },
-            onLongPress = { haptics.longPress(); showActions = true },
-            consumeConditionally = true
-        )
-        if (showActions) ImageActionsSheet(url = url, onMessage = onMessage, onDismiss = { showActions = false })
-        AnimatedVisibility(
-            visible = showOverlay,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(24.dp)
-        ) {
-            Surface(
-                onClick = onClose,
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.shadow(8.dp, CircleShape)
+    PredictiveBackContainer(
+        enabled = true,
+        onBack = onClose
+    ) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.9f))) {
+            ZoomableImageItem(
+                url = url,
+                onTap = { showOverlay = !showOverlay },
+                onLongPress = { haptics.longPress(); showActions = true },
+                consumeConditionally = true
+            )
+            if (showActions) ImageActionsSheet(url = url, onMessage = onMessage, onDismiss = { showActions = false })
+            AnimatedVisibility(
+                visible = showOverlay,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(24.dp)
             ) {
-                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                Surface(
+                    onClick = onClose,
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier.shadow(8.dp, CircleShape)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                }
             }
         }
     }
-
-    BackHandler { onClose() }
 }

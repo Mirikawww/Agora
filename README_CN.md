@@ -79,7 +79,7 @@
 - ECDH 密钥交换 + AES-256-GCM 加密 + HMAC-SHA256 签名
 - 令牌桶速率限制 + 基于 nonce 的防重放保护
 - **多设备支持** — 配置多台远程服务器并切换
-- **MCP 集成** — Conch 可作为 Claude Desktop MCP 服务器
+- **MCP 主机/客户端** — 持续连接远程 Streamable HTTP/SSE 服务器，支持 OAuth 2.1、逐工具控制、资源和提示词；Conch 也可作为 Claude Desktop MCP 服务器
 
 ### 知识管理
 - **RAG 语义搜索** 基于余弦相似度搜索所有历史对话

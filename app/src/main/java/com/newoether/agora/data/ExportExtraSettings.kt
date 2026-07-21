@@ -58,6 +58,7 @@ object ExportExtraSettings {
                         cs.thinkingLevel?.let { put("thinkingLevel", JsonPrimitive(it)) }
                         cs.thinkingBudgetEnabled?.let { put("thinkingBudgetEnabled", JsonPrimitive(it)) }
                         cs.thinkingBudgetTokens?.let { put("thinkingBudgetTokens", JsonPrimitive(it)) }
+                        cs.fastEnabled?.let { put("fastEnabled", JsonPrimitive(it)) }
                         cs.webSearchEnabled?.let { put("webSearchEnabled", JsonPrimitive(it)) }
                         cs.shellEnabled?.let { put("shellEnabled", JsonPrimitive(it)) }
                     }
@@ -66,6 +67,7 @@ object ExportExtraSettings {
         }
 
         put("showDocumentationFab", JsonPrimitive(sm.showDocumentationFab.first()))
+        put("disabledProviders", JsonPrimitive(sm.disabledProviders.first().joinToString(",")))
         put("themeMode", JsonPrimitive(sm.themeMode.first()))
         put("colorScheme", JsonPrimitive(sm.colorScheme.first()))
         put("dynamicColor", JsonPrimitive(sm.dynamicColor.first()))
@@ -126,12 +128,16 @@ object ExportExtraSettings {
                 thinkingBudgetEnabled = s["thinkingBudgetEnabled"]?.jsonPrimitive?.boolean
                     ?: legacyBudgetTokens?.let { true },
                 thinkingBudgetTokens = s["thinkingBudgetTokens"]?.jsonPrimitive?.int ?: legacyBudgetTokens,
+                fastEnabled = s["fastEnabled"]?.jsonPrimitive?.boolean,
                 webSearchEnabled = s["webSearchEnabled"]?.jsonPrimitive?.boolean,
                 shellEnabled = s["shellEnabled"]?.jsonPrimitive?.boolean
             )
             if (!cs.isAllNull()) sm.saveConversationSettings(convId, cs)
         }
         obj["showDocumentationFab"]?.jsonPrimitive?.boolean?.let { sm.saveShowDocumentationFab(it) }
+        obj["disabledProviders"]?.jsonPrimitive?.contentOrNull?.let {
+            sm.saveDisabledProviders(it.split(",").filter { s -> s.isNotBlank() }.toSet())
+        }
         obj["proxyEnabled"]?.jsonPrimitive?.boolean?.let { sm.saveProxyEnabled(it) }
         obj["proxyType"]?.jsonPrimitive?.contentOrNull?.let { sm.saveProxyType(it) }
         obj["proxyHost"]?.jsonPrimitive?.contentOrNull?.let { sm.saveProxyHost(it) }

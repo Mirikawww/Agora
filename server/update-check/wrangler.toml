@@ -1,0 +1,18 @@
+name = "agora-update-check"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# workers.dev subdomain route after deploy, e.g.
+# https://agora-update-check.<your-account>.workers.dev
+workers_dev = true
+
+# ---- Fill these before deploy ----
+# Private GitHub repository that holds releases.
+# Example: owner = "your-name", repo = "Agora-Private"
+[vars]
+GITHUB_OWNER = "Mirikawww"
+GITHUB_REPO = "Agora"
+
+# GITHUB_TOKEN must NOT go here. Set it as a secret after first deploy:
+#   npx wrangler secret put GITHUB_TOKEN
+# Token needs at least: repo (classic) or Contents: Read (fine-grained) on that private repo.

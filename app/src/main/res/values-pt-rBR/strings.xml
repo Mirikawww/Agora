@@ -306,7 +306,6 @@
     <string name="gen_thinking_level_low">Baixo</string>
     <string name="gen_thinking_level_medium">Médio</string>
     <string name="gen_thinking_level_high">Alto</string>
-    <string name="gen_thinking_level_minimal">Muito baixo</string>
     <string name="gen_thinking_level_xhigh">Muito alto</string>
     <string name="gen_thinking_level_max">Máximo</string>
     <string name="thinking_effort_label">Esforço de raciocínio</string>
@@ -699,7 +698,6 @@
     <string name="settings_group_responses">Respostas</string>
     <string name="settings_group_tools">Ferramentas</string>
     <string name="settings_group_about">Sobre</string>
-    <string name="rating_category">Avaliar</string>
 
     <!-- About -->
     <string name="settings_about">Sobre</string>
@@ -715,8 +713,6 @@
     <string name="about_privacy_policy">Política de privacidade</string>
     <string name="about_source_code">Código-fonte</string>
     <string name="about_version">Versão</string>
-    <string name="about_rating">Avaliar o app</string>
-    <string name="about_rating_desc">Este projeto foi desenvolvido por uma única pessoa. Agradeço muito o seu feedback.</string>
     <string name="about_updates">Atualizações</string>
     <string name="about_check_updates">Verificar atualizações</string>
     <string name="about_check_updates_desc">Verificar a versão mais recente no GitHub</string>
@@ -728,16 +724,6 @@
     <string name="about_available_body">Uma nova versão do Agora está disponível no GitHub.</string>
     <string name="about_view_release">Ver versão</string>
     <string name="about_later">Mais tarde</string>
-    <string name="rating_title">Avaliar o Agora</string>
-    <string name="rating_star">%1$d estrela(s)</string>
-    <string name="rating_your_name">Seu nome (opcional)</string>
-    <string name="rating_your_email">Seu e-mail (opcional)</string>
-    <string name="rating_comment">Comentário (opcional)</string>
-    <string name="rating_submit">Enviar</string>
-    <string name="rating_submitting">Enviando…</string>
-    <string name="rating_success">Obrigado pelo seu feedback!</string>
-    <string name="rating_failed">Falha ao enviar. Tente novamente.</string>
-    <string name="rating_privacy">Sua avaliação será enviada anonimamente para newoether.space. Apenas os campos que você preencher são transmitidos. Nenhum outro dado é coletado.</string>
 
     <!-- Data Control -->
     <string name="settings_data_control">Controle de dados</string>

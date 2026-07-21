@@ -1,0 +1,2 @@
+# Copy to .dev.vars for local `npm run dev` (never commit .dev.vars)
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

@@ -197,6 +197,9 @@
     <string name="models_sync">從所有服務商同步</string>
     <string name="models_sync_desc">取得所有已設定 API 的最新模型列表</string>
     <string name="models_count">%1$d 個模型可用</string>
+    <string name="models_change_badge">變化</string>
+    <string name="models_added_badge">新增</string>
+    <string name="models_removed_badge">移除</string>
     <string name="models_rename">重新命名模型</string>
     <string name="models_rename_current">目前 ID：%1$s</string>
     <string name="models_alias_hint">別名</string>
@@ -231,16 +234,20 @@
     <string name="gen_thinking_level_low">低</string>
     <string name="gen_thinking_level_medium">中</string>
     <string name="gen_thinking_level_high">高</string>
-    <string name="gen_thinking_level_minimal">極低</string>
     <string name="gen_thinking_level_xhigh">超高</string>
     <string name="gen_thinking_level_max">最大</string>
     <string name="thinking_effort_label">思考深度</string>
     <string name="thinking_effort_desc">控制模型回答前推理的徹底程度</string>
     <string name="thinking_use_budget">使用思考預算</string>
     <string name="thinking_budget_input_label">預算 (tokens)</string>
-    <string name="thinking_control_off">關閉</string>
+    <string name="thinking_control_off">不思考</string>
     <string name="thinking_control_auto">自動</string>
     <string name="thinking_control_quick">快速</string>
+    <string name="model_menu_web_search">網路搜尋</string>
+    <string name="model_menu_search_off">關閉搜尋</string>
+    <string name="model_menu_search_builtin">內建搜尋</string>
+    <string name="model_menu_search_external">外部搜尋</string>
+    <string name="model_menu_search_hybrid">混合搜尋</string>
     <string name="thinking_control_balanced">平衡</string>
     <string name="thinking_control_deep">深入</string>
     <string name="thinking_control_extreme">極限</string>
@@ -723,11 +730,10 @@
     <string name="settings_group_responses">回覆</string>
     <string name="settings_group_tools">工具</string>
     <string name="settings_group_about">關於</string>
-    <string name="rating_category">評分</string>
 
     <!-- About -->
     <string name="settings_about">關於</string>
-    <string name="settings_about_desc">應用程式資訊、連結和評價</string>
+    <string name="settings_about_desc">應用程式資訊和連結</string>
     <string name="about_title">關於</string>
     <string name="about_info">資訊</string>
     <string name="about_links">連結</string>
@@ -739,8 +745,6 @@
     <string name="about_privacy_policy">隱私政策</string>
     <string name="about_source_code">原始碼</string>
     <string name="about_version">版本</string>
-    <string name="about_rating">評價應用程式</string>
-    <string name="about_rating_desc">這個專案由一個人獨立開發。真誠地感謝您的回饋。</string>
     <string name="about_updates">更新</string>
     <string name="about_check_updates">檢查更新</string>
     <string name="about_check_updates_desc">檢查 GitHub 上的最新版本</string>
@@ -752,16 +756,6 @@
     <string name="about_available_body">Agora 的新版本已在 GitHub 上發布。</string>
     <string name="about_view_release">檢視版本</string>
     <string name="about_later">稍後</string>
-    <string name="rating_title">評價 Agora</string>
-    <string name="rating_star">%1$d 星</string>
-    <string name="rating_your_name">您的姓名（選用）</string>
-    <string name="rating_your_email">您的電子郵件（選用）</string>
-    <string name="rating_comment">評論（選用）</string>
-    <string name="rating_submit">提交</string>
-    <string name="rating_submitting">提交中…</string>
-    <string name="rating_success">感謝您的回饋！</string>
-    <string name="rating_failed">提交失敗，請重試。</string>
-    <string name="rating_privacy">您的評分將以匿名方式上傳至 newoether.space。僅上傳您填寫的欄位，不會收集其他資料。</string>
 
     <!-- Data Control -->
     <string name="settings_data_control">資料控制</string>

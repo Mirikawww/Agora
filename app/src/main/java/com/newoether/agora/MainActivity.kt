@@ -1,4 +1,4 @@
-﻿package com.newoether.agora
+package com.newoether.agora
 
 import android.Manifest
 import android.app.Activity
@@ -8,8 +8,10 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -59,7 +61,6 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import com.newoether.agora.ui.settings.RatingForm
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.newoether.agora.data.MemoryManager
 import com.newoether.agora.data.SettingsManager
@@ -242,6 +243,7 @@ private const val SettingsOverlaySpringVisibilityThreshold = 0.001f
 @Composable
 private fun SettingsOverlayHost(
     visible: Boolean,
+    predictiveBackEnabled: Boolean,
     onDismiss: () -> Unit,
     content: @Composable () -> Unit
 ) {
@@ -250,43 +252,89 @@ private fun SettingsOverlayHost(
     val pageAlpha = remember { Animatable(1f) }
     val pageScale = remember { Animatable(1f) }
     var renderOverlay by remember { mutableStateOf(visible) }
+    var isPredictiveBack by remember { mutableStateOf(false) }
+
+    PredictiveBackHandler(enabled = visible && predictiveBackEnabled) { events ->
+        isPredictiveBack = true
+        try {
+            events.collect { event: BackEventCompat ->
+                val p = event.progress.coerceIn(0f, 1f)
+                scrimAlpha.snapTo(SettingsOverlayScrimAlpha * (1f - p))
+                pageOffsetFraction.snapTo(p)
+                pageAlpha.snapTo(1f - 0.3f * p)
+                pageScale.snapTo(1f - (1f - SettingsOverlayExitScale) * p)
+            }
+            isPredictiveBack = false
+            onDismiss()
+        } catch (_: CancellationException) {
+            coroutineScope {
+                listOf(
+                    launch { scrimAlpha.animateTo(SettingsOverlayScrimAlpha, tween(200)) },
+                    launch {
+                        pageOffsetFraction.animateTo(
+                            0f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessMedium,
+                                visibilityThreshold = SettingsOverlaySpringVisibilityThreshold
+                            )
+                        )
+                    },
+                    launch { pageAlpha.animateTo(1f, tween(200)) },
+                    launch {
+                        pageScale.animateTo(
+                            1f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
+                                stiffness = Spring.StiffnessMedium,
+                                visibilityThreshold = SettingsOverlaySpringVisibilityThreshold
+                            )
+                        )
+                    }
+                ).joinAll()
+            }
+            isPredictiveBack = false
+        }
+    }
 
     LaunchedEffect(visible) {
         if (visible) {
             renderOverlay = true
-            scrimAlpha.snapTo(0f)
-            pageOffsetFraction.snapTo(SettingsOverlayEnterOffsetFraction)
-            pageAlpha.snapTo(0f)
-            pageScale.snapTo(SettingsOverlayEnterScale)
-            listOf(
-                launch {
-                    scrimAlpha.animateTo(
-                        SettingsOverlayScrimAlpha,
-                        animationSpec = tween(300, delayMillis = 50)
-                    )
-                },
-                launch {
-                    pageOffsetFraction.animateTo(
-                        0f,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioLowBouncy,
-                            stiffness = Spring.StiffnessLow,
-                            visibilityThreshold = SettingsOverlaySpringVisibilityThreshold
+            if (!isPredictiveBack) {
+                scrimAlpha.snapTo(0f)
+                pageOffsetFraction.snapTo(SettingsOverlayEnterOffsetFraction)
+                pageAlpha.snapTo(0f)
+                pageScale.snapTo(SettingsOverlayEnterScale)
+                listOf(
+                    launch {
+                        scrimAlpha.animateTo(
+                            SettingsOverlayScrimAlpha,
+                            animationSpec = tween(300, delayMillis = 50)
                         )
-                    )
-                },
-                launch { pageAlpha.animateTo(1f, animationSpec = tween(300)) },
-                launch {
-                    pageScale.animateTo(
-                        1f,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioLowBouncy,
-                            stiffness = Spring.StiffnessLow,
-                            visibilityThreshold = SettingsOverlaySpringVisibilityThreshold
+                    },
+                    launch {
+                        pageOffsetFraction.animateTo(
+                            0f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessLow,
+                                visibilityThreshold = SettingsOverlaySpringVisibilityThreshold
+                            )
                         )
-                    )
-                }
-            ).joinAll()
+                    },
+                    launch { pageAlpha.animateTo(1f, animationSpec = tween(300)) },
+                    launch {
+                        pageScale.animateTo(
+                            1f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessLow,
+                                visibilityThreshold = SettingsOverlaySpringVisibilityThreshold
+                            )
+                        )
+                    }
+                ).joinAll()
+            }
         } else if (renderOverlay) {
             listOf(
                 launch {
@@ -377,6 +425,7 @@ private fun Modifier.consumePointerInput(): Modifier =
 @Composable
 fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var settingsSelectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
     var fullScreenMediaUrls by remember { mutableStateOf<List<String>?>(null) }
     var fullScreenMediaIndex by remember { mutableIntStateOf(0) }
     var pdfViewerSelection by remember { mutableStateOf(setOf<Int>()) }
@@ -407,7 +456,7 @@ fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
         label = "snackbarPadding"
     )
     val focusManager = LocalFocusManager.current
-    val ratingScope = rememberCoroutineScope()
+    val crashScope = rememberCoroutineScope()
 
     // Update dialog
     val updateDialogData by viewModel.updateDialogData.collectAsState()
@@ -621,7 +670,7 @@ fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
                 TextButton(onClick = {
                     pendingCrash = null
                     CrashReporter.clear(crashContext)
-                    ratingScope.launch {
+                    crashScope.launch {
                         val ok = withContext(Dispatchers.IO) { CrashReporter.submit(report) }
                         if (ok) {
                             try {
@@ -641,51 +690,6 @@ fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
         )
     }
 
-    // Rating prompt — read from flow directly to avoid collectAsState initial-value race
-    var showRatingPrompt by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        val now = System.currentTimeMillis()
-        val firstLaunch = settingsManager.firstLaunchTime.first()
-        if (firstLaunch == null) {
-            settingsManager.saveFirstLaunchTime(now)
-        }
-
-        val submitted = settingsManager.ratingPromptSubmitted.first()
-        val dismissed = settingsManager.ratingPromptDismissed.first()
-        val msgCount = settingsManager.totalMessagesSent.first()
-        if (!submitted && !dismissed && firstLaunch != null && msgCount >= 3) {
-            val daysElapsed = (now - firstLaunch) / (1000 * 60 * 60 * 24)
-            if (daysElapsed >= 7) {
-                showRatingPrompt = true
-            }
-        }
-    }
-
-    if (showRatingPrompt) {
-        Dialog(
-            onDismissRequest = {
-                showRatingPrompt = false
-                ratingScope.launch {
-                    settingsManager.saveRatingPromptDismissed(true)
-                }
-            }
-        ) {
-            Surface(
-                shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer
-            ) {
-                RatingForm(
-                    onSubmitted = {
-                        showRatingPrompt = false
-                        ratingScope.launch {
-                            settingsManager.saveRatingPromptSubmitted(true)
-                        }
-                    }
-                )
-            }
-        }
-    }
 
     // Sandbox events piped into the same global SnackbarHost.
     // Uses a launch+Job pattern so a new message cancels the
@@ -736,7 +740,8 @@ fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
         Box(modifier = Modifier.fillMaxSize()) {
             ChatApp(
                 viewModel = viewModel,
-                onOpenSettings = {
+                onOpenSettings = { category ->
+                    settingsSelectedCategory = category
                     showSettings = true
                 },
                 onMediaClick = { urls, index ->
@@ -771,11 +776,18 @@ fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
 
             SettingsOverlayHost(
                 visible = showSettings,
-                onDismiss = { showSettings = false }
+                predictiveBackEnabled = settingsSelectedCategory == null,
+                onDismiss = {
+                    settingsSelectedCategory = null
+                    showSettings = false
+                }
             ) {
                 SettingsScreen(
                     viewModel = viewModel,
+                    selectedCategory = settingsSelectedCategory,
+                    onSelectedCategoryChange = { settingsSelectedCategory = it },
                     onBack = {
+                        settingsSelectedCategory = null
                         showSettings = false
                     }
                 )

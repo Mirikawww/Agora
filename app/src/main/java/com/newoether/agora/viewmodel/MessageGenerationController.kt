@@ -452,7 +452,6 @@ class MessageGenerationController(
                 text = text, images = allImages, thoughts = null, status = MessageStatus.SUCCESS, participant = Participant.USER, timestamp = System.currentTimeMillis(),
                 attachmentMeta = attachmentMeta?.let { kotlinx.serialization.json.Json.encodeToString(it) }
             ))
-            settings.incrementMessagesSent()
             val modelMessageId = UUID.randomUUID().toString()
             val startTime = System.currentTimeMillis() + 1
             convRepo.upsertMessage(MessageEntity(

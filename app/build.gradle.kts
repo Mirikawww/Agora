@@ -174,6 +174,8 @@ dependencies {
     implementation(libs.work.runtime.ktx)
     implementation(libs.jsch)
     implementation(libs.commons.compress)
+    implementation(libs.mcp.kotlin.sdk.client)
+    implementation(libs.ktor.client.okhttp)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     // Unit tests

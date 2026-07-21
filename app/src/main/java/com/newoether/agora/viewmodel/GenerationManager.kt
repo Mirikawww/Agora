@@ -22,6 +22,7 @@ import com.newoether.agora.util.Constants
 import com.newoether.agora.util.SearchResultFormatter
 import com.newoether.agora.tool.ImageGenToolProvider
 import com.newoether.agora.tool.MemoryToolProvider
+import com.newoether.agora.tool.McpToolProvider
 import com.newoether.agora.tool.RagToolProvider
 import com.newoether.agora.tool.ShellToolProvider
 import com.newoether.agora.tool.ToolProvider
@@ -50,6 +51,7 @@ data class GenerationConfig(
     val thinkingLevel: String = "medium",
     val thinkingBudgetEnabled: Boolean = false,
     val thinkingBudgetTokens: Int = 4096,
+    val fastEnabled: Boolean = false,
     val baseUrl: String?,
     val userPrepend: String? = null,
     val userPostpend: String? = null,
@@ -83,6 +85,8 @@ data class GenerationContext(
     val imageGenSize: String = "1024x1024",
     val shellEnabled: Boolean = false,
     val shellDevices: List<com.newoether.agora.data.ShellDeviceConfig> = emptyList(),
+    val mcpEnabled: Boolean = false,
+    val mcpServers: List<com.newoether.agora.data.McpServerConfig> = emptyList(),
     val sandboxEnabled: Boolean = false,
     val imageTranscriptionEnabled: Boolean = false,
     val imageTranscriptionModel: String? = null,
@@ -135,6 +139,7 @@ class GenerationManager(
     private val memoryManager: MemoryManager,
     private val providers: Map<String, LlmProvider>,
     private val context: android.content.Context,
+    private val settings: com.newoether.agora.data.repository.SettingsRepository,
     private val sandboxFactory: com.newoether.agora.sandbox.SandboxManagerFactory? = null
 ) {
     var onMessagePersisted: ((messageId: String, text: String) -> Unit)? = null
@@ -142,6 +147,7 @@ class GenerationManager(
     /** User-confirmation gate for remote shell mutations. Set by the ViewModel.
      *  Returns true to proceed, false to deny. */
     var onConfirmShellCommand: (suspend (server: String, summary: String) -> Boolean)? = null
+    var onConfirmMcpTool: (suspend (server: String, summary: String) -> Boolean)? = null
 
     private val memoryToolProvider = MemoryToolProvider(memoryManager)
     private val webSearchToolProvider = WebSearchToolProvider()
@@ -151,8 +157,20 @@ class GenerationManager(
         // Forward to the ViewModel-provided gate at call time (read the var lazily).
         stp.confirm = { server, summary -> onConfirmShellCommand?.invoke(server, summary) ?: true }
     }
+    private val mcpToolProvider = McpToolProvider(
+        com.newoether.agora.mcp.McpClientManager(context.applicationContext)
+    ).also { mtp ->
+        mtp.confirm = { server, summary -> onConfirmMcpTool?.invoke(server, summary) ?: false }
+        mtp.observeServers(
+            kotlinx.coroutines.flow.combine(settings.mcpEnabled, settings.mcpServers) { enabled, servers ->
+                if (enabled) servers else emptyList()
+            },
+            settings::updateMcpServerNow,
+        )
+    }
     private val toolProviders: List<ToolProvider> = listOf(
-        memoryToolProvider, webSearchToolProvider, ragToolProvider, imageGenToolProvider, shellToolProvider
+        memoryToolProvider, webSearchToolProvider, ragToolProvider, imageGenToolProvider, shellToolProvider,
+        mcpToolProvider,
     )
 
     fun buildImageGenTool(ctx: GenerationContext): List<ToolDefinition> =
@@ -193,6 +211,21 @@ class GenerationManager(
         val all = shellToolProvider.definitions(ctx)
         return all.filter { it.function.name in FILE_TOOL_NAMES }
     }
+
+    suspend fun testMcpServer(server: com.newoether.agora.data.McpServerConfig) =
+        mcpToolProvider.test(server)
+
+    val mcpStatuses get() = mcpToolProvider.statuses
+
+    fun startMcpAuthorization(server: com.newoether.agora.data.McpServerConfig) =
+        mcpToolProvider.startAuthorization(server)
+
+    fun cancelMcpAuthorization(serverId: String) = mcpToolProvider.cancelAuthorization(serverId)
+
+    suspend fun clearMcpAuthorization(server: com.newoether.agora.data.McpServerConfig) =
+        mcpToolProvider.clearAuthorization(server)
+
+    fun close() = mcpToolProvider.close()
 
 
     /** Semantic message search — delegates to [RagToolProvider], which owns the
@@ -357,7 +390,8 @@ class GenerationManager(
         val shellTool = buildShellTool(ctx)
         val fileTool = buildFileTool(ctx)
         val imageGenTool = buildImageGenTool(ctx)
-        val allTools = memoryTools + webSearchTool + ragTool + imageGenTool + shellTool + fileTool
+        val mcpTools = mcpToolProvider.refresh(ctx)
+        val allTools = memoryTools + webSearchTool + ragTool + imageGenTool + shellTool + fileTool + mcpTools
         val providerConfig = ProviderConfig(
             apiKey = config.apiKey,
             modelId = config.modelId,
@@ -369,6 +403,7 @@ class GenerationManager(
             thinkingLevel = config.thinkingLevel,
             thinkingBudgetEnabled = config.thinkingBudgetEnabled,
             thinkingBudgetTokens = config.thinkingBudgetTokens,
+            fastEnabled = config.fastEnabled,
             baseUrl = config.baseUrl,
             tools = allTools,
             userPrepend = config.userPrepend,

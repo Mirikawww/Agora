@@ -58,7 +58,6 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
-import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -91,10 +90,9 @@ internal fun ChatDrawerContent(
     drawerWidth: Dp,
     drawerState: DrawerState,
     scope: CoroutineScope,
-    inputFocusRequester: FocusRequester,
     onDrawerProgress: (Float) -> Unit,
     onSettingsButtonTop: (Float) -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenSettings: (String?) -> Unit,
     onRequestRename: (String, String) -> Unit,
     onRequestDelete: (String) -> Unit,
     onPendingDrawerHaptic: (String?) -> Unit
@@ -179,7 +177,6 @@ internal fun ChatDrawerContent(
                             viewModel.createNewChat()
                             scope.launch {
                                 drawerState.close()
-                                inputFocusRequester.requestFocus()
                             }
                         }
                     },
@@ -331,7 +328,7 @@ internal fun ChatDrawerContent(
                 onClick = {
                     haptics.action()
                     focusManager.clearFocus()
-                    onOpenSettings()
+                    onOpenSettings(null)
                     scope.launch { drawerState.close() }
                 },
                 modifier = Modifier

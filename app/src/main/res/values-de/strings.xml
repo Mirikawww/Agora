@@ -306,7 +306,6 @@
     <string name="gen_thinking_level_low">Niedrig</string>
     <string name="gen_thinking_level_medium">Mittel</string>
     <string name="gen_thinking_level_high">Hoch</string>
-    <string name="gen_thinking_level_minimal">Sehr niedrig</string>
     <string name="gen_thinking_level_xhigh">Sehr hoch</string>
     <string name="gen_thinking_level_max">Maximum</string>
     <string name="thinking_effort_label">Nachdenkaufwand</string>
@@ -699,11 +698,10 @@
     <string name="settings_group_responses">Antworten</string>
     <string name="settings_group_tools">Werkzeuge</string>
     <string name="settings_group_about">Über</string>
-    <string name="rating_category">Bewerten</string>
 
     <!-- About -->
     <string name="settings_about">Über</string>
-    <string name="settings_about_desc">App-Infos, Links und App bewerten</string>
+    <string name="settings_about_desc">App-Infos und Links</string>
     <string name="about_title">Über</string>
     <string name="about_info">Info</string>
     <string name="about_links">Links</string>
@@ -715,8 +713,6 @@
     <string name="about_privacy_policy">Datenschutzrichtlinie</string>
     <string name="about_source_code">Quellcode</string>
     <string name="about_version">Version</string>
-    <string name="about_rating">App bewerten</string>
-    <string name="about_rating_desc">Dieses Projekt wurde von einer einzelnen Person entwickelt. Ich schätze dein Feedback sehr.</string>
     <string name="about_updates">Updates</string>
     <string name="about_check_updates">Nach Updates suchen</string>
     <string name="about_check_updates_desc">GitHub auf die neueste Version prüfen</string>
@@ -728,16 +724,6 @@
     <string name="about_available_body">Eine neue Version von Agora ist auf GitHub verfügbar.</string>
     <string name="about_view_release">Release ansehen</string>
     <string name="about_later">Später</string>
-    <string name="rating_title">Agora bewerten</string>
-    <string name="rating_star">%1$d Stern(e)</string>
-    <string name="rating_your_name">Dein Name (optional)</string>
-    <string name="rating_your_email">Deine E-Mail (optional)</string>
-    <string name="rating_comment">Kommentar (optional)</string>
-    <string name="rating_submit">Absenden</string>
-    <string name="rating_submitting">Wird gesendet…</string>
-    <string name="rating_success">Danke für dein Feedback!</string>
-    <string name="rating_failed">Senden fehlgeschlagen. Bitte versuche es erneut.</string>
-    <string name="rating_privacy">Deine Bewertung wird anonym an newoether.space hochgeladen. Es werden nur die von dir ausgefüllten Felder übertragen. Es werden keine weiteren Daten erfasst.</string>
 
     <!-- Data Control -->
     <string name="settings_data_control">Datenkontrolle</string>

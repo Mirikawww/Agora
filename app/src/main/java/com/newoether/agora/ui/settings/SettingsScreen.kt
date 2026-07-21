@@ -1,6 +1,6 @@
 package com.newoether.agora.ui.settings
 
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.clickable
@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.annotation.StringRes
 import com.newoether.agora.R
+import com.newoether.agora.ui.common.McpServerIcon
 import com.newoether.agora.ui.settings.datacontrol.SettingsDataControlPage
 import com.newoether.agora.viewmodel.ChatViewModel
 
@@ -177,6 +177,7 @@ private val settingsGroups = listOf(
     SettingsGroupData(titleRes = R.string.settings_group_tools, items = listOf(
         SettingsCategory("websearch", R.string.settings_web_search, R.string.settings_web_search_desc, Icons.Default.Language),
         SettingsCategory("search", R.string.search_title, R.string.search_desc, Icons.Default.Search),
+        SettingsCategory("mcp", R.string.mcp_title, R.string.mcp_desc, McpServerIcon),
         SettingsCategory("shell", R.string.shell_title, R.string.shell_desc, Icons.Default.Terminal),
     )),
     SettingsGroupData(titleRes = R.string.settings_group_network, items = listOf(
@@ -197,8 +198,12 @@ private val settingsGroups = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
-    var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
+fun SettingsScreen(
+    viewModel: ChatViewModel,
+    selectedCategory: String?,
+    onSelectedCategoryChange: (String?) -> Unit,
+    onBack: () -> Unit
+) {
     val listState = rememberLazyListState()
     val isSyncingModels by viewModel.isSyncingModels.collectAsState()
     val fetchingModelsMessage = stringResource(R.string.snackbar_fetching_models)
@@ -209,12 +214,9 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
         }
     }
 
-    BackHandler {
-        if (selectedCategory != null) {
-            selectedCategory = null
-        } else {
-            onBack()
-        }
+    PredictiveBackHandler(enabled = selectedCategory != null) { events ->
+        events.collect { }
+        onSelectedCategoryChange(null)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -223,22 +225,23 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
             forward = selectedCategory != null
         ) { category ->
             when (category) {
-                "provider" -> SettingsProviderPage(viewModel, onBack = { selectedCategory = null })
-                "prompts" -> SettingsPromptsPage(viewModel, onBack = { selectedCategory = null })
-                "models" -> SettingsModelsPage(viewModel, onBack = { selectedCategory = null })
-                "generation" -> SettingsGenerationPage(viewModel, onBack = { selectedCategory = null })
-                "websearch" -> SettingsWebSearchPage(viewModel, onBack = { selectedCategory = null })
-                "imagegen" -> SettingsImageGenPage(viewModel, onBack = { selectedCategory = null })
-                "shell" -> SettingsShellPage(viewModel, onBack = { selectedCategory = null })
-                "proxy" -> SettingsProxyPage(viewModel, onBack = { selectedCategory = null })
-                "language" -> SettingsLanguagePage(viewModel, onBack = { selectedCategory = null })
-                "titlegen" -> SettingsTitleGenPage(viewModel, onBack = { selectedCategory = null })
-                "transcription" -> SettingsTranscriptionPage(viewModel, onBack = { selectedCategory = null })
-                "search" -> SettingsSearchPage(viewModel, onBack = { selectedCategory = null })
-                "memory" -> SettingsMemoryPage(viewModel, onBack = { selectedCategory = null })
-                "datacontrol" -> SettingsDataControlPage(viewModel, onBack = { selectedCategory = null })
-                "appearance" -> SettingsAppearancePage(viewModel, onBack = { selectedCategory = null })
-                "about" -> SettingsAboutPage(viewModel, onBack = { selectedCategory = null })
+                "provider" -> SettingsProviderPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "prompts" -> SettingsPromptsPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "models" -> SettingsModelsPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "generation" -> SettingsGenerationPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "websearch" -> SettingsWebSearchPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "imagegen" -> SettingsImageGenPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "shell" -> SettingsShellPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "mcp" -> SettingsMcpPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "proxy" -> SettingsProxyPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "language" -> SettingsLanguagePage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "titlegen" -> SettingsTitleGenPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "transcription" -> SettingsTranscriptionPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "search" -> SettingsSearchPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "memory" -> SettingsMemoryPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "datacontrol" -> SettingsDataControlPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "appearance" -> SettingsAppearancePage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "about" -> SettingsAboutPage(viewModel, onBack = { onSelectedCategoryChange(null) })
                 else -> {
                     CollapsingSettingsLazyScaffold(
                         title = stringResource(R.string.settings_title),
@@ -277,7 +280,7 @@ fun SettingsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clip(shape)
-                                            .clickable { selectedCategory = cat.key }
+                                            .clickable { onSelectedCategoryChange(cat.key) }
                                     ) {
                                         Row(
                                             modifier = Modifier

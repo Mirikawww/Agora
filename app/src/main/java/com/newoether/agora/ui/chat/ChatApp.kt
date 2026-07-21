@@ -76,7 +76,7 @@ private val SCROLL_EASING = CubicBezierEasing(0.3f, 0.0f, 0.0f, 1.0f)
 @Composable
 fun ChatApp(
     viewModel: ChatViewModel,
-    onOpenSettings: () -> Unit,
+    onOpenSettings: (String?) -> Unit,
     onMediaClick: (List<String>, Int) -> Unit,
     onFileContentClick: ((String, String) -> Unit)? = null,
     onPdfPagesClick: ((List<String>, Int) -> Unit)? = null,
@@ -108,7 +108,19 @@ fun ChatApp(
     val currentConversationId by viewModel.currentConversationId.collectAsState()
     val generatingInConversationId by viewModel.generatingInConversationId.collectAsState()
     val selectedModel by viewModel.currentActiveModel.collectAsState()
+    val modelsDevCapabilities by viewModel.modelsDevCapabilities.collectAsState()
+    val modelFastSupport by viewModel.settings.modelFastSupport.collectAsState()
+    val selectedModelCapabilities = remember(selectedModel, modelsDevCapabilities, modelFastSupport) {
+        viewModel.modelCapabilitiesFor(selectedModel)
+    }
     val enabledModels by viewModel.settings.enabledModels.collectAsState()
+    val disabledProviders by viewModel.settings.disabledProviders.collectAsState()
+    val chatEnabledModels = remember(enabledModels, disabledProviders) {
+        enabledModels.filter {
+            val p = com.newoether.agora.model.ModelId.parse(it).providerName
+            p == com.newoether.agora.util.Constants.PROVIDER_LOCAL || p !in disabledProviders
+        }.toSet()
+    }
     val modelAliases by viewModel.settings.modelAliases.collectAsState()
     val thoughtExpandedStates = remember(currentConversationId) { mutableStateMapOf<String, Boolean>() }
     val isNewChatMode by viewModel.isNewChatMode.collectAsState()
@@ -139,8 +151,9 @@ fun ChatApp(
     val thinkingLevel = convOverride?.thinkingLevel ?: globalThinkingLevel
     val thinkingBudgetEnabled = convOverride?.thinkingBudgetEnabled ?: globalThinkingBudgetEnabled
     val thinkingBudgetTokens = convOverride?.thinkingBudgetTokens ?: globalThinkingBudgetTokens
-    // Web Search and Shell: global switch OFF → always false, regardless of override
-    val webSearchEnabled = globalWebSearch && (convOverride?.webSearchEnabled ?: true)
+    val fastEnabled = convOverride?.fastEnabled ?: false
+    // Search modes inherit global defaults until this conversation chooses an explicit mode.
+    val webSearchEnabled = convOverride?.webSearchEnabled ?: globalWebSearch
     val shellEnabled = globalShell && (convOverride?.shellEnabled ?: true)
     val contextWindow = convOverride?.contextWindow ?: maxContextWindow
     val blurEffectsEnabled by viewModel.settings.blurEffectsEnabled.collectAsState()
@@ -223,7 +236,6 @@ fun ChatApp(
     LaunchedEffect(Unit) {
         delay(50)
         showLaunchContent = true
-        inputFocusRequester.requestFocus()
     }
 
 
@@ -452,7 +464,6 @@ fun ChatApp(
                 drawerWidth = drawerWidth,
                 drawerState = drawerState,
                 scope = scope,
-                inputFocusRequester = inputFocusRequester,
                 onDrawerProgress = { drawerProgress = it },
                 onSettingsButtonTop = { settingsButtonTopDp = it },
                 onOpenSettings = onOpenSettings,
@@ -488,14 +499,60 @@ fun ChatApp(
                         isNewChatMode = isNewChatMode,
                         conversations = conversations,
                         currentConversationId = currentConversationId,
-                        totalTokens = totalTokens,
+                        selectedModel = selectedModel,
+                        modelAliases = modelAliases,
+                        enabledModels = chatEnabledModels,
+                        thinkingEnabled = thinkingEnabled,
+                        thinkingLevel = thinkingLevel,
+                        reasoningSupported = selectedModelCapabilities.reasoning,
+                        fastSupported = selectedModelCapabilities.fast,
+                        fastEnabled = fastEnabled,
+                        builtInSearchEnabled = googleSearchEnabled,
+                        externalSearchEnabled = webSearchEnabled,
                         onOpenDrawer = { haptics.action(); focusManager.clearFocus(); scope.launch { drawerState.open() } },
-                        onSystemPromptClick = { haptics.action(); showPromptDialog = true },
                         onNewChat = {
                             haptics.action()
                             isExpanded = false
                             viewModel.createNewChat()
-                            inputFocusRequester.requestFocus()
+                        },
+                        onModelSelect = { model ->
+                            haptics.selection()
+                            viewModel.setActiveModel(model)
+                        },
+                        onThinkingSelect = { effort ->
+                            haptics.selection()
+                            viewModel.updateConversationSetting(currentConversationId) { current ->
+                                current.copy(
+                                    thinkingEnabled = effort != null,
+                                    thinkingLevel = effort ?: current.thinkingLevel,
+                                    thinkingBudgetEnabled = if (effort != null) false else current.thinkingBudgetEnabled
+                                )
+                            }
+                        },
+                        onFastToggle = { enabled ->
+                            haptics.selection()
+                            viewModel.updateConversationSetting(currentConversationId) { it.copy(fastEnabled = enabled) }
+                        },
+                        onSearchModeSelect = { builtIn, external ->
+                            haptics.selection()
+                            viewModel.updateConversationSetting(currentConversationId) {
+                                it.copy(
+                                    googleSearchEnabled = builtIn,
+                                    webSearchEnabled = external
+                                )
+                            }
+                        },
+                        onAdvancedClick = {
+                            haptics.action()
+                            showAdvancedDialog = true
+                        },
+                        onModelsConfigClick = {
+                            haptics.action()
+                            onOpenSettings("models")
+                        },
+                        onProvidersConfigClick = {
+                            haptics.action()
+                            onOpenSettings("provider")
                         },
                     )
                 }
@@ -741,26 +798,8 @@ fun ChatApp(
                         },
                         isLoading = isLoading,
                         isSwitching = isSwitching,
-                        enabledModels = enabledModels,
+                        enabledModels = chatEnabledModels,
                         selectedModel = selectedModel,
-                        modelAliases = modelAliases,
-                        codeExecutionEnabled = codeExecutionEnabled,
-                        googleSearchEnabled = googleSearchEnabled,
-                        thinkingEnabled = thinkingEnabled,
-                        thinkingLevel = thinkingLevel,
-                        thinkingBudgetEnabled = thinkingBudgetEnabled,
-                        thinkingBudgetTokens = thinkingBudgetTokens,
-                        onCodeExecutionToggle = { enabled -> haptics.selection(); viewModel.updateConversationSetting(currentConversationId) { it.copy(codeExecutionEnabled = enabled) } },
-                        onGoogleSearchToggle = { enabled -> haptics.selection(); viewModel.updateConversationSetting(currentConversationId) { it.copy(googleSearchEnabled = enabled) } },
-                        onThinkingToggle = { enabled -> haptics.selection(); viewModel.updateConversationSetting(currentConversationId) { it.copy(thinkingEnabled = enabled) } },
-                        onThinkingLevelChange = { level -> viewModel.updateConversationSetting(currentConversationId) { it.copy(thinkingLevel = level) } },
-                        onThinkingBudgetEnabledChange = { enabled -> viewModel.updateConversationSetting(currentConversationId) { it.copy(thinkingBudgetEnabled = enabled) } },
-                        onThinkingBudgetTokensChange = { tokens -> viewModel.updateConversationSetting(currentConversationId) { it.copy(thinkingBudgetTokens = tokens) } },
-                        webSearchEnabled = webSearchEnabled,
-                        onWebSearchToggle = { enabled -> haptics.selection(); viewModel.updateConversationSetting(currentConversationId) { it.copy(webSearchEnabled = enabled) } },
-                        shellEnabled = shellEnabled,
-                        onShellToggle = { enabled -> haptics.selection(); viewModel.updateConversationSetting(currentConversationId) { it.copy(shellEnabled = enabled) } },
-                        onModelSelect = { haptics.selection(); viewModel.setActiveModel(it) },
                         onImageClick = { url -> haptics.action(); onMediaClick(listOf(url), 0) },
                         onAllMediaClick = { urls, idx -> haptics.action(); onMediaClick(urls, idx) },
                         onFileContentClick = { name, content -> haptics.action(); viewModel.showFilePreview(name, content) },
@@ -771,15 +810,12 @@ fun ChatApp(
                         isExpandAnimating = isExpandAnimating,
                         onCollapse = { haptics.action(); isExpanded = false },
                         onExpand = { haptics.action(); isExpanded = true },
-                        showWebSearch = globalWebSearch,
-                        showShell = shellDevices.isNotEmpty() && globalShell,
                         onPdfPagesClick = { pages, idx -> haptics.action(); onPdfPagesClick?.invoke(pages, idx) },
                         onPdfPreviewSelect = { pages, idx -> haptics.action(); onPdfPreviewSelect?.invoke(pages, idx) },
                         pdfViewerSelection = pdfViewerSelection,
                         onTogglePdfSelection = onTogglePdfSelection,
                         onInitPdfSelection = onInitPdfSelection,
-                        fullScreenViewerUrls = fullScreenViewerUrls,
-                        onAdvancedClick = { showAdvancedDialog = true }
+                        fullScreenViewerUrls = fullScreenViewerUrls
                     )
                 }
             }

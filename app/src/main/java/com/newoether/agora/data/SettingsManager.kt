@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.util.Locale
@@ -57,6 +58,67 @@ data class ShellDeviceConfig(
     val sshHostKey: String = ""
 )
 
+/** A remote Model Context Protocol server available to the assistant. */
+@Serializable
+data class McpServerConfig(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val url: String,
+    val enabled: Boolean = true,
+    /** "auto" tries Streamable HTTP and falls back to legacy HTTP+SSE. */
+    val transport: String = "auto",
+    val bearerToken: String = "",
+    val headers: Map<String, String> = emptyMap(),
+    val timeoutSeconds: Int = 60,
+    /** MCP recommends explicit user consent before invoking server tools. */
+    val confirmToolCalls: Boolean = true,
+    val exposeResources: Boolean = true,
+    val exposePrompts: Boolean = true,
+    /** Last synchronized tool catalogue. User choices survive server metadata refreshes. */
+    val tools: List<McpToolConfig> = emptyList(),
+    /** OAuth 2.1 state for protected MCP resources. The containing settings blob is encrypted. */
+    val oauth: McpOAuthState? = null,
+)
+
+@Serializable
+data class McpToolConfig(
+    val name: String,
+    val description: String? = null,
+    val inputSchema: JsonObject = JsonObject(emptyMap()),
+    val enabled: Boolean = true,
+    /** null inherits [McpServerConfig.confirmToolCalls]. */
+    val confirmToolCall: Boolean? = null,
+)
+
+/** Persisted OAuth 2.1 authorization and token-refresh state for one MCP server. */
+@Serializable
+data class McpOAuthState(
+    val enabled: Boolean = false,
+    val clientId: String? = null,
+    val clientSecret: String? = null,
+    val authorizationEndpoint: String? = null,
+    val tokenEndpoint: String? = null,
+    val registrationEndpoint: String? = null,
+    val scope: String? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val expiresAt: Long = 0L,
+) {
+    val isAuthorized: Boolean get() = !accessToken.isNullOrBlank()
+
+    override fun toString(): String =
+        "McpOAuthState(enabled=$enabled, clientId=$clientId, clientSecret=${clientSecret.masked()}, " +
+            "authorizationEndpoint=$authorizationEndpoint, tokenEndpoint=$tokenEndpoint, " +
+            "registrationEndpoint=$registrationEndpoint, scope=$scope, " +
+            "accessToken=${accessToken.masked()}, refreshToken=${refreshToken.masked()}, expiresAt=$expiresAt)"
+
+    private fun String?.masked(): String = when {
+        this == null -> "null"
+        isBlank() -> "***"
+        else -> "***(${length})"
+    }
+}
+
 @Serializable
 data class SystemPromptEntry(
     val id: String = UUID.randomUUID().toString(),
@@ -86,6 +148,7 @@ data class ConversationSettings(
     val thinkingLevel: String? = null,
     val thinkingBudgetEnabled: Boolean? = null,
     val thinkingBudgetTokens: Int? = null,
+    val fastEnabled: Boolean? = null,
     val webSearchEnabled: Boolean? = null,
     val shellEnabled: Boolean? = null
 ) {
@@ -93,6 +156,7 @@ data class ConversationSettings(
         && frequencyPenalty == null && presencePenalty == null
         && codeExecutionEnabled == null && googleSearchEnabled == null && thinkingEnabled == null
         && thinkingLevel == null && thinkingBudgetEnabled == null && thinkingBudgetTokens == null
+        && fastEnabled == null
         && webSearchEnabled == null && shellEnabled == null
 }
 
@@ -102,7 +166,9 @@ class SettingsManager(private val context: Context) {
     companion object {
         val SELECTED_MODEL = stringPreferencesKey("selected_model")
         val AVAILABLE_MODELS_JSON = stringPreferencesKey("available_models_json")
+        val MODEL_FAST_SUPPORT_JSON = stringPreferencesKey("model_fast_support_json")
         val ENABLED_MODELS = stringSetPreferencesKey("enabled_models")
+        val DISABLED_PROVIDERS = stringSetPreferencesKey("disabled_providers")
         
         val API_KEYS_JSON = stringPreferencesKey("api_keys_json")
         val ACTIVE_API_KEY_IDS_JSON = stringPreferencesKey("active_api_key_ids_json")
@@ -165,6 +231,8 @@ class SettingsManager(private val context: Context) {
         const val DEFAULT_PROXY_BYPASS = "localhost\n127.0.0.1\n10.0.0.0/8\n172.16.0.0/12\n192.168.0.0/16\n::1"
         val SHELL_CONFIRM_ENABLED = booleanPreferencesKey("shell_confirm_enabled")
         val SHELL_DEVICES_JSON = stringPreferencesKey("shell_devices_json")
+        val MCP_ENABLED = booleanPreferencesKey("mcp_enabled")
+        val MCP_SERVERS_JSON = stringPreferencesKey("mcp_servers_json")
         val SANDBOX_ENABLED = booleanPreferencesKey("sandbox_enabled")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val COLOR_SCHEME = stringPreferencesKey("color_scheme")
@@ -178,10 +246,7 @@ class SettingsManager(private val context: Context) {
         val CUSTOM_FONT_NAME = stringPreferencesKey("custom_font_name")
         val FIRST_LAUNCH_TIME = longPreferencesKey("first_launch_time")
         val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
-        val RATING_PROMPT_SUBMITTED = booleanPreferencesKey("rating_prompt_submitted")
-        val RATING_PROMPT_DISMISSED = booleanPreferencesKey("rating_prompt_dismissed")
         val SHOW_DOCUMENTATION_FAB = booleanPreferencesKey("show_documentation_fab")
-        val TOTAL_MESSAGES_SENT = intPreferencesKey("total_messages_sent")
         val DEFAULT_TEMPERATURE = stringPreferencesKey("default_temperature")
         val DEFAULT_MAX_TOKENS = intPreferencesKey("default_max_tokens")
         val DEFAULT_TOP_P = stringPreferencesKey("default_top_p")
@@ -211,7 +276,20 @@ class SettingsManager(private val context: Context) {
         try { json.decodeFromString<Map<String, List<String>>>(jsonStr) } catch (e: Exception) { DebugLog.e("SettingsManager", "Failed to decode availableModels", e); emptyMap() }
     }
 
+    /** Prefixed model ID → provider API's explicit Fast declaration; absence means unknown. */
+    val modelFastSupport: Flow<Map<String, Boolean>> = context.dataStore.data.map { pref ->
+        val jsonStr = pref[MODEL_FAST_SUPPORT_JSON] ?: "{}"
+        try {
+            json.decodeFromString<Map<String, Boolean>>(jsonStr)
+        } catch (e: Exception) {
+            DebugLog.e("SettingsManager", "Failed to decode modelFastSupport", e)
+            emptyMap()
+        }
+    }
+
     val enabledModels: Flow<Set<String>> = context.dataStore.data.map { it[ENABLED_MODELS] ?: emptySet() }
+    /** Provider names the user has toggled off (Local is never stored here). */
+    val disabledProviders: Flow<Set<String>> = context.dataStore.data.map { it[DISABLED_PROVIDERS] ?: emptySet() }
 
     val modelAliases: Flow<Map<String, String>> = context.dataStore.data.map { pref ->
         val jsonStr = pref[MODEL_ALIASES_JSON] ?: "{}"
@@ -223,9 +301,9 @@ class SettingsManager(private val context: Context) {
         try { json.decodeFromString<List<ApiKeyEntry>>(jsonStr) } catch (e: Exception) { emptyList() }
     }
     
-    val activeApiKeyIds: Flow<Map<String, String>> = context.dataStore.data.map { pref ->
-        val jsonStr = pref[ACTIVE_API_KEY_IDS_JSON] ?: "{}"
-        try { json.decodeFromString<Map<String, String>>(jsonStr) } catch (e: Exception) { emptyMap() }
+    /** Provider → enabled API-key IDs (multi-select). Legacy single-id maps are migrated on read. */
+    val activeApiKeyIds: Flow<Map<String, List<String>>> = context.dataStore.data.map { pref ->
+        ActiveApiKeyIds.decode(json, pref[ACTIVE_API_KEY_IDS_JSON] ?: "{}")
     }
 
     val systemPrompts: Flow<List<SystemPromptEntry>> = context.dataStore.data.map { pref ->
@@ -329,6 +407,14 @@ class SettingsManager(private val context: Context) {
         val jsonStr = com.newoether.agora.util.SecretCrypto.decrypt(pref[SHELL_DEVICES_JSON] ?: "[]")
         try { json.decodeFromString<List<ShellDeviceConfig>>(jsonStr) } catch (e: Exception) { emptyList() }
     }
+    val mcpEnabled: Flow<Boolean> = context.dataStore.data.map { it[MCP_ENABLED] ?: false }
+    val mcpServers: Flow<List<McpServerConfig>> = context.dataStore.data.map { pref ->
+        val jsonStr = com.newoether.agora.util.SecretCrypto.decrypt(pref[MCP_SERVERS_JSON] ?: "[]")
+        try { json.decodeFromString<List<McpServerConfig>>(jsonStr) } catch (e: Exception) {
+            DebugLog.e("SettingsManager", "Failed to decode MCP servers", e)
+            emptyList()
+        }
+    }
     val sandboxEnabled: Flow<Boolean> = context.dataStore.data.map { it[SANDBOX_ENABLED] ?: false }
 
     val themeMode: Flow<String> = context.dataStore.data.map { it[THEME_MODE] ?: "FOLLOW_DEVICE" }
@@ -343,9 +429,6 @@ class SettingsManager(private val context: Context) {
     val customFontName: Flow<String> = context.dataStore.data.map { it[CUSTOM_FONT_NAME] ?: "" }
     val firstLaunchTime: Flow<Long?> = context.dataStore.data.map { it[FIRST_LAUNCH_TIME] }
     val onboardingCompleted: Flow<Boolean> = context.dataStore.data.map { it[ONBOARDING_COMPLETED] ?: false }
-    val ratingPromptSubmitted: Flow<Boolean> = context.dataStore.data.map { it[RATING_PROMPT_SUBMITTED] ?: false }
-    val ratingPromptDismissed: Flow<Boolean> = context.dataStore.data.map { it[RATING_PROMPT_DISMISSED] ?: false }
-    val totalMessagesSent: Flow<Int> = context.dataStore.data.map { it[TOTAL_MESSAGES_SENT] ?: 0 }
 
     // ── Auto Backup ───────────────────────────────────────────
     val autoBackupEnabled: Flow<Boolean> = context.dataStore.data.map { it[AUTO_BACKUP_ENABLED] ?: true }
@@ -376,11 +459,39 @@ class SettingsManager(private val context: Context) {
             val map = try { json.decodeFromString<MutableMap<String, List<String>>>(current) } catch (e: Exception) { mutableMapOf() }
             map[provider] = models
             prefs[AVAILABLE_MODELS_JSON] = json.encodeToString(map)
+            if (models.isEmpty()) {
+                val currentFast = prefs[MODEL_FAST_SUPPORT_JSON] ?: "{}"
+                val fastMap = try {
+                    json.decodeFromString<MutableMap<String, Boolean>>(currentFast)
+                } catch (e: Exception) {
+                    mutableMapOf()
+                }
+                fastMap.keys.removeAll { it.startsWith("$provider:") }
+                prefs[MODEL_FAST_SUPPORT_JSON] = json.encodeToString(fastMap)
+            }
+        }
+    }
+
+    suspend fun saveModelFastSupport(provider: String, support: Map<String, Boolean>) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[MODEL_FAST_SUPPORT_JSON] ?: "{}"
+            val map = try {
+                json.decodeFromString<MutableMap<String, Boolean>>(current)
+            } catch (e: Exception) {
+                mutableMapOf()
+            }
+            map.keys.removeAll { it.startsWith("$provider:") }
+            map.putAll(support)
+            prefs[MODEL_FAST_SUPPORT_JSON] = json.encodeToString(map)
         }
     }
 
     suspend fun saveEnabledModels(models: Set<String>) {
         context.dataStore.edit { it[ENABLED_MODELS] = models }
+    }
+
+    suspend fun saveDisabledProviders(providers: Set<String>) {
+        context.dataStore.edit { it[DISABLED_PROVIDERS] = providers }
     }
 
     suspend fun saveModelAliases(aliases: Map<String, String>) {
@@ -391,12 +502,16 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[API_KEYS_JSON] = com.newoether.agora.util.SecretCrypto.encrypt(json.encodeToString(keys)) }
     }
 
-    suspend fun setActiveApiKeyId(provider: String, id: String?) {
+    /**
+     * Replace the enabled key-id set for [provider].
+     * Pass an empty list to clear (provider becomes uncredentialed for key-gated APIs).
+     */
+    suspend fun setActiveApiKeyIds(provider: String, ids: List<String>) {
         context.dataStore.edit { prefs ->
-            val current = prefs[ACTIVE_API_KEY_IDS_JSON] ?: "{}"
-            val map = try { json.decodeFromString<MutableMap<String, String>>(current) } catch (e: Exception) { mutableMapOf() }
-            if (id == null) map.remove(provider) else map[provider] = id
-            prefs[ACTIVE_API_KEY_IDS_JSON] = json.encodeToString(map)
+            val map = ActiveApiKeyIds.decode(json, prefs[ACTIVE_API_KEY_IDS_JSON] ?: "{}").toMutableMap()
+            val cleaned = ids.distinct()
+            if (cleaned.isEmpty()) map.remove(provider) else map[provider] = cleaned
+            prefs[ACTIVE_API_KEY_IDS_JSON] = ActiveApiKeyIds.encode(json, map)
         }
     }
 
@@ -691,6 +806,30 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[SHELL_DEVICES_JSON] = com.newoether.agora.util.SecretCrypto.encrypt(json.encodeToString(devices)) }
     }
 
+    suspend fun saveMcpEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[MCP_ENABLED] = enabled }
+    }
+
+    suspend fun saveMcpServers(servers: List<McpServerConfig>) {
+        context.dataStore.edit {
+            it[MCP_SERVERS_JSON] = com.newoether.agora.util.SecretCrypto.encrypt(json.encodeToString(servers))
+        }
+    }
+
+    suspend fun updateMcpServer(server: McpServerConfig) {
+        context.dataStore.edit { preferences ->
+            val encrypted = preferences[MCP_SERVERS_JSON] ?: "[]"
+            val current = runCatching {
+                json.decodeFromString<List<McpServerConfig>>(
+                    com.newoether.agora.util.SecretCrypto.decrypt(encrypted)
+                )
+            }.getOrDefault(emptyList())
+            preferences[MCP_SERVERS_JSON] = com.newoether.agora.util.SecretCrypto.encrypt(
+                json.encodeToString(current.map { if (it.id == server.id) server else it })
+            )
+        }
+    }
+
     suspend fun saveSandboxEnabled(enabled: Boolean) {
         context.dataStore.edit { it[SANDBOX_ENABLED] = enabled }
     }
@@ -739,17 +878,8 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[ONBOARDING_COMPLETED] = completed }
     }
 
-    suspend fun saveRatingPromptSubmitted(submitted: Boolean) {
-        context.dataStore.edit { it[RATING_PROMPT_SUBMITTED] = submitted }
-    }
 
-    suspend fun saveRatingPromptDismissed(dismissed: Boolean) {
-        context.dataStore.edit { it[RATING_PROMPT_DISMISSED] = dismissed }
-    }
 
-    suspend fun incrementMessagesSent() {
-        context.dataStore.edit { it[TOTAL_MESSAGES_SENT] = (it[TOTAL_MESSAGES_SENT] ?: 0) + 1 }
-    }
 
     // ── Auto Backup ───────────────────────────────────────────
     suspend fun saveAutoBackupEnabled(enabled: Boolean) {

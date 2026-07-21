@@ -4,8 +4,15 @@ import com.newoether.agora.model.ChatMessage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 
 sealed class StreamEvent {
     data class TextChunk(val text: String) : StreamEvent()
@@ -32,6 +39,7 @@ data class ProviderConfig(
     val thinkingLevel: String = "medium",
     val thinkingBudgetEnabled: Boolean = false,
     val thinkingBudgetTokens: Int = 4096,
+    val fastEnabled: Boolean = false,
     val baseUrl: String? = null,
     val tools: List<ToolDefinition>? = null,
     val userPrepend: String? = null,
@@ -57,12 +65,53 @@ data class ToolFunction(
     val parameters: ToolParameters
 )
 
-@Serializable
+@Serializable(with = ToolParametersSerializer::class)
 data class ToolParameters(
     val type: String = "object",
     val properties: Map<String, ToolProperty>,
-    val required: List<String> = emptyList()
-)
+    val required: List<String> = emptyList(),
+    /** Preserves an MCP server's complete JSON Schema (enum/oneOf/$defs/etc.). */
+    val rawSchema: JsonObject? = null,
+) {
+    fun asJsonObject(): JsonObject = rawSchema ?: JsonObject(
+        mapOf(
+            "type" to JsonPrimitive(type),
+            "properties" to JsonObject(properties.mapValues { (_, prop) ->
+                val values = mutableMapOf<String, JsonElement>(
+                    "type" to JsonPrimitive(prop.type),
+                    "description" to JsonPrimitive(prop.description),
+                )
+                prop.items?.let { item ->
+                    values["items"] = JsonObject(
+                        mapOf(
+                            "type" to JsonPrimitive(item.type),
+                            "description" to JsonPrimitive(item.description),
+                        )
+                    )
+                }
+                JsonObject(values)
+            }),
+            "required" to JsonArray(required.map(::JsonPrimitive)),
+        )
+    )
+}
+
+object ToolParametersSerializer : KSerializer<ToolParameters> {
+    override val descriptor: SerialDescriptor = JsonObject.serializer().descriptor
+
+    override fun serialize(encoder: Encoder, value: ToolParameters) {
+        encoder.encodeSerializableValue(JsonObject.serializer(), value.asJsonObject())
+    }
+
+    override fun deserialize(decoder: Decoder): ToolParameters {
+        val schema = decoder.decodeSerializableValue(JsonObject.serializer())
+        val type = (schema["type"] as? JsonPrimitive)?.content ?: "object"
+        val required = (schema["required"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.content }
+            .orEmpty()
+        return ToolParameters(type = type, properties = emptyMap(), required = required, rawSchema = schema)
+    }
+}
 
 @Serializable
 data class ToolProperty(
@@ -85,7 +134,8 @@ data class OpenAiChatRequest(
     @SerialName("max_tokens") val maxTokens: Int? = null,
     @SerialName("top_p") val topP: Float? = null,
     @SerialName("frequency_penalty") val frequencyPenalty: Float? = null,
-    @SerialName("presence_penalty") val presencePenalty: Float? = null
+    @SerialName("presence_penalty") val presencePenalty: Float? = null,
+    @SerialName("service_tier") val serviceTier: String? = null
 )
 
 @Serializable
@@ -216,6 +266,82 @@ data class OpenAiModelListResponse(val data: List<OpenAiModelInfo>)
 @Serializable
 data class OpenAiModelInfo(val id: String)
 
+/** Model-list result with optional capability declarations supplied by the provider API. */
+data class FetchedModel(
+    val id: String,
+    val fast: Boolean? = null,
+)
+
+private val FAST_FLAG_KEYS = listOf(
+    "fast", "fast_mode", "supports_fast", "fast_supported", "priority", "priority_processing"
+)
+
+private fun JsonElement?.explicitSupportValue(): Boolean? {
+    val primitive = this as? JsonPrimitive ?: return null
+    primitive.booleanOrNull?.let { return it }
+    return when (primitive.content.lowercase()) {
+        "supported", "enabled", "available", "yes", "true" -> true
+        "unsupported", "disabled", "unavailable", "no", "false" -> false
+        else -> null
+    }
+}
+
+private fun JsonElement?.nestedSupportValue(): Boolean? {
+    explicitSupportValue()?.let { return it }
+    val obj = this as? JsonObject ?: return null
+    listOf("supported", "enabled", "available").forEach { key ->
+        obj[key].explicitSupportValue()?.let { return it }
+    }
+    return null
+}
+
+/**
+ * Extracts an explicit provider declaration without treating absence as false.
+ * OpenAI-compatible providers commonly extend their model objects with different
+ * shapes, so this accepts boolean/status fields, nested capability objects, and
+ * advertised feature/parameter lists while preserving an unknown (`null`) state.
+ */
+internal fun explicitFastSupport(model: JsonObject): Boolean? {
+    FAST_FLAG_KEYS.forEach { key ->
+        val declaration = model[key]
+        declaration.nestedSupportValue()?.let { return it }
+        if (declaration is JsonObject) return true
+    }
+
+    listOf("capabilities", "features", "feature_support", "metadata").forEach { containerKey ->
+        val container = model[containerKey] as? JsonObject ?: return@forEach
+        FAST_FLAG_KEYS.forEach { key ->
+            val declaration = container[key]
+            declaration.nestedSupportValue()?.let { return it }
+            if (declaration is JsonObject) return true
+        }
+    }
+
+    val modes = model["modes"] as? JsonObject
+        ?: (model["experimental"] as? JsonObject)?.get("modes") as? JsonObject
+    if (modes?.containsKey("fast") == true) {
+        return modes["fast"].nestedSupportValue() ?: true
+    }
+
+    val advertisedLists = listOf("supported_features", "features", "capabilities")
+    advertisedLists.forEach { key ->
+        val values = model[key] as? JsonArray ?: return@forEach
+        val normalized = values.mapNotNull { (it as? JsonPrimitive)?.content?.lowercase() }
+        if (normalized.any { it in setOf("fast", "fast_mode", "priority", "priority_processing") }) {
+            return true
+        }
+    }
+
+    val supportedParameters = model["supported_parameters"] as? JsonArray
+    if (supportedParameters != null) {
+        val normalized = supportedParameters.mapNotNull {
+            (it as? JsonPrimitive)?.content?.lowercase()
+        }
+        if (normalized.any { it in setOf("service_tier", "speed", "fast") }) return true
+    }
+    return null
+}
+
 @Serializable
 data class OpenAiErrorResponse(val error: OpenAiError)
 
@@ -238,4 +364,11 @@ interface LlmProvider {
     ): Flow<StreamEvent>
     
     suspend fun fetchModels(apiKey: String, baseUrl: String? = null): List<String>
+
+    /**
+     * Rich model catalog. Providers that expose feature metadata override this; the
+     * default preserves compatibility and treats feature support as unspecified.
+     */
+    suspend fun fetchModelCatalog(apiKey: String, baseUrl: String? = null): List<FetchedModel> =
+        fetchModels(apiKey, baseUrl).map { FetchedModel(id = it) }
 }

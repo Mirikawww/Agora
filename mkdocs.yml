@@ -53,6 +53,7 @@ plugins:
             Overview: 概述
             Web Search: 网络搜索
             Remote Shell (Conch): 远程 Shell (Conch)
+            Model Context Protocol: 模型上下文协议
             Knowledge Management: 知识管理
             Conversation Search: 对话搜索
             Embedding / RAG: 嵌入 / RAG
@@ -409,6 +410,7 @@ nav:
   - Agentic Tools:
       - Overview: tools.md
       - Web Search: web-search.md
+      - Model Context Protocol: mcp.md
       - Remote Shell (Conch):
           - Shell Setup: shell.md
           - Sandbox: sandbox.md

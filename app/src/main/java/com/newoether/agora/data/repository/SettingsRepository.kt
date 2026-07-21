@@ -2,11 +2,13 @@ package com.newoether.agora.data.repository
 
 import com.newoether.agora.api.openai.CustomOpenAiProvider
 import com.newoether.agora.data.ApiKeyEntry
+import com.newoether.agora.model.ModelId
 import com.newoether.agora.data.BuiltInPrompts
 import com.newoether.agora.data.ConversationSettings
 import com.newoether.agora.data.CustomProviderConfig
 import com.newoether.agora.data.EmbeddingModelConfig
 import com.newoether.agora.data.LocalChatModelConfig
+import com.newoether.agora.data.McpServerConfig
 import com.newoether.agora.data.PromptTemplateItem
 import com.newoether.agora.data.SettingsManager
 import com.newoether.agora.data.ShellDeviceConfig
@@ -43,10 +45,12 @@ class SettingsRepository(
 
     val selectedModel: StateFlow<String> = hot(settingsManager.selectedModel, Constants.EXAMPLE_MODEL_ID)
     val availableModels: StateFlow<Map<String, List<String>>> = hot(settingsManager.availableModels, emptyMap())
+    val modelFastSupport: StateFlow<Map<String, Boolean>> = hot(settingsManager.modelFastSupport, emptyMap())
     val enabledModels: StateFlow<Set<String>> = hot(settingsManager.enabledModels, emptySet())
+    val disabledProviders: StateFlow<Set<String>> = hot(settingsManager.disabledProviders, emptySet())
     val modelAliases: StateFlow<Map<String, String>> = hot(settingsManager.modelAliases, emptyMap())
     val apiKeys: StateFlow<List<ApiKeyEntry>> = hot(settingsManager.apiKeys, emptyList())
-    val activeApiKeyIds: StateFlow<Map<String, String>> = hot(settingsManager.activeApiKeyIds, emptyMap())
+    val activeApiKeyIds: StateFlow<Map<String, List<String>>> = hot(settingsManager.activeApiKeyIds, emptyMap())
     val systemPrompts: StateFlow<List<SystemPromptEntry>> = hot(settingsManager.systemPrompts, emptyList())
     val activeSystemPromptId: StateFlow<String?> = hot(settingsManager.activeSystemPromptId, null)
     val maxContextWindow: StateFlow<Int> = hot(settingsManager.maxContextWindow, 20)
@@ -96,6 +100,8 @@ class SettingsRepository(
     val proxyBypass: StateFlow<String> = hot(settingsManager.proxyBypass, com.newoether.agora.data.SettingsManager.DEFAULT_PROXY_BYPASS)
     val shellConfirmEnabled: StateFlow<Boolean> = hot(settingsManager.shellConfirmEnabled, true)
     val shellDevices: StateFlow<List<ShellDeviceConfig>> = hot(settingsManager.shellDevices, emptyList())
+    val mcpEnabled: StateFlow<Boolean> = hot(settingsManager.mcpEnabled, false)
+    val mcpServers: StateFlow<List<McpServerConfig>> = hot(settingsManager.mcpServers, emptyList())
     val sandboxEnabled: StateFlow<Boolean> = hot(settingsManager.sandboxEnabled, false)
     val defaultTemperature: StateFlow<Float?> = hot(settingsManager.defaultTemperature, null)
     val defaultMaxTokens: StateFlow<Int?> = hot(settingsManager.defaultMaxTokens, null)
@@ -148,6 +154,29 @@ class SettingsRepository(
         }
     }
 
+    fun isProviderEnabled(provider: String): Boolean =
+        provider == Constants.PROVIDER_LOCAL || provider !in disabledProviders.value
+
+    fun setProviderEnabled(provider: String, enabled: Boolean) {
+        if (provider == Constants.PROVIDER_LOCAL) return
+        scope.launch {
+            val next = disabledProviders.value.toMutableSet()
+            if (enabled) next.remove(provider) else next.add(provider)
+            settingsManager.saveDisabledProviders(next)
+            // If the current default model belongs to a disabled provider, hop to another.
+            if (!enabled) {
+                val selected = selectedModel.value
+                if (selected.isNotBlank() && ModelId.parse(selected).providerName == provider) {
+                    val fallback = enabledModels.value.firstOrNull {
+                        val p = ModelId.parse(it).providerName
+                        p == Constants.PROVIDER_LOCAL || p !in next
+                    } ?: ""
+                    settingsManager.saveSelectedModel(fallback)
+                }
+            }
+        }
+    }
+
     fun updateModelAlias(model: String, alias: String) {
         scope.launch {
             val updated = modelAliases.value.toMutableMap()
@@ -161,7 +190,8 @@ class SettingsRepository(
         scope.launch {
             val entry = ApiKeyEntry(name = name, key = key, provider = provider)
             settingsManager.saveApiKeys(apiKeys.value + entry)
-            settingsManager.setActiveApiKeyId(provider, entry.id)
+            val enabled = activeApiKeyIds.value[provider].orEmpty()
+            settingsManager.setActiveApiKeyIds(provider, enabled + entry.id)
         }
     }
 
@@ -176,7 +206,7 @@ class SettingsRepository(
             val existing = current.firstOrNull { it.provider == provider }
             val entry = existing?.copy(name = name, key = key) ?: ApiKeyEntry(name = name, key = key, provider = provider)
             settingsManager.saveApiKeys(current.filter { it.provider != provider } + entry)
-            settingsManager.setActiveApiKeyId(provider, entry.id)
+            settingsManager.setActiveApiKeyIds(provider, listOf(entry.id))
         }
     }
 
@@ -185,10 +215,8 @@ class SettingsRepository(
             val current = apiKeys.value
             val entry = current.find { it.id == id } ?: return@launch
             val newList = current.filter { it.id != id }
-            if (activeApiKeyIds.value[entry.provider] == id) {
-                val other = newList.firstOrNull { it.provider == entry.provider }
-                settingsManager.setActiveApiKeyId(entry.provider, other?.id)
-            }
+            val remainingEnabled = activeApiKeyIds.value[entry.provider].orEmpty().filter { it != id }
+            settingsManager.setActiveApiKeyIds(entry.provider, remainingEnabled)
             settingsManager.saveApiKeys(newList)
         }
     }
@@ -199,8 +227,17 @@ class SettingsRepository(
         }
     }
 
-    fun setActiveApiKey(provider: String, id: String) {
-        scope.launch { settingsManager.setActiveApiKeyId(provider, id) }
+    /** Enable or disable [id] among the multi-selected keys for [provider]. */
+    fun setApiKeyEnabled(provider: String, id: String, enabled: Boolean) {
+        scope.launch {
+            val current = activeApiKeyIds.value[provider].orEmpty()
+            val next = if (enabled) {
+                if (id in current) current else current + id
+            } else {
+                current.filter { it != id }
+            }
+            settingsManager.setActiveApiKeyIds(provider, next)
+        }
     }
 
     // System prompts
@@ -262,16 +299,24 @@ class SettingsRepository(
                 settingsManager.saveProviderBaseUrl(newName, url)
                 val models = availableModels.value.toMutableMap()
                 models[newName] = models.remove(oldName) ?: emptyList()
+                val movedFastSupport = modelFastSupport.value
+                    .filterKeys { it.startsWith("$oldName:") }
+                    .mapKeys { (modelId, _) -> modelId.replaceFirst("$oldName:", "$newName:") }
                 settingsManager.saveAvailableModels(newName, models[newName] ?: emptyList())
                 settingsManager.saveAvailableModels(oldName, emptyList())
+                settingsManager.saveModelFastSupport(newName, movedFastSupport)
                 val newEnabled = enabledModels.value.map { if (it.startsWith("$oldName:")) it.replace("$oldName:", "$newName:") else it }.toSet()
                 settingsManager.saveEnabledModels(newEnabled)
                 val newAliases = modelAliases.value.mapKeys { if (it.key.startsWith("$oldName:")) it.key.replace("$oldName:", "$newName:") else it.key }
                 settingsManager.saveModelAliases(newAliases)
-                settingsManager.setActiveApiKeyId(oldName, null)
+                val movedActive = activeApiKeyIds.value[oldName].orEmpty()
+                settingsManager.setActiveApiKeyIds(oldName, emptyList())
                 val newKeys = apiKeys.value.map { if (it.provider == oldName) it.copy(provider = newName) else it }
                 settingsManager.saveApiKeys(newKeys)
-                activeApiKeyIds.value[oldName]?.let { settingsManager.setActiveApiKeyId(newName, it) }
+                settingsManager.setActiveApiKeyIds(newName, movedActive)
+                if (oldName in disabledProviders.value) {
+                    settingsManager.saveDisabledProviders(disabledProviders.value - oldName + newName)
+                }
             }
             onProviderAdd(newName, CustomOpenAiProvider(newName, url))
         }
@@ -286,7 +331,8 @@ class SettingsRepository(
             settingsManager.saveModelAliases(modelAliases.value.filterKeys { !it.startsWith("$name:") })
             settingsManager.saveProviderBaseUrl(name, "")
             settingsManager.saveApiKeys(apiKeys.value.filter { it.provider != name })
-            settingsManager.setActiveApiKeyId(name, null)
+            settingsManager.setActiveApiKeyIds(name, emptyList())
+            settingsManager.saveDisabledProviders(disabledProviders.value - name)
         }
     }
 
@@ -329,6 +375,7 @@ class SettingsRepository(
     fun setImageGenSize(size: String) = scope.launch { settingsManager.saveImageGenSize(size) }
     fun setShowDocumentationFab(enabled: Boolean) = scope.launch { settingsManager.saveShowDocumentationFab(enabled) }
     fun setShellEnabled(enabled: Boolean) = scope.launch { settingsManager.saveShellEnabled(enabled) }
+    fun setMcpEnabled(enabled: Boolean) = scope.launch { settingsManager.saveMcpEnabled(enabled) }
     fun setProxyEnabled(enabled: Boolean) = scope.launch { settingsManager.saveProxyEnabled(enabled) }
     fun setProxyType(type: String) = scope.launch { settingsManager.saveProxyType(type) }
     fun setProxyHost(host: String) = scope.launch { settingsManager.saveProxyHost(host) }
@@ -366,10 +413,50 @@ class SettingsRepository(
         settingsManager.saveShellDevices(shellDevices.value.map { if (it.id == device.id) device else it })
     }
 
+    fun addMcpServer(server: McpServerConfig) = scope.launch {
+        settingsManager.saveMcpServers(mcpServers.value + server)
+    }
+
+    fun addMcpServers(servers: List<McpServerConfig>) = scope.launch {
+        if (servers.isNotEmpty()) settingsManager.saveMcpServers(mcpServers.value + servers)
+    }
+
+    fun updateMcpServer(server: McpServerConfig) = scope.launch {
+        updateMcpServerNow(server)
+    }
+
+    /** Synchronous variant used by MCP metadata/OAuth reconciliation to avoid stale write races. */
+    suspend fun updateMcpServerNow(server: McpServerConfig) {
+        settingsManager.updateMcpServer(server)
+    }
+
+    fun removeMcpServer(serverId: String) = scope.launch {
+        settingsManager.saveMcpServers(mcpServers.value.filter { it.id != serverId })
+    }
+
     // ── Derived lookups ─────────────────────────────────────────
-    /** Resolves the currently-active cleartext API key for [provider], or `null`. */
-    fun resolveActiveKey(provider: String): String? =
-        apiKeys.value.find { it.id == activeApiKeyIds.value[provider] }?.key
+    /** Cleartext secrets for every enabled key of [provider], in enable-list order. */
+    fun resolveActiveKeys(provider: String): List<String> {
+        val ids = activeApiKeyIds.value[provider].orEmpty()
+        if (ids.isEmpty()) return emptyList()
+        val byId = apiKeys.value.associateBy { it.id }
+        return ids.mapNotNull { byId[it]?.key }
+    }
+
+    /** First enabled cleartext API key for [provider], or `null`. */
+    fun resolveActiveKey(provider: String): String? = resolveActiveKeys(provider).firstOrNull()
+
+    /**
+     * Like [resolveActiveKeys] but awaits on-disk DataStore values instead of
+     * reading the eagerly-shared `.value`, which may still be the empty default
+     * during the startup window before DataStore loads.
+     */
+    suspend fun awaitActiveKeys(provider: String): List<String> {
+        val activeIds = settingsManager.activeApiKeyIds.first()[provider].orEmpty()
+        if (activeIds.isEmpty()) return emptyList()
+        val byId = settingsManager.apiKeys.first().associateBy { it.id }
+        return activeIds.mapNotNull { byId[it]?.key }
+    }
 
     /**
      * Like [resolveActiveKey] but awaits the on-disk DataStore values instead of
@@ -379,11 +466,7 @@ class SettingsRepository(
      * an empty `Authorization` header → intermittent 401s on providers that are
      * considered configured by base-URL alone (custom / OpenAI-compatible / Ollama).
      */
-    suspend fun awaitActiveKey(provider: String): String? {
-        val activeIds = settingsManager.activeApiKeyIds.first()
-        val keys = settingsManager.apiKeys.first()
-        return keys.find { it.id == activeIds[provider] }?.key
-    }
+    suspend fun awaitActiveKey(provider: String): String? = awaitActiveKeys(provider).firstOrNull()
 
     // ── Suspending DataStore access ───────────────────────────
     //
@@ -404,10 +487,11 @@ class SettingsRepository(
     suspend fun getSystemPrompts(): List<SystemPromptEntry> = settingsManager.systemPrompts.first()
 
     suspend fun saveAvailableModels(provider: String, models: List<String>) = settingsManager.saveAvailableModels(provider, models)
+    suspend fun saveModelFastSupport(provider: String, support: Map<String, Boolean>) =
+        settingsManager.saveModelFastSupport(provider, support)
     suspend fun saveModelAliases(aliases: Map<String, String>) = settingsManager.saveModelAliases(aliases)
     suspend fun saveLastUpdateCheckTime(time: Long) = settingsManager.saveLastUpdateCheckTime(time)
     suspend fun saveLastModelsFetchFingerprint(fingerprint: String) = settingsManager.saveLastModelsFetchFingerprint(fingerprint)
-    suspend fun incrementMessagesSent() = settingsManager.incrementMessagesSent()
     suspend fun saveLocalChatModels(models: List<LocalChatModelConfig>) = settingsManager.saveLocalChatModels(models)
     suspend fun saveEmbeddingModels(models: List<EmbeddingModelConfig>) = settingsManager.saveEmbeddingModels(models)
     suspend fun setActiveEmbeddingModelId(id: String) = settingsManager.setActiveEmbeddingModelId(id)

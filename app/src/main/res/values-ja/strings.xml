@@ -306,7 +306,6 @@
     <string name="gen_thinking_level_low">低</string>
     <string name="gen_thinking_level_medium">中</string>
     <string name="gen_thinking_level_high">高</string>
-    <string name="gen_thinking_level_minimal">極低</string>
     <string name="gen_thinking_level_xhigh">超高</string>
     <string name="gen_thinking_level_max">最大</string>
     <string name="thinking_effort_label">思考強度</string>
@@ -699,7 +698,6 @@
     <string name="settings_group_responses">応答</string>
     <string name="settings_group_tools">ツール</string>
     <string name="settings_group_about">アプリについて</string>
-    <string name="rating_category">評価</string>
 
     <!-- About -->
     <string name="settings_about">アプリについて</string>
@@ -715,8 +713,6 @@
     <string name="about_privacy_policy">プライバシーポリシー</string>
     <string name="about_source_code">ソースコード</string>
     <string name="about_version">バージョン</string>
-    <string name="about_rating">アプリを評価</string>
-    <string name="about_rating_desc">このプロジェクトは一人で開発しています。フィードバックを心より感謝します。</string>
     <string name="about_updates">アップデート</string>
     <string name="about_check_updates">アップデートを確認</string>
     <string name="about_check_updates_desc">GitHub で最新リリースを確認</string>
@@ -728,16 +724,6 @@
     <string name="about_available_body">Agora の新しいバージョンが GitHub で利用可能です。</string>
     <string name="about_view_release">リリースを表示</string>
     <string name="about_later">後で</string>
-    <string name="rating_title">Agora を評価</string>
-    <string name="rating_star">%1$d 個の星</string>
-    <string name="rating_your_name">お名前（任意）</string>
-    <string name="rating_your_email">メールアドレス（任意）</string>
-    <string name="rating_comment">コメント（任意）</string>
-    <string name="rating_submit">送信</string>
-    <string name="rating_submitting">送信中…</string>
-    <string name="rating_success">フィードバックありがとうございます!</string>
-    <string name="rating_failed">送信に失敗しました。もう一度お試しください。</string>
-    <string name="rating_privacy">評価は匿名で newoether.space にアップロードされます。入力した項目のみが送信されます。それ以外のデータは収集されません。</string>
 
     <!-- Data Control -->
     <string name="settings_data_control">データ管理</string>

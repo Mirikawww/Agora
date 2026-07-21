@@ -114,6 +114,8 @@ class DataExporter(
         val ragThreshold: Float,
         val shellEnabled: Boolean = false,
         val shellDevices: List<ShellDeviceConfig> = emptyList(),
+        val mcpEnabled: Boolean = false,
+        val mcpServers: List<McpServerConfig> = emptyList(),
         val customProviders: List<CustomProviderConfig> = emptyList(),
         val localChatModels: List<LocalChatModelConfig>,
         @SerialName("active_system_prompt_id") val activeSystemPromptId: String?
@@ -122,7 +124,8 @@ class DataExporter(
     @Serializable
     private data class ExportApiKeys(
         val apiKeys: List<ApiKeyEntry>,
-        val activeApiKeyIds: Map<String, String>,
+        @Serializable(with = ActiveApiKeyIds.Serializer::class)
+        val activeApiKeyIds: Map<String, List<String>>,
         val webSearchApiKeys: Map<String, String>,
         val shellApiKeys: Map<String, String> = emptyMap()
     )
@@ -316,6 +319,18 @@ class DataExporter(
                     shellEnabled = settingsManager.shellEnabled.first(),
                     shellDevices = settingsManager.shellDevices.first().map { d ->
                         if (includeApiKeys) d else d.copy(apiKey = "")
+                    },
+                    mcpEnabled = settingsManager.mcpEnabled.first(),
+                    mcpServers = settingsManager.mcpServers.first().map { server ->
+                        if (includeApiKeys) server else server.copy(
+                            bearerToken = "",
+                            headers = emptyMap(),
+                            oauth = server.oauth?.copy(
+                                clientSecret = null,
+                                accessToken = null,
+                                refreshToken = null,
+                            ),
+                        )
                     },
                     customProviders = settingsManager.customProviders.first(),
                     localChatModels = settingsManager.localChatModels.first().map { it.copy(localFilePath = "") },

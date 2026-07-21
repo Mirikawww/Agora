@@ -24,6 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -48,6 +49,11 @@ private val FlatToBottom  = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 
 private val FiveTop       = RoundedCornerShape(topStart = 5.dp, topEnd = 5.dp)
 private val FiveBottom    = RoundedCornerShape(bottomStart = 5.dp, bottomEnd = 5.dp)
 
+private data class ModelSyncChange(
+    val added: Set<String>,
+    val removed: Set<String>,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
@@ -55,20 +61,80 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val availableModels by viewModel.settings.availableModels.collectAsState()
     val modelAliases by viewModel.settings.modelAliases.collectAsState()
     val selectedModel by viewModel.settings.selectedModel.collectAsState()
+    val disabledProviders by viewModel.settings.disabledProviders.collectAsState()
+    val isSyncingModels by viewModel.isSyncingModels.collectAsState()
     var showActiveModelDialog by remember { mutableStateOf(false) }
     var showModelAliasDialog by remember { mutableStateOf<String?>(null) }
     val expandedProviders = remember { mutableStateMapOf<String, MutableTransitionState<Boolean>>() }
     val modelBlockHeights = remember { mutableStateMapOf<String, Float>() }
+    val syncChanges = remember { mutableStateMapOf<String, ModelSyncChange>() }
+    var syncBaseline by remember { mutableStateOf<Map<String, List<String>>?>(null) }
+    var observedSyncRunning by remember { mutableStateOf(false) }
 
     val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
     val lastFingerprint by viewModel.settings.lastModelsFetchFingerprint.collectAsState()
-    val providers = availableModels.entries.filter { it.value.isNotEmpty() }
+
+    val beginModelSync: () -> Unit = {
+        if (!isSyncingModels) {
+            syncBaseline = availableModels.mapValues { (_, models) -> models.toList() }
+            syncChanges.clear()
+            observedSyncRunning = false
+            viewModel.fetchAvailableModels()
+        }
+    }
+
+    LaunchedEffect(isSyncingModels) {
+        if (isSyncingModels) {
+            observedSyncRunning = true
+        } else if (observedSyncRunning) {
+            val before = syncBaseline.orEmpty()
+            val after = viewModel.settings.getAvailableModels()
+            val changes = (before.keys + after.keys).mapNotNull { provider ->
+                val previousModels = before[provider].orEmpty().toSet()
+                val currentModels = after[provider].orEmpty().toSet()
+                val added = currentModels - previousModels
+                val removed = previousModels - currentModels
+                if (added.isEmpty() && removed.isEmpty()) null
+                else provider to ModelSyncChange(added = added, removed = removed)
+            }.toMap()
+            syncChanges.clear()
+            syncChanges.putAll(changes)
+            syncBaseline = null
+            observedSyncRunning = false
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            syncChanges.clear()
+            syncBaseline = null
+        }
+    }
+
+    val displayedAvailableModels = remember(availableModels, syncChanges.toMap()) {
+        buildMap {
+            availableModels.forEach { (provider, models) -> put(provider, models) }
+            syncChanges.forEach { (provider, change) ->
+                val current = get(provider).orEmpty()
+                put(provider, (current + change.removed).distinct())
+            }
+        }
+    }
+    val providers = displayedAvailableModels.entries.filter { (name, models) ->
+        models.isNotEmpty() && (name == Constants.PROVIDER_LOCAL || name !in disabledProviders)
+    }
+    val visibleEnabledModels = remember(enabledModels, disabledProviders) {
+        enabledModels.filter {
+            val p = com.newoether.agora.model.ModelId.parse(it).providerName
+            p.equals(Constants.PROVIDER_LOCAL, ignoreCase = true) || p !in disabledProviders
+        }
+    }
 
     // Auto-fetch models when entering the page if provider config has changed
     LaunchedEffect(Unit) {
         val current = viewModel.computeProviderFingerprint()
         if (current != lastFingerprint) {
-            viewModel.fetchAvailableModels()
+            beginModelSync()
         }
     }
 
@@ -93,7 +159,7 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 val activeDisplayName = activeAlias ?: activeParsed.apiModelName
                 val activeIconRes = providerIcon(providerName)
                 val isActiveLocal = providerName.equals(Constants.PROVIDER_LOCAL, ignoreCase = true)
-                val hasEnabledModels = enabledModels.isNotEmpty()
+                val hasEnabledModels = visibleEnabledModels.isNotEmpty()
 
                 CardSurface(shape = FullRounded) {
                     SettingsItem(
@@ -138,7 +204,7 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         headlineContent = { Text(stringResource(R.string.models_sync)) },
                         supportingContent = { Text(stringResource(R.string.models_sync_desc)) },
                         leadingContent = { Icon(Icons.Default.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                        modifier = Modifier.clickable { viewModel.fetchAvailableModels() }
+                        modifier = Modifier.clickable(enabled = !isSyncingModels) { beginModelSync() }
                     )
                 }
             }
@@ -146,6 +212,8 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
             // Providers
             for ((providerIndex, entry) in providers.withIndex()) {
                 val (name, models) = entry
+                val providerChange = syncChanges[name]
+                val providerChanged = providerChange != null
                 val transitionState = expandedProviders.getOrPut(name) { MutableTransitionState(false) }
                 val isExpanded = transitionState.targetState
                 val isLastProvider = providerIndex == providers.lastIndex
@@ -166,8 +234,22 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         val headerIconRes = providerIcon(name)
                         val isLocalHeader = name.equals(Constants.PROVIDER_LOCAL, ignoreCase = true)
                         SettingsItem(
-                            headlineContent = { Text(name) },
-                            supportingContent = { Text(stringResource(R.string.models_count, models.size)) },
+                            headlineContent = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(name)
+                                    if (providerChanged) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        ModelChangeBadge(
+                                            text = stringResource(R.string.models_change_badge),
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                    }
+                                }
+                            },
+                            supportingContent = {
+                                Text(stringResource(R.string.models_count, availableModels[name].orEmpty().size))
+                            },
                             leadingContent = {
                                 when {
                                     isLocalHeader -> Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
@@ -215,23 +297,70 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                     val alias = modelAliases[model]
                                     val parsed = com.newoether.agora.model.ModelId.parse(model)
                                     val displayName = alias ?: parsed.apiModelName
+                                    val isAdded = model in providerChange?.added.orEmpty()
+                                    val isRemoved = model in providerChange?.removed.orEmpty()
+                                    val modelTextColor = if (isRemoved) {
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
 
                                     SettingsItem(
-                                        headlineContent = { Text(displayName) },
-                                        supportingContent = if (alias != null) { { Text(parsed.apiModelName) } } else null,
+                                        headlineContent = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(displayName, color = modelTextColor)
+                                                when {
+                                                    isAdded -> {
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        ModelChangeBadge(
+                                                            text = stringResource(R.string.models_added_badge),
+                                                            containerColor = Color(0xFF2E7D32),
+                                                            contentColor = Color.White
+                                                        )
+                                                    }
+                                                    isRemoved -> {
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        ModelChangeBadge(
+                                                            text = stringResource(R.string.models_removed_badge),
+                                                            containerColor = MaterialTheme.colorScheme.error,
+                                                            contentColor = MaterialTheme.colorScheme.onError
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        supportingContent = if (alias != null) {
+                                            {
+                                                Text(
+                                                    parsed.apiModelName,
+                                                    color = if (isRemoved) modelTextColor else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        } else null,
                                         trailingContent = {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                                IconButton(onClick = { showModelAliasDialog = model }) {
+                                                IconButton(
+                                                    onClick = { showModelAliasDialog = model },
+                                                    enabled = !isRemoved
+                                                ) {
                                                     Icon(
                                                         Icons.Default.Edit,
                                                         contentDescription = stringResource(R.string.models_rename),
-                                                        tint = MaterialTheme.colorScheme.primary,
+                                                        tint = if (isRemoved) {
+                                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                                        } else {
+                                                            MaterialTheme.colorScheme.primary
+                                                        },
                                                         modifier = Modifier.size(20.dp)
                                                     )
                                                 }
-                                                Checkbox(checked = isEnabled, onCheckedChange = {
-                                                    viewModel.settings.setEnabledModels(if (it) enabledModels + model else enabledModels - model)
-                                                })
+                                                Checkbox(
+                                                    checked = isEnabled,
+                                                    enabled = !isRemoved,
+                                                    onCheckedChange = {
+                                                        viewModel.settings.setEnabledModels(if (it) enabledModels + model else enabledModels - model)
+                                                    }
+                                                )
                                             }
                                         },
                                         modifier = Modifier.padding(start = 16.dp)
@@ -255,7 +384,7 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
             title = { Text(stringResource(R.string.models_select_default), fontWeight = FontWeight.Bold) },
             text = {
                 LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                    items(enabledModels.toList()) { model ->
+                    items(visibleEnabledModels) { model ->
                         val alias = modelAliases[model]
                         val parsed = com.newoether.agora.model.ModelId.parse(model)
                         val displayName = alias ?: parsed.apiModelName
@@ -357,5 +486,25 @@ private fun CardSurface(shape: Shape, addTopGap: Boolean = false, content: @Comp
             .then(if (addTopGap) Modifier.padding(top = 2.dp) else Modifier)
     ) {
         content()
+    }
+}
+
+@Composable
+private fun ModelChangeBadge(
+    text: String,
+    containerColor: Color,
+    contentColor: Color,
+) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = containerColor,
+        contentColor = contentColor
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+        )
     }
 }

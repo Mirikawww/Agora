@@ -19,7 +19,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
 
 @Serializable
@@ -286,7 +288,10 @@ class OllamaProvider : LlmProvider {
         }
     }.flowOn(Dispatchers.IO)
 
-    override suspend fun fetchModels(apiKey: String, baseUrl: String?): List<String> = kotlinx.coroutines.withContext(Dispatchers.IO) {
+    override suspend fun fetchModels(apiKey: String, baseUrl: String?): List<String> =
+        fetchModelCatalog(apiKey, baseUrl).map { it.id }
+
+    override suspend fun fetchModelCatalog(apiKey: String, baseUrl: String?): List<FetchedModel> = kotlinx.coroutines.withContext(Dispatchers.IO) {
         try {
             val effectiveBaseUrl = baseUrl?.trimEnd('/') ?: "http://localhost:11434"
             val responseText = HttpClient.fetchModels("$effectiveBaseUrl/api/tags") ?: run {
@@ -294,7 +299,15 @@ class OllamaProvider : LlmProvider {
                 return@withContext emptyList()
             }
             val json = Json { ignoreUnknownKeys = true }
-            json.decodeFromString<OllamaTagsResponse>(responseText).models.map { it.name }
+            val root = json.parseToJsonElement(responseText) as? JsonObject
+                ?: return@withContext emptyList()
+            val models = root["models"] as? JsonArray ?: return@withContext emptyList()
+            models.mapNotNull { element ->
+                val model = element as? JsonObject ?: return@mapNotNull null
+                val id = ((model["name"] ?: model["model"]) as? JsonPrimitive)?.content
+                    ?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                FetchedModel(id = id, fast = explicitFastSupport(model))
+            }
         } catch (e: Exception) {
             DebugLog.e("AgoraAPI", "Ollama fetch failed: ${e.message}", e)
             emptyList()

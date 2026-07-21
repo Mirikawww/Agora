@@ -33,6 +33,7 @@ fun SettingsProviderPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val providerBaseUrls by viewModel.settings.providerBaseUrls.collectAsState()
     val customProviders by viewModel.settings.customProviders.collectAsState()
     val localChatModels by viewModel.settings.localChatModels.collectAsState()
+    val disabledProviders by viewModel.settings.disabledProviders.collectAsState()
 
     var selectedProvider by rememberSaveable { mutableStateOf<String?>(null) }
     var showAddCustomDialog by remember { mutableStateOf(false) }
@@ -81,19 +82,47 @@ fun SettingsProviderPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                             SettingsGroup(title = stringResource(R.string.provider_built_in), items = builtInNames.map { name ->
                                 @Composable {
                                     val configured = isConfigured(name)
+                                    val providerOn = name !in disabledProviders
+                                    val activeLook = configured && providerOn
+                                    val muted = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                                     SettingsItem(
-                                        headlineContent = { Text(name) },
+                                        headlineContent = {
+                                            Text(
+                                                name,
+                                                color = if (activeLook) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        },
                                         supportingContent = {
                                             Text(
                                                 when {
                                                     name == Constants.PROVIDER_OLLAMA -> providerBaseUrls[name]?.takeIf { it.isNotBlank() } ?: stringResource(R.string.not_configured)
                                                     isConfigured(name) -> stringResource(R.string.provider_keys_summary, apiKeys.count { it.provider == name })
                                                     else -> stringResource(R.string.not_configured)
-                                                }
+                                                },
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (activeLook) 1f else 0.7f)
                                             )
                                         },
-                                        leadingContent = { Icon(painterResource(providerIcon(name)), null, tint = if (configured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), modifier = Modifier.size(24.dp)) },
-                                        trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)) },
+                                        leadingContent = {
+                                            Icon(
+                                                painterResource(providerIcon(name)),
+                                                null,
+                                                tint = if (activeLook) MaterialTheme.colorScheme.primary else muted,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        },
+                                        trailingContent = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Switch(
+                                                    checked = providerOn,
+                                                    onCheckedChange = { viewModel.settings.setProviderEnabled(name, it) }
+                                                )
+                                                Icon(
+                                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                    null,
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                                )
+                                            }
+                                        },
                                         modifier = Modifier.clickable { selectedProvider = name }
                                     )
                                 }
@@ -112,15 +141,41 @@ fun SettingsProviderPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                 customProviders.forEach { config ->
                                     add {
                                         val configured = !providerBaseUrls[config.name].isNullOrBlank()
+                                        val providerOn = config.name !in disabledProviders
+                                        val activeLook = configured && providerOn
+                                        val muted = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                                         SettingsItem(
-                                            headlineContent = { Text(config.name) },
-                                            supportingContent = { Text(providerBaseUrls[config.name]?.takeIf { it.isNotBlank() } ?: stringResource(R.string.not_configured)) },
-                                            leadingContent = { Icon(Icons.Default.Cloud, null, tint = if (configured) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), modifier = Modifier.size(24.dp)) },
+                                            headlineContent = {
+                                                Text(
+                                                    config.name,
+                                                    color = if (activeLook) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            },
+                                            supportingContent = {
+                                                Text(
+                                                    providerBaseUrls[config.name]?.takeIf { it.isNotBlank() } ?: stringResource(R.string.not_configured),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (activeLook) 1f else 0.7f)
+                                                )
+                                            },
+                                            leadingContent = {
+                                                Icon(
+                                                    Icons.Default.Cloud,
+                                                    null,
+                                                    tint = if (activeLook) MaterialTheme.colorScheme.primary else muted,
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                            },
                                             trailingContent = {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                                    Surface(shape = RoundedCornerShape(4.dp), color = MaterialTheme.colorScheme.primaryContainer) { Text(stringResource(R.string.custom_provider_badge), modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer) }
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                                                    Switch(
+                                                        checked = providerOn,
+                                                        onCheckedChange = { viewModel.settings.setProviderEnabled(config.name, it) }
+                                                    )
+                                                    Icon(
+                                                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                        null,
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                                    )
                                                 }
                                             },
                                             modifier = Modifier.clickable { selectedProvider = config.name }
