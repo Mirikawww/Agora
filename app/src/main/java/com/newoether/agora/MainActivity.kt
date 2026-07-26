@@ -487,8 +487,16 @@ fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
             updateScope.launch {
                 try {
                     val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        UpdateInstaller.downloadApk(apkUrl, ctx) { p ->
-                            downloadProgress = p
+                        // The CI channel serves an Actions artifact — a ZIP of all
+                        // split APKs — so it needs the extracting variant.
+                        if (info.isZipArchive) {
+                            UpdateInstaller.downloadApkFromZip(apkUrl, ctx) { p ->
+                                downloadProgress = p
+                            }
+                        } else {
+                            UpdateInstaller.downloadApk(apkUrl, ctx) { p ->
+                                downloadProgress = p
+                            }
                         }
                     }
                     downloading = false

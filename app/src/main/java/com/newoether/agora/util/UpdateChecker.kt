@@ -7,6 +7,20 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
+/** Where updates come from. */
+enum class UpdateChannel(val id: String) {
+    /** Published GitHub releases — versioned, permanent. */
+    STABLE("stable"),
+
+    /** Newest successful Actions build, served straight from its artifact. */
+    CI("ci");
+
+    companion object {
+        fun from(id: String?): UpdateChannel =
+            entries.firstOrNull { it.id == id?.trim()?.lowercase() } ?: STABLE
+    }
+}
+
 data class UpdateInfo(
     val version: String,
     val url: String,
@@ -14,6 +28,12 @@ data class UpdateInfo(
     /** Direct APK URL suitable for in-app download (Worker-proxied when present). */
     val downloadUrl: String? = null,
     val htmlUrl: String = url,
+    /**
+     * True when [downloadUrl] serves a ZIP of split APKs rather than one APK —
+     * the CI channel streams an Actions artifact, which is always an archive.
+     */
+    val isZipArchive: Boolean = false,
+    val channel: UpdateChannel = UpdateChannel.STABLE,
 ) {
     val canDownloadApk: Boolean
         get() = !downloadUrl.isNullOrBlank() || UpdateInstaller.looksLikeApkUrl(url)
@@ -51,6 +71,7 @@ object UpdateChecker {
         "https://agora-update-check.mirikawww.workers.dev"
     private const val UPDATE_ENDPOINT = "$WORKER_BASE/latest"
     private const val RELEASES_ENDPOINT = "$WORKER_BASE/releases"
+    private const val CI_ENDPOINT = "$WORKER_BASE/ci/latest"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -69,6 +90,58 @@ object UpdateChecker {
         val download_url: String? = null,
         val published_at: String? = null,
     )
+
+    /** `/ci/latest` payload — an Actions run, not a release, so there is no tag. */
+    @Serializable
+    private data class CiBuild(
+        val run_number: Int = 0,
+        val sha: String = "",
+        val version: String = "",
+        val title: String = "",
+        val body: String = "",
+        val html_url: String = "",
+        val download_url: String? = null,
+        val is_zip: Boolean = true,
+        val size_bytes: Long = 0,
+    )
+
+    /**
+     * CI-channel check. Compares **run numbers**, not versions: every CI build
+     * carries the same `versionName`, so semver comparison would never see a
+     * newer build. [installedRun] is the run this APK came from (0 when the
+     * installed build did not come from CI, in which case any CI build counts
+     * as newer).
+     */
+    fun checkCi(installedRun: Int): UpdateInfo? {
+        return try {
+            val request = Request.Builder()
+                .url(CI_ENDPOINT)
+                .header("Accept", "application/json")
+                .build()
+            val response = client.newCall(request).execute()
+            if (response.code == 204 || !response.isSuccessful) {
+                response.close()
+                return null
+            }
+            val body = response.body.string()
+            response.close()
+
+            val build = json.decodeFromString<CiBuild>(body)
+            if (build.run_number <= installedRun) return null
+
+            UpdateInfo(
+                version = build.version.ifBlank { "ci-${build.run_number}" },
+                url = build.download_url ?: build.html_url,
+                body = build.body.ifBlank { build.title },
+                downloadUrl = build.download_url,
+                htmlUrl = build.html_url,
+                isZipArchive = build.is_zip,
+                channel = UpdateChannel.CI,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     /**
      * Check the update endpoint for a newer release. Returns [UpdateInfo] if an

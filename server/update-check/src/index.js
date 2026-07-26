@@ -81,6 +81,17 @@ export default {
         return await handleDownload(env, ctx, request, url);
       }
 
+      // ── CI channel ────────────────────────────────────────────────
+      // Serves the newest successful Actions build straight from its artifact,
+      // so nightly builds never have to be published as (pre)releases.
+      if (path === "/ci/latest") {
+        return await handleCiLatest(env, url.origin);
+      }
+
+      if (path === "/ci/download") {
+        return await handleCiDownload(env);
+      }
+
       return json({ error: "not_found" }, 404);
     } catch (err) {
       return json(
@@ -341,6 +352,102 @@ function abiAliasesFor(abi) {
     out.add("x86");
   }
   return [...out];
+}
+
+// ── CI channel ──────────────────────────────────────────────────────────────
+//
+// The app's CI channel installs the newest successful `main` build directly from
+// its Actions artifact, so nightly builds never pollute the Releases list.
+//
+// Artifact downloads require a token, which must never ship in the APK — hence
+// this proxy. Note what it does NOT do: it never streams the ZIP. GitHub answers
+// `/artifacts/{id}/zip` with a 302 to a short-lived signed URL that needs no
+// auth, so the Worker just hands that URL to the client. The bytes travel
+// straight from GitHub's storage, costing this Worker zero bandwidth and zero
+// CPU (a free-tier Worker could not decompress a 50 MB archive anyway).
+
+const CI_ARTIFACT_NAME = "agora-release";
+const CI_WORKFLOW_BRANCH = "main";
+
+/** Newest successful workflow run on [CI_WORKFLOW_BRANCH], or null. */
+async function fetchLatestCiRun(env) {
+  const apiUrl =
+    `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}` +
+    `/actions/runs?branch=${CI_WORKFLOW_BRANCH}&status=success&per_page=1`;
+  const res = await fetch(apiUrl, { headers: githubHeaders(env, "application/vnd.github+json") });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return (data.workflow_runs && data.workflow_runs[0]) || null;
+}
+
+/** The APK artifact of [run], or null when it has expired (artifacts live 90 days). */
+async function fetchRunArtifact(env, run) {
+  const res = await fetch(run.artifacts_url, {
+    headers: githubHeaders(env, "application/vnd.github+json"),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const artifacts = (data.artifacts || []).filter((a) => !a.expired);
+  return (
+    artifacts.find((a) => a.name === CI_ARTIFACT_NAME) ||
+    artifacts.find((a) => /\.apk|apk/i.test(a.name)) ||
+    artifacts[0] ||
+    null
+  );
+}
+
+async function handleCiLatest(env, origin) {
+  const run = await fetchLatestCiRun(env);
+  if (!run) {
+    return new Response(null, { status: 204, headers: { ...CORS, "Cache-Control": "public, max-age=60" } });
+  }
+  const artifact = await fetchRunArtifact(env, run);
+  if (!artifact) {
+    return json({ error: "no_artifact", message: "Build has no unexpired artifact" }, 404);
+  }
+  return json(
+    {
+      // Not a semver — the app compares run numbers for the CI channel.
+      run_number: run.run_number,
+      run_id: run.id,
+      sha: (run.head_sha || "").slice(0, 7),
+      // "ci-<run>-<sha>" is what the app shows as the available version.
+      version: `ci-${run.run_number}-${(run.head_sha || "").slice(0, 7)}`,
+      title: run.display_title || run.head_commit?.message?.split("\n")[0] || "",
+      body: run.head_commit?.message || "",
+      html_url: run.html_url,
+      published_at: run.updated_at || run.created_at,
+      size_bytes: artifact.size_in_bytes,
+      // The archive is a ZIP of every split APK; the client picks its ABI.
+      download_url: `${origin}/ci/download`,
+      is_zip: true,
+    },
+    200,
+    { "Cache-Control": "public, max-age=120" },
+  );
+}
+
+async function handleCiDownload(env) {
+  const run = await fetchLatestCiRun(env);
+  if (!run) return json({ error: "no_run" }, 404);
+  const artifact = await fetchRunArtifact(env, run);
+  if (!artifact) return json({ error: "no_artifact" }, 404);
+
+  // manual redirect: we want the Location header, not the body.
+  const res = await fetch(artifact.archive_download_url, {
+    headers: githubHeaders(env, "application/vnd.github+json"),
+    redirect: "manual",
+  });
+  const signedUrl = res.headers.get("Location");
+  if (!signedUrl) {
+    return json({ error: "no_signed_url", status: res.status }, 502);
+  }
+  // 302 straight to storage — the token never leaves the Worker and the bytes
+  // never pass through it.
+  return new Response(null, {
+    status: 302,
+    headers: { ...CORS, Location: signedUrl, "Cache-Control": "no-store" },
+  });
 }
 
 function githubHeaders(env, accept) {

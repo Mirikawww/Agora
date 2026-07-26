@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -34,6 +35,7 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val versionCode = packageInfo?.longVersionCode ?: 0
 
     val autoUpdateCheck by viewModel.settings.autoUpdateCheck.collectAsState()
+    val updateChannel by viewModel.settings.updateChannel.collectAsState()
     var updateStatus by remember { mutableStateOf<String?>(null) }
     var isChecking by remember { mutableStateOf(false) }
     var showChangelog by remember { mutableStateOf(false) }
@@ -112,6 +114,62 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                             Switch(checked = autoUpdateCheck, onCheckedChange = { viewModel.settings.setAutoUpdateCheck(it) })
                         },
                         modifier = Modifier.clickable { viewModel.settings.setAutoUpdateCheck(!autoUpdateCheck) }
+                    )
+                }
+                add {
+                    // Update source: published releases vs. the newest CI build.
+                    var channelMenuOpen by remember { mutableStateOf(false) }
+                    val channelLabel = stringResource(
+                        if (updateChannel == "ci") R.string.update_channel_ci
+                        else R.string.update_channel_stable
+                    )
+                    SettingsItem(
+                        headlineContent = { Text(stringResource(R.string.update_channel_title)) },
+                        supportingContent = {
+                            Text(
+                                stringResource(
+                                    if (updateChannel == "ci") R.string.update_channel_ci_desc
+                                    else R.string.update_channel_stable_desc
+                                )
+                            )
+                        },
+                        leadingContent = { Icon(Icons.Default.Science, null, tint = MaterialTheme.colorScheme.primary) },
+                        trailingContent = {
+                            Box {
+                                Text(
+                                    channelLabel,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                DropdownMenu(
+                                    expanded = channelMenuOpen,
+                                    onDismissRequest = { channelMenuOpen = false },
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                    tonalElevation = 16.dp,
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    listOf(
+                                        "stable" to R.string.update_channel_stable,
+                                        "ci" to R.string.update_channel_ci,
+                                    ).forEach { (id, labelRes) ->
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(labelRes)) },
+                                            leadingIcon = {
+                                                if (updateChannel == id) {
+                                                    Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
+                                                }
+                                            },
+                                            onClick = {
+                                                viewModel.settings.setUpdateChannel(id)
+                                                updateStatus = null
+                                                channelMenuOpen = false
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.clickable { channelMenuOpen = true },
                     )
                 }
                 add {

@@ -47,9 +47,6 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # proot/talloc are built by a GNUmakefile outside CMake and dropped into
-      # jniLibs (gitignored). Without this step the release APK ships without
-      # libproot_exec.so and the Linux sandbox cannot start.
       # proot/talloc are built by a GNUmakefile outside CMake and dropped into jniLibs
       # (gitignored); without this the release APK ships no libproot_exec.so and the
       # Linux sandbox cannot start.
@@ -63,11 +60,13 @@ jobs:
           test -d "$ANDROID_NDK_HOME" || { echo "pinned NDK missing: $ANDROID_NDK_HOME"; exit 1; }
           chmod +x ./build-proot.sh && ./build-proot.sh
 
-      - name: Build F-Droid Release APK
-        run: chmod +x ./gradlew && ./gradlew assembleFdroidRelease
+      - name: Build Release APKs
+        run: chmod +x ./gradlew && ./gradlew assembleRelease
 
-      - name: Upload APK
+      # The name is a contract: the update Worker's CI channel looks for exactly
+      # this artifact (see CI_ARTIFACT_NAME in server/update-check/src/index.js).
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: agora-fdroid-release
-          path: app/build/outputs/apk/fdroid/release/*.apk
+          name: agora-release
+          path: app/build/outputs/apk/release/*.apk

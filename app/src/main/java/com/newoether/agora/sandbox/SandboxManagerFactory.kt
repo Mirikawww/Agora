@@ -1,10 +1,9 @@
 package com.newoether.agora.sandbox
 
 /**
- * Factory for creating [SandboxManager] instances.
- * Each flavor provides its own implementation:
- * - fdroid → FdroidSandboxManagerFactory (creates ProotSandboxManager)
- * - play   → PlaySandboxManagerFactory (creates no-op stub)
+ * Factory for creating [SandboxManager] instances. The single implementation is
+ * [ProotSandboxManagerFactory]; there used to be a no-op stub behind a `play`
+ * product flavor, which no longer exists.
  */
 interface SandboxManagerFactory {
     /** Create a new SandboxManager instance. */

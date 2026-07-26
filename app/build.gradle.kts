@@ -59,6 +59,15 @@ android {
             versionCode = 30
                                     versionName = "1.4.2"
 
+            // Which CI run produced this APK, so the in-app CI update channel can tell
+            // "newer build" from "same build" — every CI build shares one versionName,
+            // so semver comparison is useless there. 0 = built locally, not by CI.
+            buildConfigField(
+                "int",
+                "CI_RUN_NUMBER",
+                (System.getenv("GITHUB_RUN_NUMBER") ?: "0").toIntOrNull()?.toString() ?: "0"
+            )
+
             // Native code (llama/proot) is currently arm64-only; non-arm64 APKs ship
             // without those .so files (cloud chat still works; local/sandbox needs arm64).
             ndk {
@@ -91,7 +100,7 @@ android {
         }
 
     signingConfigs {
-        // Shared custom keystore for debug + release so installFdroidDebug can overwrite
+        // Shared custom keystore for debug + release so installDebug can overwrite
         // a previously installed release (and vice versa) without SIGNATURE_MISMATCH.
         if (hasAgoraKeystore) {
             getByName("debug") {
@@ -134,16 +143,6 @@ android {
         }
     }
 
-    flavorDimensions += "store"
-    productFlavors {
-        create("play") {
-            dimension = "store"
-        }
-        create("fdroid") {
-            dimension = "store"
-        }
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -154,6 +153,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     // Extract .so files to disk for ProcessBuilder exec (Kai approach)
@@ -176,35 +176,18 @@ android {
 // No CMake target is needed — the binaries are manually managed prebuilts.
 // talloc is built with SONAME=libtalloc.so (no version) so AGP packaging works.
 
-tasks.register<Copy>("copyPlayApk") {
-    from("build/outputs/apk/play/release")
+tasks.register<Copy>("copyReleaseApk") {
+    from("build/outputs/apk/release")
     into("release")
     include("*.apk")
-}
-
-tasks.register<Copy>("copyFdroidApk") {
-    from("build/outputs/apk/fdroid/release")
-    into("release")
-    include("*.apk")
-}
-
-tasks.register<Copy>("copyPlayBundle") {
-    from("build/outputs/bundle/playRelease")
-    into("release")
-    include("*.aab")
 }
 
 afterEvaluate {
-    tasks.named("assemblePlayRelease") {
-        finalizedBy("copyPlayApk")
-    }
-    tasks.named("assembleFdroidRelease") {
-        finalizedBy("copyFdroidApk")
-    }
-    tasks.named("bundlePlayRelease") {
-        finalizedBy("copyPlayBundle")
+    tasks.named("assembleRelease") {
+        finalizedBy("copyReleaseApk")
     }
 }
+
 
 dependencies {
     implementation(libs.androidx.core.ktx)

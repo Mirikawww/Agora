@@ -9,6 +9,7 @@ import com.newoether.agora.data.local.ChatDatabase
 import com.newoether.agora.data.repository.ConversationRepository
 import com.newoether.agora.data.repository.SettingsRepository
 import com.newoether.agora.data.AutoBackupManager
+import com.newoether.agora.sandbox.ProotSandboxManagerFactory
 import com.newoether.agora.sandbox.SandboxManagerFactory
 import com.newoether.agora.viewmodel.ChatViewModel
 import com.newoether.agora.viewmodel.ChatViewModelFactory
@@ -48,30 +49,15 @@ class AppContainer(private val appContext: Context) {
         SettingsRepository(settingsManager, appScope)
     }
 
-    // ── Sandbox (flavor-specific) ─────────────────────────────
+    // ── Sandbox ───────────────────────────────────────────────
+    // Was reflection-based while a play flavor shipped a no-op stub instead of
+    // proot; with the flavors gone this is a plain construction.
 
     val sandboxManagerFactory: SandboxManagerFactory? by lazy {
         try {
-            // fdroid flavor provides FdroidSandboxManagerFactory
-            Class.forName("com.newoether.agora.sandbox.FdroidSandboxManagerFactory")
-                .getDeclaredConstructor(android.content.Context::class.java)
-                .newInstance(appContext) as SandboxManagerFactory
-        } catch (_: ClassNotFoundException) {
-            // play flavor provides PlaySandboxManagerFactory
-            try {
-                Class.forName("com.newoether.agora.sandbox.PlaySandboxManagerFactory")
-                    .getDeclaredConstructor()
-                    .newInstance() as SandboxManagerFactory
-            } catch (_: ClassNotFoundException) {
-                null
-            } catch (e: Exception) {
-                // Class exists but failed to construct — this is a real error, not a flavor miss.
-                com.newoether.agora.util.DebugLog.e("AppContainer", "PlaySandboxManagerFactory init failed", e)
-                null
-            }
+            ProotSandboxManagerFactory(appContext)
         } catch (e: Exception) {
-            // FdroidSandboxManagerFactory exists but failed to construct.
-            com.newoether.agora.util.DebugLog.e("AppContainer", "FdroidSandboxManagerFactory init failed", e)
+            com.newoether.agora.util.DebugLog.e("AppContainer", "sandbox factory init failed", e)
             null
         }
     }

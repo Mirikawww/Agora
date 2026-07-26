@@ -80,6 +80,7 @@ class SettingsRepository(
     val ragSearchEnabled: StateFlow<Boolean> = hot(settingsManager.ragSearchEnabled, false)
     val autoCacheEnabled: StateFlow<Boolean> = hot(settingsManager.autoCacheEnabled, true)
     val autoUpdateCheck: StateFlow<Boolean> = hot(settingsManager.autoUpdateCheck, true)
+    val updateChannel: StateFlow<String> = hot(settingsManager.updateChannel, "stable")
     val lastUpdateCheckTime: StateFlow<Long> = hot(settingsManager.lastUpdateCheckTime, 0L)
     val modelSearchMethod: StateFlow<String> = hot(settingsManager.modelSearchMethod, "keyword")
     val manualSearchMethod: StateFlow<String> = hot(settingsManager.manualSearchMethod, "keyword")
@@ -537,6 +538,7 @@ class SettingsRepository(
     fun setRagSearchEnabled(enabled: Boolean) = scope.launch { settingsManager.saveRagSearchEnabled(enabled) }
     fun setAutoCacheEnabled(enabled: Boolean) = scope.launch { settingsManager.saveAutoCacheEnabled(enabled) }
     fun setAutoUpdateCheck(enabled: Boolean) = scope.launch { settingsManager.saveAutoUpdateCheck(enabled) }
+    fun setUpdateChannel(channel: String) = scope.launch { settingsManager.saveUpdateChannel(channel) }
     fun setLastUpdateCheckTime(time: Long) = scope.launch { settingsManager.saveLastUpdateCheckTime(time) }
     fun setModelSearchMethod(method: String) = scope.launch { settingsManager.saveModelSearchMethod(method) }
     fun setManualSearchMethod(method: String) = scope.launch { settingsManager.saveManualSearchMethod(method) }

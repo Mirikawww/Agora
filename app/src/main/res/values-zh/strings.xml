@@ -806,6 +806,11 @@
     <string name="about_privacy_policy">隐私政策</string>
     <string name="about_source_code">源代码</string>
     <string name="about_version">版本</string>
+    <string name="update_channel_title">更新源</string>
+    <string name="update_channel_stable">稳定版</string>
+    <string name="update_channel_stable_desc">仅正式发布的版本</string>
+    <string name="update_channel_ci">CI 版</string>
+    <string name="update_channel_ci_desc">最新自动构建，可能不稳定</string>
     <string name="about_updates">更新</string>
     <string name="about_check_updates">检查更新</string>
     <string name="about_check_updates_desc">从更新服务器检查最新版本</string>

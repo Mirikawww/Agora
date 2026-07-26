@@ -87,6 +87,56 @@ object UpdateInstaller {
         DownloadResult(out, out.length())
     }
 
+    /**
+     * Same as [downloadApk] but for the CI channel, whose payload is the Actions
+     * artifact — a **ZIP of every split APK**. Downloads it, then extracts the APK
+     * matching this device's ABI (falling back to the universal one) and returns
+     * that file, ready for [installWithDefaultInstaller].
+     */
+    suspend fun downloadApkFromZip(
+        url: String,
+        context: Context,
+        onProgress: (Float?) -> Unit = {},
+    ): DownloadResult = withContext(Dispatchers.IO) {
+        // Reserve the last 5% of the bar for extraction so it does not sit at 100%
+        // while a 50 MB archive is still being unpacked.
+        val zip = downloadApk(url, context) { f -> onProgress(f?.let { it * 0.95f }) }.file
+        val dir = zip.parentFile ?: File(context.cacheDir, "updates")
+        val out = File(dir, "agora-update-extracted.apk")
+        if (out.exists()) out.delete()
+
+        try {
+            java.util.zip.ZipFile(zip).use { archive ->
+                val apks = archive.entries().asSequence()
+                    .filter { !it.isDirectory && it.name.lowercase().endsWith(".apk") }
+                    .toList()
+                if (apks.isEmpty()) throw IOException("Archive contains no APK")
+
+                // Split APK names carry their ABI (app-arm64-v8a-release.apk); prefer the
+                // device's primary ABI, then any supported one, then universal.
+                val abis = android.os.Build.SUPPORTED_ABIS.orEmpty()
+                val entry = abis.firstNotNullOfOrNull { abi ->
+                    apks.firstOrNull { it.name.contains(abi, ignoreCase = true) }
+                }
+                    ?: apks.firstOrNull { it.name.contains("universal", ignoreCase = true) }
+                    ?: apks.first()
+
+                archive.getInputStream(entry).use { input ->
+                    out.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
+                }
+            }
+        } finally {
+            zip.delete()
+        }
+
+        if (out.length() < 1024L) {
+            out.delete()
+            throw IOException("Extracted APK too small")
+        }
+        onProgress(1f)
+        DownloadResult(out, out.length())
+    }
+
     fun canRequestInstall(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.packageManager.canRequestPackageInstalls()

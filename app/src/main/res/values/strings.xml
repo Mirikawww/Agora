@@ -826,6 +826,11 @@
     <string name="about_privacy_policy">Privacy Policy</string>
     <string name="about_source_code">Source Code</string>
     <string name="about_version">Version</string>
+    <string name="update_channel_title">Update source</string>
+    <string name="update_channel_stable">Stable</string>
+    <string name="update_channel_stable_desc">Published releases only</string>
+    <string name="update_channel_ci">CI</string>
+    <string name="update_channel_ci_desc">Newest automated build — may be unstable</string>
     <string name="about_updates">Updates</string>
     <string name="about_check_updates">Check for Updates</string>
     <string name="about_check_updates_desc">Check the update server for the latest release</string>

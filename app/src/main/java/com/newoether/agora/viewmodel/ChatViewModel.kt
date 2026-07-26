@@ -967,9 +967,19 @@ class ChatViewModel(
     fun getCurrentVersion(): String {
         return try { appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "?" } catch (_: Exception) { "?" }
     }
+    /**
+     * Checks the channel the user selected. The CI channel compares Actions run
+     * numbers (every CI build shares one versionName, so semver cannot tell them
+     * apart); `BuildConfig.CI_RUN_NUMBER` is 0 for locally built APKs, which makes
+     * any CI build count as newer.
+     */
     suspend fun checkForUpdates(): UpdateInfo? {
-        val current = getCurrentVersion()
-        return UpdateChecker.check(current)
+        return when (com.newoether.agora.util.UpdateChannel.from(settings.updateChannel.value)) {
+            com.newoether.agora.util.UpdateChannel.CI ->
+                UpdateChecker.checkCi(com.newoether.agora.BuildConfig.CI_RUN_NUMBER)
+            com.newoether.agora.util.UpdateChannel.STABLE ->
+                UpdateChecker.check(getCurrentVersion())
+        }
     }
 
 

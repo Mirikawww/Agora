@@ -27,7 +27,6 @@ logs/
 /.build-proot/
 app/src/fdroid/assets/alpine-minirootfs.tar.gz
 app/src/main/jniLibs/arm64-v8a/
-app/src/fdroid/jniLibs/arm64-v8a/
 
 # Claude Code
 /.claude/
