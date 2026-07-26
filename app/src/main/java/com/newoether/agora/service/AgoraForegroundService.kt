@@ -1,5 +1,6 @@
 package com.newoether.agora.service
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,12 +13,28 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import android.app.ActivityManager
 import com.newoether.agora.MainActivity
 import com.newoether.agora.R
 import com.newoether.agora.util.CrashReporter
 import com.newoether.agora.util.DebugLog
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
+/**
+ * Keeps the process alive while a generation is in flight.
+ *
+ * **Critical race (historical crash):**
+ * `GenerationManager` called `start()` at the beginning of every generate and
+ * `stop()` in `finally`. With parallel multi-conversation generation (or a
+ * failed generate that ends within a few hundred ms of start), `stopService`
+ * could run **after** `startForegroundService` but **before** `onCreate` →
+ * `startForeground`. Android then kills the app with
+ * `ForegroundServiceDidNotStartInTimeException`.
+ *
+ * Fix: refcount active generations. Only tear down the service when the last
+ * generation ends, and never `stopService` until `startForeground` has
+ * succeeded (defer stop if needed).
+ */
 class AgoraForegroundService : Service() {
 
     companion object {
@@ -26,29 +43,48 @@ class AgoraForegroundService : Service() {
         private const val COMPLETION_CHANNEL_ID = "agora_completed"
         private const val COMPLETION_NOTIFICATION_ID = 2
         private const val TAG = "AgoraForegroundService"
-        private var instance: AgoraForegroundService? = null
 
-        fun start(context: Context) {
+        @Volatile private var instance: AgoraForegroundService? = null
+
+        /** Number of in-flight generations that want the FGS kept up. */
+        private val activeGenerations = AtomicInteger(0)
+
+        /** True once this process has successfully promoted the service. */
+        private val foregroundReady = AtomicBoolean(false)
+
+        /**
+         * stop() arrived before startForeground finished — honour it after promote.
+         * Cleared when a new start() bumps the refcount again.
+         */
+        private val stopAfterPromote = AtomicBoolean(false)
+
+        fun start(context: Context): Boolean {
             val appContext = context.applicationContext
+            val count = activeGenerations.incrementAndGet()
+            stopAfterPromote.set(false)
+            val state = processState()
+            CrashReporter.note("FGS.start count=$count api=${Build.VERSION.SDK_INT} $state ready=${foregroundReady.get()}")
+            // Already promoted and running — just refresh the notification text.
+            if (foregroundReady.get() && instance != null) {
+                instance?.updateNotificationText(instance?.currentText ?: "Generating response...")
+                return true
+            }
             val intent = Intent(appContext, AgoraForegroundService::class.java)
-            // Diagnostic trail for the unreproducible "did not start in time" crash:
-            // record process importance (foreground vs background) at start.
-            val state = try {
-                val info = ActivityManager.RunningAppProcessInfo()
-                ActivityManager.getMyMemoryState(info)
-                "importance=${info.importance} trim=${info.lastTrimLevel}"
-            } catch (e: Exception) { "importance=?" }
-            CrashReporter.note("FGS.start api=${Build.VERSION.SDK_INT} $state")
-            try {
+            return try {
+                createChannel(appContext)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     appContext.startForegroundService(intent)
                 } else {
                     appContext.startService(intent)
                 }
-                CrashReporter.note("FGS.startForegroundService ok")
+                CrashReporter.note("FGS.startService ok count=$count")
+                true
             } catch (e: RuntimeException) {
-                CrashReporter.note("FGS.startForegroundService threw ${e.javaClass.simpleName}")
+                // Could not start — drop the ref so we don't leave a sticky count.
+                activeGenerations.updateAndGet { (it - 1).coerceAtLeast(0) }
+                CrashReporter.note("FGS.startService threw ${e.javaClass.simpleName}: ${e.message}")
                 DebugLog.w(TAG, "Failed to start foreground service", e)
+                false
             }
         }
 
@@ -57,9 +93,30 @@ class AgoraForegroundService : Service() {
         }
 
         fun stop(context: Context) {
-            CrashReporter.note("FGS.stop foregroundStarted=${instance?.foregroundStarted}")
-            val intent = Intent(context, AgoraForegroundService::class.java)
-            context.stopService(intent)
+            val remaining = activeGenerations.updateAndGet { (it - 1).coerceAtLeast(0) }
+            CrashReporter.note(
+                "FGS.stop remaining=$remaining ready=${foregroundReady.get()} hasInstance=${instance != null}",
+            )
+            if (remaining > 0) return
+
+            val svc = instance
+            if (svc != null && foregroundReady.get()) {
+                // Safe: already promoted. Stop normally.
+                try {
+                    context.applicationContext.stopService(
+                        Intent(context.applicationContext, AgoraForegroundService::class.java),
+                    )
+                } catch (e: RuntimeException) {
+                    DebugLog.w(TAG, "stopService failed", e)
+                }
+            } else {
+                // startForegroundService was issued but onCreate/startForeground has not
+                // finished (or failed). Do NOT call stopService yet — that would leave the
+                // system waiting for startForeground and crash with DidNotStartInTime.
+                // Promote path will stopSelf once ready if this flag is still set.
+                stopAfterPromote.set(true)
+                CrashReporter.note("FGS.stop deferred until after promote")
+            }
         }
 
         fun createChannel(context: Context) {
@@ -68,7 +125,7 @@ class AgoraForegroundService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Generation",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_LOW,
             ).apply {
                 description = "Ongoing notification while Agora is generating"
                 setShowBadge(false)
@@ -89,8 +146,8 @@ class AgoraForegroundService : Service() {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setStyle(
                     NotificationCompat.BigTextStyle().bigText(
-                        if (responseText.length > 200) responseText.take(200) + "…" else responseText
-                    )
+                        if (responseText.length > 200) responseText.take(200) + "…" else responseText,
+                    ),
                 )
                 .build()
 
@@ -106,7 +163,7 @@ class AgoraForegroundService : Service() {
             val channel = NotificationChannel(
                 COMPLETION_CHANNEL_ID,
                 "Response Ready",
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_HIGH,
             ).apply {
                 description = "Shown when a response finishes generating"
                 setShowBadge(true)
@@ -122,8 +179,16 @@ class AgoraForegroundService : Service() {
                 Intent(context, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
                 },
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
+        }
+
+        private fun processState(): String = try {
+            val info = ActivityManager.RunningAppProcessInfo()
+            ActivityManager.getMyMemoryState(info)
+            "importance=${info.importance} trim=${info.lastTrimLevel}"
+        } catch (_: Exception) {
+            "importance=?"
         }
     }
 
@@ -133,33 +198,77 @@ class AgoraForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        CrashReporter.note("FGS.onCreate")
+        CrashReporter.note("FGS.onCreate count=${activeGenerations.get()}")
         createChannel(this)
-        val notification = buildGenerationNotification(currentText)
-        // Must NOT catch exceptions here: if startForeground() fails, the real
-        // exception (SecurityException, ForegroundServiceStartNotAllowed, etc.)
-        // must propagate so Crashlytics/logs capture it. Catching + stopSelf()
-        // leaves the system's 5-second timeout to fire, which only surfaces the
-        // useless ForegroundServiceDidNotStartInTimeException instead.
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            notification,
-            foregroundServiceType()
-        )
-        foregroundStarted = true
-        CrashReporter.note("FGS.startForeground ok")
+        promoteToForeground("onCreate")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // startForeground() already called in onCreate(); no re-promote needed.
+        // Belt-and-suspenders: always re-assert foreground here. If onCreate already
+        // promoted, this is a cheap no-op path; if something delayed onCreate's promote
+        // or the process was restarted mid-start, this still beats the 5s deadline.
+        if (!foregroundStarted) {
+            promoteToForeground("onStartCommand")
+        }
+        // If stop() raced ahead of promote, honour it now that we are safe.
+        maybeStopIfRequested("onStartCommand")
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        CrashReporter.note("FGS.onDestroy")
         if (instance === this) instance = null
+        foregroundStarted = false
+        foregroundReady.set(false)
+        // If we were destroyed while gens still claim us, clear the sticky stop flag.
+        // Next start() will re-promote.
+        if (activeGenerations.get() <= 0) {
+            stopAfterPromote.set(false)
+        }
     }
+
+    private fun promoteToForeground(from: String) {
+        if (foregroundStarted) return
+        val notification = buildGenerationNotification(currentText)
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                foregroundServiceType(),
+            )
+            foregroundStarted = true
+            foregroundReady.set(true)
+            CrashReporter.note("FGS.startForeground ok from=$from count=${activeGenerations.get()}")
+        } catch (e: Exception) {
+            // Promote failed (permission / background start denied / etc.). Stop cleanly
+            // so the system does not wait out the 5s timeout and crash the process with a
+            // useless DidNotStartInTime exception.
+            CrashReporter.note("FGS.startForeground FAIL from=$from ${e.javaClass.simpleName}: ${e.message}")
+            DebugLog.w(TAG, "startForeground failed from=$from", e)
+            foregroundStarted = false
+            foregroundReady.set(false)
+            activeGenerations.set(0)
+            stopAfterPromote.set(false)
+            stopSelf()
+            return
+        }
+        maybeStopIfRequested("afterPromote:$from")
+    }
+
+    private fun maybeStopIfRequested(from: String) {
+            if (activeGenerations.get() > 0) {
+                // A new generation claimed us — cancel any deferred stop.
+                stopAfterPromote.set(false)
+                return
+            }
+            // Only stop if stop() already asked us to, and we have safely promoted.
+            if (stopAfterPromote.getAndSet(false) && foregroundStarted) {
+                CrashReporter.note("FGS.stopSelf from=$from")
+                stopSelf()
+            }
+        }
 
     private fun updateNotificationText(text: String) {
         currentText = text
@@ -193,9 +302,21 @@ class AgoraForegroundService : Service() {
         }
     }
 
-    override fun onTimeout(type: Int, reason: Int) {
-        CrashReporter.note("FGS.onTimeout type=$type reason=$reason")
-        DebugLog.w(TAG, "Foreground service timed out: type=$type reason=$reason")
+    override fun onTimeout(startId: Int) {
+        // API 35+: dataSync FGS has a time budget. Drop cleanly.
+        CrashReporter.note("FGS.onTimeout startId=$startId count=${activeGenerations.get()}")
+        DebugLog.w(TAG, "Foreground service timed out startId=$startId")
+        activeGenerations.set(0)
+        stopAfterPromote.set(false)
+        stopSelf()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        CrashReporter.note("FGS.onTimeout startId=$startId type=$fgsType count=${activeGenerations.get()}")
+        DebugLog.w(TAG, "Foreground service timed out: startId=$startId type=$fgsType")
+        activeGenerations.set(0)
+        stopAfterPromote.set(false)
         stopSelf()
     }
 

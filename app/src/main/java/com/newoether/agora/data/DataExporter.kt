@@ -95,8 +95,10 @@ class DataExporter(
         val thinkingLevel: String,
         val thinkingBudgetEnabled: Boolean,
         val thinkingBudgetTokens: Int,
+        val fastEnabled: Boolean = false,
         val autoCacheEnabled: Boolean,
         val providerBaseUrls: Map<String, String>,
+        val providerBalanceConfigs: Map<String, ProviderBalanceConfig> = emptyMap(),
         val titleGenerationEnabled: Boolean,
         val titleGenerationModel: String?,
         val titleGenerationPrompt: String? = null,
@@ -299,8 +301,10 @@ class DataExporter(
                     thinkingLevel = settingsManager.thinkingLevel.first(),
                     thinkingBudgetEnabled = settingsManager.thinkingBudgetEnabled.first(),
                     thinkingBudgetTokens = settingsManager.thinkingBudgetTokens.first(),
+                    fastEnabled = settingsManager.fastEnabled.first(),
                     autoCacheEnabled = settingsManager.autoCacheEnabled.first(),
                     providerBaseUrls = settingsManager.providerBaseUrls.first(),
+                    providerBalanceConfigs = settingsManager.providerBalanceConfigs.first(),
                     titleGenerationEnabled = settingsManager.titleGenerationEnabled.first(),
                     titleGenerationModel = settingsManager.titleGenerationModel.first(),
                     titleGenerationPrompt = settingsManager.titleGenerationPrompt.first(),
@@ -363,17 +367,6 @@ class DataExporter(
                 Json.encodeToStream(keys, zip)
                 zip.closeEntry()
                 step()
-            }
-
-            // ── Custom font file ──
-            val fontPath = settingsManager.customFontPath.first()
-            if (fontPath.isNotBlank()) {
-                val fontFile = File(fontPath)
-                if (fontFile.exists()) {
-                    zip.putNextEntry(ZipEntry("custom_font/${fontFile.name}"))
-                    fontFile.inputStream().use { it.copyTo(zip) }
-                    zip.closeEntry()
-                }
             }
 
             zip.finish()

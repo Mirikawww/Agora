@@ -200,16 +200,28 @@ class McpClientManager(
 
     fun serverForTool(exposedName: String, servers: List<McpServerConfig>): McpServerConfig? {
         if (exposedName in BROKER_NAMES) return null
-        return connections.values.firstOrNull { exposedName in it.exposedTools }?.config
-            ?: servers.firstOrNull { exposedName.startsWith(serverPrefix(it)) }
+        connections.values.firstOrNull { exposedName in it.exposedTools }?.config?.let { return it }
+        // Built-in connectors use short stable names (todoist_add_tasks), not mcp_* hashes.
+        servers.firstOrNull { server ->
+            server.id.startsWith("connector:") &&
+                exposedName.startsWith(sanitize(server.name).ifBlank { "connector" } + "_")
+        }?.let { return it }
+        return servers.firstOrNull { exposedName.startsWith(serverPrefix(it)) }
     }
 
     fun toolNeedsConfirmation(exposedName: String, servers: List<McpServerConfig>): Boolean {
-        val connection = connections.values.firstOrNull { exposedName in it.exposedTools } ?: return false
-        val liveServer = servers.firstOrNull { it.id == connection.config.id } ?: connection.config
-        val originalName = connection.exposedTools[exposedName]?.name ?: return liveServer.confirmToolCalls
-        return liveServer.tools.firstOrNull { it.name == originalName }?.confirmToolCall
-            ?: liveServer.confirmToolCalls
+        val connection = connections.values.firstOrNull { exposedName in it.exposedTools }
+        val server = connection?.let { c -> servers.firstOrNull { it.id == c.config.id } ?: c.config }
+            ?: serverForTool(exposedName, servers)
+            ?: return false
+        // Built-in connectors are first-class tools (like github_request) — never show the
+        // shell-style approval sheet that made Todoist look "unwired".
+        if (server.id.startsWith("connector:")) return false
+        val originalName = connection?.exposedTools?.get(exposedName)?.name
+        if (originalName != null) {
+            server.tools.firstOrNull { it.name == originalName }?.confirmToolCall?.let { return it }
+        }
+        return server.confirmToolCalls
     }
 
     suspend fun invalidate(serverId: String) {
@@ -508,10 +520,21 @@ class McpClientManager(
     private fun remoteDefinitions(connection: Connection): List<ToolDefinition> =
         connection.exposedTools.map { (exposedName, tool) ->
             val schema = McpJson.encodeToJsonElement(ToolSchema.serializer(), tool.inputSchema).jsonObject
+            val isBuiltinConnector = connection.config.id.startsWith("connector:")
+            val description = if (isBuiltinConnector) {
+                // First-class connector tools: no noisy MCP prefix in the schema the model sees.
+                buildString {
+                    append(tool.description.orEmpty().ifBlank { tool.name })
+                    if (isNotBlank()) append(' ')
+                    append('(').append(connection.config.name).append(')')
+                }.trim()
+            } else {
+                "[MCP: ${connection.config.name}] ${tool.description.orEmpty()}".trim()
+            }
             ToolDefinition(
                 function = ToolFunction(
                     name = exposedName,
-                    description = "[MCP: ${connection.config.name}] ${tool.description.orEmpty()}".trim(),
+                    description = description,
                     parameters = ToolParameters(properties = emptyMap(), rawSchema = schema),
                 )
             )
@@ -792,8 +815,15 @@ class McpClientManager(
             "mcp_${sanitize(server.name).take(18)}_${sanitize(server.id).take(6)}_"
 
         fun exposedToolName(server: McpServerConfig, toolName: String): String {
-            val prefix = serverPrefix(server)
             val clean = sanitize(toolName)
+            // Built-in connectors (Todoist, …) are first-class Agora tools: stable, short names
+            // like todoist_add_tasks — not hashed mcp_todoist_xxxxxx_* ids that models avoid.
+            if (server.id.startsWith("connector:")) {
+                val connector = sanitize(server.name).ifBlank { sanitize(server.id.removePrefix("connector:")) }
+                val bare = clean.removePrefix("${connector}_")
+                return "${connector}_$bare".take(64)
+            }
+            val prefix = serverPrefix(server)
             val hash = MessageDigest.getInstance("SHA-256")
                 .digest(toolName.toByteArray())
                 .take(3)

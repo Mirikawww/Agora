@@ -364,7 +364,7 @@
     <string name="web_search_tavily_key">Clé d\'API Tavily</string>
     <string name="web_search_tavily_key_hint">Clé d\'API depuis tavily.com</string>
     <string name="web_search_num_results">Résultats max</string>
-    <string name="web_search_num_results_desc">Nombre de résultats à récupérer : %1$d (1-10)</string>
+    <string name="web_search_num_results_desc">Nombre de résultats à récupérer : %1$d (0-100)</string>
     <string name="web_search_searxng_fallback_desc">Les instances publiques sont souvent limitées en débit. L\'auto-hébergement est recommandé pour une utilisation fiable.</string>
     <string name="web_search_advanced">Avancé</string>
     <string name="web_search_searxng_url">URL de base SearXNG</string>
@@ -534,13 +534,6 @@
     <string name="scheme_style_expressive">Expressif</string>
     <string name="scheme_style_vibrant">Vibrant</string>
     <string name="scheme_style_neutral">Neutre</string>
-    <string name="font_title">Police</string>
-    <string name="font_app_default">Par défaut</string>
-    <string name="font_system_default">Système</string>
-    <string name="font_custom">Personnalisée</string>
-    <string name="font_custom_pick">Choisir un fichier</string>
-    <string name="font_no_file_selected">Aucun fichier</string>
-    <string name="font_invalid_file">Fichier de police invalide</string>
     <string name="dynamic_color">Couleur dynamique</string>
     <string name="dynamic_color_desc">Utiliser les couleurs générées par le système d\'après le fond d\'écran (Android 12+)</string>
     <string name="visual_effects">Effets visuels</string>
@@ -677,6 +670,24 @@
     <string name="provider_no_local_models_desc">Importez un modèle GGUF pour commencer</string>
     <string name="provider_keys_summary">%1$d clé(s) d\'API</string>
     <string name="provider_connection">Connexion</string>
+
+    <!-- Paramètres - Solde du compte fournisseur -->
+    <string name="provider_balance_title">Solde du compte</string>
+    <string name="provider_balance_fetch">Récupérer le solde du compte</string>
+    <string name="provider_balance_path">Chemin de l\'API de solde</string>
+    <string name="provider_balance_json_key">Clé JSON du résultat</string>
+    <string name="provider_balance_hint">Le chemin est ajouté à l\'URL de base (ex. /credits). La clé est un chemin pointé dans la réponse (ex. data.total_usage).</string>
+    <string name="provider_balance_refresh">Actualiser</string>
+    <string name="provider_balance_querying">Interrogation…</string>
+    <string name="provider_balance_value">Solde : %1$s</string>
+    <string name="provider_balance_incomplete">Renseignez le chemin et la clé JSON</string>
+    <string name="provider_balance_error_no_base_url">Définissez d\'abord une URL de base</string>
+    <string name="provider_balance_error_network">Erreur réseau : %1$s</string>
+    <string name="provider_balance_error_http">Échec de la requête : %1$s</string>
+    <string name="provider_balance_error_key">Clé \"%1$s\" introuvable dans la réponse</string>
+    <string name="provider_balance_error_json">La réponse n\'est pas un JSON valide</string>
+    <string name="provider_balance_error_empty">Réponse vide</string>
+    <string name="provider_balance_error_generic">Échec de la consultation du solde</string>
     <string name="import_model_chat">Importer un modèle GGUF</string>
     <string name="add_local_chat_model">Ajouter un modèle local</string>
     <string name="local_ctx_size">Taille du contexte</string>
@@ -825,9 +836,6 @@
     <string name="could_not_read_file">Impossible de lire le fichier</string>
 
     <!-- Documentation -->
-    <string name="documentation">Documentation</string>
-    <string name="show_documentation_links">Afficher les liens de documentation</string>
-    <string name="show_documentation_links_desc">Afficher le bouton de documentation sur les pages de paramètres</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">Bienvenue sur Agora</string>
@@ -916,10 +924,10 @@
 
     <!-- Crash reporting -->
     <string name="crash_title">Agora s\'est fermé de façon inattendue</string>
-    <string name="crash_message">Désolé pour ce désagrément. Vous pouvez aider à corriger cela en envoyant un rapport de plantage anonyme.</string>
+    <string name="crash_message">Désolé. Les détails ci-dessous restent sur votre appareil — copiez-les dans un ticket si vous souhaitez aider à corriger le problème.</string>
     <string name="crash_submit">Envoyer le rapport</string>
-    <string name="crash_dismiss">Ne pas envoyer</string>
-    <string name="crash_privacy_note">Seul le journal de plantage est envoyé à newoether.space. Aucune autre information n\'est collectée.</string>
+    <string name="crash_dismiss">Fermer</string>
+    <string name="crash_privacy_note">Le journal de plantage reste sur votre appareil ; rien n\'est envoyé. Copiez-le dans un ticket pour le signaler.</string>
     <string name="crash_submitted">Rapport de plantage envoyé. Merci !</string>
     <string name="settings_group_network">Réseau</string>
     <string name="settings_proxy">Proxy</string>

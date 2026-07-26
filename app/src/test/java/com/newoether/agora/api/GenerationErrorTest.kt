@@ -104,4 +104,16 @@ class GenerationErrorTest {
     fun `Timeout userMessage`() {
         assertEquals("Request timed out.", GenerationError.Timeout.userMessage())
     }
+
+    @Test
+    fun `errors expose diagnostic origin`() {
+        assertEquals(GenerationError.Origin.API, GenerationError.Api("bad", null, "bad request").origin)
+        assertEquals(GenerationError.Origin.API, GenerationError.SseParse("data", "bad json").origin)
+        assertEquals(GenerationError.Origin.API, GenerationError.Network(503, "down").origin)
+        assertEquals(GenerationError.Origin.NETWORK, GenerationError.Network(0, "DNS failed").origin)
+        assertEquals(GenerationError.Origin.NETWORK, GenerationError.Timeout.origin)
+        assertEquals(GenerationError.Origin.TOOL, GenerationError.ToolExecution("search", "{}", "failed").origin)
+        assertEquals(GenerationError.Origin.CONFIGURATION, GenerationError.Configuration("missing key").origin)
+        assertEquals(GenerationError.Origin.APP, GenerationError.Unknown(RuntimeException("boom")).origin)
+    }
 }

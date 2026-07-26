@@ -44,7 +44,6 @@ fun SettingsShellPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val density = androidx.compose.ui.platform.LocalDensity.current
     var newlyAddedDeviceId by remember { mutableStateOf<String?>(null) }
     var deleteConfirmDeviceId by remember { mutableStateOf<String?>(null) }
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
 
     // ── Sandbox navigation ──
     var showSandboxMgmt by remember { mutableStateOf(false) }
@@ -60,7 +59,6 @@ fun SettingsShellPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 SettingsSandboxPage(
                     sandboxManager = viewModel.sandboxManager!!,
                     onBack = { showSandboxMgmt = false },
-                    showDocFab = showDocFab
                 )
             }
         } else {
@@ -69,7 +67,6 @@ fun SettingsShellPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 title = stringResource(R.string.shell_title),
                 onBack = onBack,
                 scrollState = scrollState,
-                floatingActionButton = { if (showDocFab) DocumentationFab("shell.md") }
             ) {
             SettingsGroupColumn {
                 SettingsGroup(title = stringResource(R.string.shell_title), items = buildList {
@@ -152,7 +149,6 @@ fun SettingsShellPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 )
             }
 
-            if (showDocFab) Spacer(Modifier.height(80.dp))
             } // Scaffold content
         } // else
     } // GuardedAnimatedContent
@@ -303,7 +299,8 @@ private fun DeviceEditor(
                     ExposedDropdownMenu(
                         expanded = typeMenuExpanded,
                         onDismissRequest = { typeMenuExpanded = false },
-                        shape = RoundedCornerShape(16.dp)
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     ) {
                         DropdownMenuItem(text = { Text("Conch") }, onClick = { typeInput = "conch"; typeMenuExpanded = false }, leadingIcon = { Icon(Icons.Default.Cable, null) })
                         DropdownMenuItem(text = { Text("SSH") }, onClick = { typeInput = "ssh"; typeMenuExpanded = false }, leadingIcon = { Icon(Icons.Default.Cable, null) })

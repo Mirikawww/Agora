@@ -68,13 +68,15 @@ fun SettingsGroup(
 ) {
     val effectiveBottom = if (LocalSettingsGroupSpacing.current) 0.dp else bottomPadding
     Column(modifier = modifier.fillMaxWidth().padding(bottom = effectiveBottom)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-        )
-        Column(modifier = Modifier.fillMaxWidth()) {
+            if (title.isNotBlank()) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                )
+            }
+            Column(modifier = Modifier.fillMaxWidth()) {
             items.forEachIndexed { index, item ->
                 if (index > 0) {
                     Spacer(modifier = Modifier.height(2.dp))
@@ -179,6 +181,8 @@ private val settingsGroups = listOf(
         SettingsCategory("search", R.string.search_title, R.string.search_desc, Icons.Default.Search),
         SettingsCategory("mcp", R.string.mcp_title, R.string.mcp_desc, McpServerIcon),
         SettingsCategory("shell", R.string.shell_title, R.string.shell_desc, Icons.Default.Terminal),
+        SettingsCategory("skills", R.string.settings_skills, R.string.settings_skills_desc, Icons.Default.AutoAwesome),
+        SettingsCategory("connectors", R.string.settings_connectors, R.string.settings_connectors_desc, Icons.Default.ElectricalServices),
     )),
     SettingsGroupData(titleRes = R.string.settings_group_network, items = listOf(
         SettingsCategory("proxy", R.string.settings_proxy, R.string.settings_proxy_desc, Icons.Default.Lan),
@@ -215,15 +219,34 @@ fun SettingsScreen(
         }
     }
 
+    // Nested settings routes (skills → store, connectors → github, …) stay non-null on
+    // both sides of a back step. Derive forward from stack depth so returning store→skills
+    // animates backward instead of looking like a fresh push of Skills from the right.
+    fun settingsNavDepth(category: String?): Int = when (category) {
+        null -> 0
+        "skills_store", "connector_github", "connector_todoist", "connector_notion" -> 2
+        else -> 1
+    }
+    var previousCategory by remember { mutableStateOf(selectedCategory) }
+    val transitionForward = settingsNavDepth(selectedCategory) >= settingsNavDepth(previousCategory)
+    LaunchedEffect(selectedCategory) {
+        previousCategory = selectedCategory
+    }
+
     PredictiveBackHandler(enabled = selectedCategory != null) { events ->
         events.collect { }
-        onSelectedCategoryChange(null)
+        // Nested pages pop one level; root category clears to the settings home.
+        when (selectedCategory) {
+            "skills_store" -> onSelectedCategoryChange("skills")
+            "connector_github", "connector_todoist", "connector_notion" -> onSelectedCategoryChange("connectors")
+            else -> onSelectedCategoryChange(null)
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         GuardedAnimatedContent(
             targetState = selectedCategory,
-            forward = selectedCategory != null
+            forward = transitionForward,
         ) { category ->
             when (category) {
                 "provider" -> SettingsProviderPage(viewModel, onBack = { onSelectedCategoryChange(null) })
@@ -234,6 +257,25 @@ fun SettingsScreen(
                 "imagegen" -> SettingsImageGenPage(viewModel, onBack = { onSelectedCategoryChange(null) })
                 "shell" -> SettingsShellPage(viewModel, onBack = { onSelectedCategoryChange(null) })
                 "mcp" -> SettingsMcpPage(viewModel, onBack = { onSelectedCategoryChange(null) })
+                "skills" -> SettingsSkillsPage(
+                    viewModel,
+                    onBack = { onSelectedCategoryChange(null) },
+                    onOpenStore = { onSelectedCategoryChange("skills_store") },
+                )
+                "skills_store" -> SettingsSkillsStorePage(
+                    viewModel,
+                    onBack = { onSelectedCategoryChange("skills") },
+                )
+                "connectors" -> SettingsConnectorsPage(
+                    viewModel,
+                    onBack = { onSelectedCategoryChange(null) },
+                    onOpenGithub = { onSelectedCategoryChange("connector_github") },
+                    onOpenTodoist = { onSelectedCategoryChange("connector_todoist") },
+                    onOpenNotion = { onSelectedCategoryChange("connector_notion") },
+                )
+                "connector_github" -> SettingsGithubConnectorDetailPage(viewModel, onBack = { onSelectedCategoryChange("connectors") })
+                "connector_todoist" -> SettingsTodoistConnectorDetailPage(viewModel, onBack = { onSelectedCategoryChange("connectors") })
+                "connector_notion" -> SettingsNotionConnectorDetailPage(viewModel, onBack = { onSelectedCategoryChange("connectors") })
                 "proxy" -> SettingsProxyPage(viewModel, onBack = { onSelectedCategoryChange(null) })
                 "language" -> SettingsLanguagePage(viewModel, onBack = { onSelectedCategoryChange(null) })
                 "titlegen" -> SettingsTitleGenPage(viewModel, onBack = { onSelectedCategoryChange(null) })

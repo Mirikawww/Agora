@@ -22,6 +22,8 @@ import com.newoether.agora.model.ModelId
 
 import com.newoether.agora.model.apiModelName
 
+import com.newoether.agora.tool.NotionConnector
+import com.newoether.agora.tool.TodoistConnector
 import com.newoether.agora.util.Constants
 
 import kotlinx.coroutines.flow.StateFlow
@@ -63,6 +65,11 @@ class GenerationRequestBuilder(
     // resolveProviderKey 需要 emit snackbar
 
     private val onSnackbar: (String) -> Unit,
+    private val forceWebSearch: () -> Boolean = { false },
+    private val forceImageGen: () -> Boolean = { false },
+    private val forceGithub: () -> Boolean = { false },
+    private val forceTodoist: () -> Boolean = { false },
+    private val forceNotion: () -> Boolean = { false },
 
 ) {
 
@@ -78,7 +85,8 @@ class GenerationRequestBuilder(
 
         val providerName = providerRegistry.providerForModel(modelId)
 
-        val activeKey = settings.resolveActiveKey(providerName) ?: ""
+        // Prefer the key that owns this model in the catalog; do not rotate across keys.
+        val activeKey = settings.resolveApiKeyForModel(modelId, providerName) ?: ""
 
         if (!providerRegistry.isConfigured(providerName, activeKey)) {
 
@@ -196,9 +204,9 @@ class GenerationRequestBuilder(
 
             thinkingBudgetTokens = overrides.thinkingBudgetTokens ?: settings.thinkingBudgetTokens.value,
 
-            fastEnabled = overrides.fastEnabled ?: false,
+            fastEnabled = overrides.fastEnabled ?: settings.fastEnabled.value,
 
-            webSearchEnabled = overrides.webSearchEnabled ?: settings.webSearchEnabled.value,
+            webSearchEnabled = if (forceWebSearch()) true else (overrides.webSearchEnabled ?: settings.webSearchEnabled.value),
 
             shellEnabled = if (settings.shellEnabled.value) (overrides.shellEnabled ?: true) else false
 
@@ -249,8 +257,20 @@ class GenerationRequestBuilder(
             modelId = parsedModel.modelName,
 
             apiKey = activeKey,
+            alternateApiKeys = emptyList(), // no multi-key failover: wrong key = user/config issue
 
-            effectiveSystemPrompt = resolvedSystemPrompt,
+            effectiveSystemPrompt = run {
+                var prompt = resolvedSystemPrompt.orEmpty()
+                if (forceWebSearch()) {
+                    val instr = "You MUST call the web_search tool to research before answering. Do not answer from memory alone."
+                    prompt = if (prompt.isBlank()) instr else prompt + "\n\n" + instr
+                }
+                if (forceImageGen()) {
+                    val instr = "You MUST call the generate_image tool to create the requested image(s). Do not only describe the image in text."
+                    prompt = if (prompt.isBlank()) instr else prompt + "\n\n" + instr
+                }
+                prompt.ifBlank { null }
+            },
 
             maxContextWindow = effectiveSettings.contextWindow ?: settings.maxContextWindow.value,
 
@@ -266,7 +286,7 @@ class GenerationRequestBuilder(
 
             thinkingBudgetTokens = effectiveSettings.thinkingBudgetTokens ?: settings.thinkingBudgetTokens.value,
 
-            fastEnabled = effectiveSettings.fastEnabled == true && capabilities.fast,
+            fastEnabled = (effectiveSettings.fastEnabled ?: settings.fastEnabled.value) && capabilities.fast,
 
             baseUrl = providerRegistry.getEffectiveBaseUrl(providerName),
 
@@ -308,7 +328,7 @@ class GenerationRequestBuilder(
 
             searchContextWindow = settings.searchContextWindow.value,
 
-            webSearchEnabled = effectiveSettings.webSearchEnabled ?: settings.webSearchEnabled.value,
+            webSearchEnabled = if (forceWebSearch()) true else (effectiveSettings.webSearchEnabled ?: settings.webSearchEnabled.value),
 
             webSearchApiKeys = settings.webSearchApiKeys.value,
 
@@ -318,24 +338,47 @@ class GenerationRequestBuilder(
 
             webSearchBaseUrl = settings.webSearchBaseUrl.value,
 
-            imageGenEnabled = settings.imageGenEnabled.value && settings.imageGenModel.value?.contains(":") == true,
-
+            imageGenEnabled = (settings.imageGenEnabled.value || forceImageGen()) && settings.imageGenModel.value?.contains(":") == true,
             imageGenApiKey = resolveImageGenApiKey(),
-
             imageGenBaseUrl = resolveImageGenBaseUrl(),
-
             imageGenModel = resolveImageGenModelId(),
-
             imageGenSize = settings.imageGenSize.value,
-
+            forceImageGen = forceImageGen(),
+            skillsEnabled = settings.skillsEnabled.value,
+            githubEnabled = (settings.githubConnectorEnabled.value || forceGithub()) && settings.githubToken.value.isNotBlank(),
+            githubToken = settings.githubToken.value,
+            todoistEnabled = TodoistConnector.isActive(
+                enabled = settings.todoistConnectorEnabled.value || forceTodoist(),
+                oauth = settings.todoistOAuth.value,
+            ),
+            todoistOAuth = settings.todoistOAuth.value,
+            notionEnabled = NotionConnector.isActive(
+                enabled = settings.notionConnectorEnabled.value || forceNotion(),
+                oauth = settings.notionOAuth.value,
+            ),
+            notionOAuth = settings.notionOAuth.value,
             shellEnabled = effectiveSettings.shellEnabled ?: settings.shellEnabled.value,
-
             shellDevices = settings.shellDevices.value,
-
-            mcpEnabled = settings.mcpEnabled.value,
-
-            mcpServers = settings.mcpServers.value,
-
+            // Built-in connectors inject synthetic MCP servers (OAuth). Keep the MCP tool
+            // pipeline on whenever user MCP or any built-in connector is enabled.
+            mcpEnabled = settings.mcpEnabled.value ||
+                settings.todoistConnectorEnabled.value || forceTodoist() ||
+                settings.notionConnectorEnabled.value || forceNotion(),
+            mcpServers = buildList {
+                val todoistOn = settings.todoistConnectorEnabled.value || forceTodoist()
+                val notionOn = settings.notionConnectorEnabled.value || forceNotion()
+                // Only strip a hand-added row when the matching connector is ON (its synthetic
+                // row replaces it). With the connector off, stripping would leave the user with
+                // no server at all for that service.
+                addAll(
+                    NotionConnector.withoutBuiltin(
+                        TodoistConnector.withoutBuiltin(settings.mcpServers.value, todoistOn),
+                        notionOn
+                    )
+                )
+                if (todoistOn) add(TodoistConnector.serverConfig(settings.todoistOAuth.value))
+                if (notionOn) add(NotionConnector.serverConfig(settings.notionOAuth.value))
+            },
             sandboxEnabled = settings.sandboxEnabled.value,
 
             imageTranscriptionEnabled = settings.imageTranscriptionEnabledModels.value.contains(currentActiveModel.value),

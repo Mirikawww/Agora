@@ -42,7 +42,6 @@ import java.util.UUID
 fun SettingsPromptsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val systemPrompts by viewModel.settings.systemPrompts.collectAsState()
     val activeSystemPromptId by viewModel.settings.activeSystemPromptId.collectAsState()
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
     var editingEntry by remember { mutableStateOf<SystemPromptEntry?>(null) }
     var showDeletePromptConfirm by remember { mutableStateOf<SystemPromptEntry?>(null) }
     var showTemplatePicker by remember { mutableStateOf(false) }
@@ -81,7 +80,6 @@ fun SettingsPromptsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                     editingEntry = null
                 },
                 onBack = { editingEntry = null },
-                showDocFab = showDocFab
             )
         } else {
             PromptList(

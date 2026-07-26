@@ -1,366 +1,452 @@
 package com.newoether.agora.ui.settings
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.newoether.agora.R
-import com.newoether.agora.ui.components.clearFocusOnTap
+import com.newoether.agora.model.ModelId
+import com.newoether.agora.model.ThinkingLevels
+import com.newoether.agora.model.apiModelName
+import com.newoether.agora.ui.chat.GroupedModelMenuContent
+import com.newoether.agora.ui.theme.ChatType
+import com.newoether.agora.util.noOpBringIntoView
 import com.newoether.agora.viewmodel.ChatViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+/**
+ * Single holistic memory settings page.
+ *
+ * One overall memory blob (active memory file) that can be edited manually or
+ * generated in the same card via a compact AI strip. Generation model menu matches
+ * the home picker (grouped models + thinking + fast only).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsMemoryPage(viewModel: ChatViewModel, onBack: () -> Unit) {
-    val accessSavedMemories by viewModel.settings.accessSavedMemories.collectAsState()
     val accessActiveMemory by viewModel.settings.accessActiveMemory.collectAsState()
-    var activeMemoryContent by remember { mutableStateOf("") }
-    var memoryFiles by remember { mutableStateOf<List<com.newoether.agora.data.MemoryManager.MemoryFileInfo>>(emptyList()) }
-    var showFileEditor by remember { mutableStateOf<String?>(null) }
-    var fileEditorContent by remember { mutableStateOf("") }
-    var fileEditorDesc by remember { mutableStateOf("") }
-    var showNewFileDialog by remember { mutableStateOf(false) }
-    var newFileName by remember { mutableStateOf("") }
-    var newFileContent by remember { mutableStateOf("") }
-    var newFileDesc by remember { mutableStateOf("") }
-    var showDeleteFileConfirm by remember { mutableStateOf<String?>(null) }
+    val accessSavedMemories by viewModel.settings.accessSavedMemories.collectAsState()
+    val enabledModels by viewModel.settings.enabledModels.collectAsState()
+    val disabledProviders by viewModel.settings.disabledProviders.collectAsState()
+    val modelAliases by viewModel.settings.modelAliases.collectAsState()
+    val modelKeyNicknames by viewModel.settings.modelKeyNicknames.collectAsState()
+    val selectedChatModel by viewModel.settings.selectedModel.collectAsState()
+    val globalThinkingEnabled by viewModel.settings.thinkingEnabled.collectAsState()
+    val globalThinkingLevel by viewModel.settings.thinkingLevel.collectAsState()
+    val globalFastEnabled by viewModel.settings.fastEnabled.collectAsState()
+
+    var memoryText by remember { mutableStateOf("") }
+    var dirty by remember { mutableStateOf(false) }
+    var generating by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var promptText by remember { mutableStateOf("") }
+    var generateModel by remember { mutableStateOf("") }
+    var modelMenuExpanded by remember { mutableStateOf(false) }
+    // Page-local generation controls (do not mutate chat/app defaults).
+    var genThinkingEnabled by remember { mutableStateOf(false) }
+    var genThinkingLevel by remember { mutableStateOf("medium") }
+    var genFastEnabled by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    val selectableModels = remember(enabledModels, disabledProviders) {
+        enabledModels
+            .filter { model ->
+                val provider = ModelId.parse(model).providerName
+                provider !in disabledProviders
+            }
+            .toSet()
+    }
+
+    val selectedCaps = remember(generateModel, viewModel) {
+        if (generateModel.isBlank()) null else viewModel.modelCapabilitiesFor(generateModel)
+    }
+    val reasoningSupported = selectedCaps?.reasoning == true
+    val fastSupported = selectedCaps?.fast == true
 
     LaunchedEffect(Unit) {
-        activeMemoryContent = viewModel.memoryManager.getActiveMemory()
-        memoryFiles = viewModel.memoryManager.listFiles()
+        memoryText = withContext(Dispatchers.IO) { viewModel.memoryManager.getActiveMemory() }
+        dirty = false
+        dirty = false
+        genThinkingEnabled = globalThinkingEnabled
+        genThinkingLevel = ThinkingLevels.normalize(globalThinkingLevel)
+        genFastEnabled = globalFastEnabled
     }
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
+
+    // Keep a local generation-model selection; default to chat selected model when available.
+    LaunchedEffect(selectableModels, selectedChatModel) {
+        if (generateModel.isBlank() || generateModel !in selectableModels) {
+            generateModel = when {
+                selectedChatModel in selectableModels -> selectedChatModel
+                selectableModels.isNotEmpty() -> selectableModels.first()
+                else -> selectedChatModel
+            }
+        }
+    }
+
+    // If model loses capability, clear local toggles that no longer apply.
+    LaunchedEffect(reasoningSupported, fastSupported) {
+        if (!reasoningSupported) genThinkingEnabled = false
+        if (!fastSupported) genFastEnabled = false
+    }
+
+    // Auto-save memory while typing — no extra Save tap required.
+    LaunchedEffect(memoryText) {
+        if (!dirty) return@LaunchedEffect
+        delay(450)
+        if (!dirty) return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            viewModel.memoryManager.updateActiveMemory(memoryText, mode = "replace")
+        }
+        dirty = false
+    }
+
+    fun saveMemory() {
+        scope.launch(Dispatchers.IO) {
+            viewModel.memoryManager.updateActiveMemory(memoryText, mode = "replace")
+            withContext(Dispatchers.Main) {
+                dirty = false
+                status = null
+            }
+        }
+    }
+
+    fun generateMemory(userInstruction: String) {
+        if (userInstruction.isBlank() || generating) return
+        generating = true
+        status = null
+        scope.launch {
+            try {
+                val result = viewModel.generateHolisticMemory(
+                    userInstruction = userInstruction,
+                    modelIdWithPrefix = generateModel.ifBlank { null },
+                    thinkingEnabled = genThinkingEnabled,
+                    thinkingLevel = genThinkingLevel,
+                    fastEnabled = genFastEnabled,
+                )
+                if (result != null) {
+                    memoryText = result
+                    dirty = true
+                    promptText = ""
+                } else {
+                    status = "fail"
+                }
+            } catch (_: Exception) {
+                status = "fail"
+            } finally {
+                generating = false
+            }
+        }
+    }
+
+    fun displayName(model: String): String {
+        val alias = modelAliases[model]
+        if (!alias.isNullOrBlank()) return alias
+        return ModelId.parse(model).apiModelName
+    }
+
+    val thinkingSummary = when {
+        !reasoningSupported -> null
+        !genThinkingEnabled -> stringResource(R.string.thinking_control_off)
+        else -> genThinkingLevel
+    }
+    val modelSubtitle = buildString {
+        append(if (generateModel.isNotBlank()) displayName(generateModel) else stringResource(R.string.select_model))
+        thinkingSummary?.let {
+            append(" · ")
+            append(it)
+        }
+        if (fastSupported && genFastEnabled) {
+            append(" · ")
+            append(stringResource(R.string.thinking_control_quick))
+        }
+    }
 
     CollapsingSettingsScaffold(
-        title = stringResource(R.string.memory_title),
+        title = stringResource(R.string.memory_holistic_title),
         onBack = onBack,
-        floatingActionButton = { if (showDocFab) DocumentationFab("memory.md") }
     ) {
-            SettingsGroupColumn {
-                SettingsGroup(
-                    title = stringResource(R.string.memory_access_title),
-                    items = listOf(
-                        {
-                            SettingsItem(
-                                headlineContent = { Text(stringResource(R.string.memory_access_saved)) },
-                                supportingContent = { Text(stringResource(R.string.memory_access_saved_desc)) },
-                                leadingContent = { Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.primary) },
-                                trailingContent = {
-                                    Switch(checked = accessSavedMemories, onCheckedChange = { viewModel.settings.setAccessSavedMemories(it) })
-                                },
-                                modifier = Modifier.clickable { viewModel.settings.setAccessSavedMemories(!accessSavedMemories) }
-                            )
-                        },
-                        {
-                            SettingsItem(
-                                headlineContent = { Text(stringResource(R.string.memory_access_active)) },
-                                supportingContent = { Text(stringResource(R.string.memory_access_active_desc)) },
-                                leadingContent = { Icon(Icons.Default.Memory, null, tint = MaterialTheme.colorScheme.primary) },
-                                trailingContent = {
-                                    Switch(checked = accessActiveMemory, onCheckedChange = { viewModel.settings.setAccessActiveMemory(it) })
-                                },
-                                modifier = Modifier.clickable { viewModel.settings.setAccessActiveMemory(!accessActiveMemory) }
-                            )
-                        }
-                    )
+        SettingsGroupColumn {
+            SettingsGroup(
+                title = stringResource(R.string.memory_access_title),
+                items = listOf(
+                    {
+                        SettingsItem(
+                            headlineContent = { Text(stringResource(R.string.memory_access_active)) },
+                            supportingContent = { Text(stringResource(R.string.memory_access_active_desc)) },
+                            leadingContent = {
+                                Icon(Icons.Default.Memory, null, tint = MaterialTheme.colorScheme.primary)
+                            },
+                            trailingContent = {
+                                Switch(
+                                    checked = accessActiveMemory,
+                                    onCheckedChange = { viewModel.settings.setAccessActiveMemory(it) }
+                                )
+                            },
+                            modifier = Modifier.clickable {
+                                viewModel.settings.setAccessActiveMemory(!accessActiveMemory)
+                            }
+                        )
+                    },
+                    {
+                        SettingsItem(
+                            headlineContent = { Text(stringResource(R.string.memory_access_saved)) },
+                            supportingContent = { Text(stringResource(R.string.memory_access_saved_desc)) },
+                            leadingContent = {
+                                Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary)
+                            },
+                            trailingContent = {
+                                Switch(
+                                    checked = accessSavedMemories,
+                                    onCheckedChange = { viewModel.settings.setAccessSavedMemories(it) }
+                                )
+                            },
+                            modifier = Modifier.clickable {
+                                viewModel.settings.setAccessSavedMemories(!accessSavedMemories)
+                            }
+                        )
+                    }
                 )
+            )
 
-                SettingsGroup(
-                    title = stringResource(R.string.memory_active_title),
-                    items = listOf(
-                        {
-                            SettingsItem(
-                                headlineContent = { Text(stringResource(R.string.memory_active_context)) },
-                                supportingContent = {
-                                    Text(
-                                        if (activeMemoryContent.isBlank()) stringResource(R.string.memory_active_empty)
-                                        else activeMemoryContent.take(100) + if (activeMemoryContent.length > 100) "..." else ""
-                                    )
-                                },
-                                leadingContent = { Icon(Icons.Default.Memory, null, tint = MaterialTheme.colorScheme.primary) },
-                                modifier = Modifier.clickable {
-                                    showFileEditor = "ACTIVE_MEMORY"
-                                    fileEditorContent = activeMemoryContent
-                                }
+            Text(
+                text = stringResource(R.string.memory_holistic_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+            )
+
+            // Merged editor + AI generate in one card.
+            SettingsGroup(
+                title = stringResource(R.string.memory_holistic_editor),
+                items = listOf({
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = memoryText,
+                            onValueChange = {
+                                memoryText = it
+                                dirty = true
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 220.dp)
+                                .noOpBringIntoView(),
+                            shape = RoundedCornerShape(16.dp),
+                            minLines = 10,
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (status == "fail") {
+                            Text(
+                                stringResource(R.string.memory_generate_failed),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.labelMedium,
                             )
                         }
-                    )
-                )
 
-                SettingsGroup(
-                    title = stringResource(R.string.memory_saved_title),
-                items = buildList {
-                    if (memoryFiles.isEmpty()) {
-                        add {
-                            SettingsItem(
-                                headlineContent = { Text(stringResource(R.string.memory_no_files), color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                supportingContent = { Text(stringResource(R.string.memory_create_hint), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
-                                leadingContent = { Icon(Icons.Default.Chat, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)) },
-                                modifier = Modifier.heightIn(min = 64.dp)
-                            )
-                        }
-                    } else {
-                        memoryFiles.forEach { file ->
-                            add {
-                                var showFileMenu by remember { mutableStateOf(false) }
-                                val displayName = file.name.removeSuffix(".md")
-                                SettingsItem(
-                                    headlineContent = { Text(displayName, fontWeight = FontWeight.Medium) },
-                                    supportingContent = if (file.description.isNotBlank()) {{ Text(file.description) }} else null,
-                                    leadingContent = { Icon(Icons.Default.Description, null, tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)) },
-                                    trailingContent = {
-                                        Box {
-                                            IconButton(onClick = { showFileMenu = true }) {
-                                                Icon(Icons.Default.MoreVert, stringResource(R.string.menu), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
-                                            }
-                                            DropdownMenu(
-                                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                                                tonalElevation = 16.dp,
-                                                expanded = showFileMenu,
-                                                onDismissRequest = { showFileMenu = false },
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                DropdownMenuItem(
-                                                    text = { Text(stringResource(R.string.provider_edit)) },
-                                                    leadingIcon = { Icon(Icons.Default.Edit, null) },
-                                                    onClick = {
-                                                        showFileMenu = false
-                                                        try {
-                                                            showFileEditor = file.name
-                                                            fileEditorContent = viewModel.memoryManager.readFile(file.name)
-                                                            fileEditorDesc = viewModel.memoryManager.getDescription(file.name)
-                                                        } catch (_: Exception) {}
-                                                    }
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text(stringResource(R.string.provider_delete), color = MaterialTheme.colorScheme.error) },
-                                                    leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
-                                                    onClick = {
-                                                        showFileMenu = false
-                                                        showDeleteFileConfirm = file.name
-                                                    }
-                                                )
-                                            }
-                                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Model / thinking / fast picker (home menu subset).
+                        Box {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = selectableModels.isNotEmpty() && !generating) {
+                                        modelMenuExpanded = true
                                     }
+                                    .padding(bottom = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        stringResource(R.string.memory_generate_model),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = modelSubtitle,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Icon(
+                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = modelMenuExpanded,
+                                onDismissRequest = { modelMenuExpanded = false },
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            ) {
+                                GroupedModelMenuContent(
+                                    enabledModels = selectableModels,
+                                    selectedModel = generateModel,
+                                    modelAliases = modelAliases,
+                                    modelKeyNicknames = modelKeyNicknames,
+                                    thinkingEnabled = genThinkingEnabled,
+                                    thinkingLevel = genThinkingLevel,
+                                    reasoningSupported = reasoningSupported,
+                                    fastSupported = fastSupported,
+                                    fastEnabled = genFastEnabled,
+                                    builtInSearchEnabled = false,
+                                    externalSearchEnabled = false,
+                                    onModelSelect = { model ->
+                                        generateModel = model
+                                        modelMenuExpanded = false
+                                    },
+                                    onModelLongPress = { model ->
+                                        // Page-local only — do not set app default model.
+                                        generateModel = model
+                                        modelMenuExpanded = false
+                                    },
+                                    onThinkingSelect = { effort ->
+                                        if (effort == null) {
+                                            genThinkingEnabled = false
+                                        } else {
+                                            genThinkingEnabled = true
+                                            genThinkingLevel = ThinkingLevels.normalize(effort)
+                                        }
+                                        modelMenuExpanded = false
+                                    },
+                                    onFastToggle = { enabled ->
+                                        genFastEnabled = enabled
+                                        // Keep menu open for switch feel? Home dismisses via row click path;
+                                        // toggle leaves menu open until outside dismiss — match home by not forcing close.
+                                    },
+                                    onDismissAll = { modelMenuExpanded = false },
+                                    showSearchControls = false,
+                                    showAdvanced = false,
+                                    showSettingsLinks = false,
                                 )
                             }
                         }
-                    }
-                    add {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 56.dp)
-                                .clickable { showNewFileDialog = true }
-                                .padding(horizontal = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+
+                        if (generating) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.memory_add), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    stringResource(R.string.memory_generating),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(22.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            tonalElevation = 0.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(vertical = 8.dp)
+                                        .noOpBringIntoView()
+                                ) {
+                                    if (promptText.isEmpty()) {
+                                        Text(
+                                            stringResource(R.string.memory_generate_hint),
+                                            style = ChatType.input,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                    BasicTextField(
+                                        value = promptText,
+                                        onValueChange = { promptText = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        textStyle = ChatType.input.copy(color = MaterialTheme.colorScheme.onSurface),
+                                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                        maxLines = 4,
+                                    )
+                                }
+                                val canSend = promptText.isNotBlank() && !generating && generateModel.isNotBlank()
+                                Surface(
+                                    onClick = {
+                                        if (canSend) generateMemory(promptText)
+                                    },
+                                    enabled = canSend,
+                                    shape = CircleShape,
+                                    color = if (canSend) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceVariant,
+                                    contentColor = if (canSend) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.Send,
+                                            contentDescription = stringResource(R.string.memory_generate),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                }
+                })
             )
-            }
-            if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
-    }
-
-    // Delete file confirmation
-    showDeleteFileConfirm?.let { fileName ->
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-            onDismissRequest = { showDeleteFileConfirm = null },
-            title = { Text(stringResource(R.string.memory_delete_title), fontWeight = FontWeight.Bold) },
-            text = { Text(stringResource(R.string.memory_delete_text, fileName)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.memoryManager.deleteFile(fileName)
-                        memoryFiles = viewModel.memoryManager.listFiles()
-                        showDeleteFileConfirm = null
-                    },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text(stringResource(R.string.provider_delete)) }
-            },
-            dismissButton = { TextButton(onClick = { showDeleteFileConfirm = null }) { Text(stringResource(R.string.provider_cancel)) } }
-        )
-    }
-
-    // File Editor Dialog
-    showFileEditor?.let { fileName ->
-        val isActiveMemory = fileName == "ACTIVE_MEMORY"
-        var editFileName by remember { mutableStateOf(if (isActiveMemory) "" else fileName.removeSuffix(".md")) }
-        var editContent by remember { mutableStateOf(fileEditorContent) }
-        var editDesc by remember { mutableStateOf(fileEditorDesc) }
-
-        AlertDialog(
-            modifier = Modifier.clearFocusOnTap(),
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-            onDismissRequest = {
-                showFileEditor = null
-                fileEditorContent = ""
-                fileEditorDesc = ""
-            },
-            title = { Text(if (isActiveMemory) stringResource(R.string.memory_edit_active) else stringResource(R.string.memory_edit), fontWeight = FontWeight.Bold) },
-            text = {
-                Column(Modifier.fillMaxWidth()) {
-                    if (isActiveMemory) {
-                        Text(
-                            stringResource(R.string.memory_active_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                    } else {
-                        OutlinedTextField(
-                            value = editFileName,
-                            onValueChange = { editFileName = it },
-                            label = { Text(stringResource(R.string.memory_title_hint)) },
-                            singleLine = true,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                    }
-                    if (!isActiveMemory) {
-                        OutlinedTextField(
-                            value = editDesc,
-                            onValueChange = { editDesc = it },
-                            label = { Text(stringResource(R.string.memory_desc_hint)) },
-                            singleLine = true,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                    }
-                    OutlinedTextField(
-                        value = editContent,
-                        onValueChange = { editContent = it },
-                        label = { Text(stringResource(R.string.memory_content_hint)) },
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 200.dp, max = 400.dp),
-                        textStyle = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace
-                        )
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (isActiveMemory) {
-                        viewModel.memoryManager.updateActiveMemory(editContent)
-                        activeMemoryContent = viewModel.memoryManager.getActiveMemory()
-                    } else {
-                        if (editFileName.isNotBlank() && editFileName != fileName.removeSuffix(".md")) {
-                            viewModel.memoryManager.deleteFile(fileName)
-                            viewModel.memoryManager.createFile(editFileName, editContent, editDesc)
-                        } else {
-                            viewModel.memoryManager.editFile(fileName, editContent, description = editDesc)
-                        }
-                        memoryFiles = viewModel.memoryManager.listFiles()
-                    }
-                    showFileEditor = null
-                    fileEditorContent = ""
-                    fileEditorDesc = ""
-                }) { Text(stringResource(R.string.provider_save)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showFileEditor = null
-                    fileEditorContent = ""
-                    fileEditorDesc = ""
-                }) { Text(stringResource(R.string.provider_cancel)) }
-            }
-        )
-    }
-
-    // New File Dialog
-    if (showNewFileDialog) {
-        AlertDialog(
-            modifier = Modifier.clearFocusOnTap(),
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-            onDismissRequest = { showNewFileDialog = false },
-            title = { Text(stringResource(R.string.memory_add_title), fontWeight = FontWeight.Bold) },
-            text = {
-                Column(Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = newFileName,
-                        onValueChange = { newFileName = it },
-                        label = { Text(stringResource(R.string.memory_title_hint)) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = newFileDesc,
-                        onValueChange = { newFileDesc = it },
-                        label = { Text(stringResource(R.string.memory_desc_hint)) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = newFileContent,
-                        onValueChange = { newFileContent = it },
-                        label = { Text(stringResource(R.string.memory_content_hint)) },
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 150.dp),
-                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (newFileName.isNotBlank()) {
-                        try {
-                            viewModel.memoryManager.createFile(newFileName, newFileContent, newFileDesc)
-                            memoryFiles = viewModel.memoryManager.listFiles()
-                        } catch (_: Exception) {}
-                    }
-                    showNewFileDialog = false
-                    newFileName = ""
-                    newFileContent = ""
-                    newFileDesc = ""
-                }) { Text(stringResource(R.string.memory_create)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showNewFileDialog = false
-                    newFileName = ""
-                    newFileContent = ""
-                    newFileDesc = ""
-                }) { Text(stringResource(R.string.provider_cancel)) }
-            }
-        )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
     }
 }

@@ -54,7 +54,7 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsSandboxPage(sandboxManager: SandboxManager, onBack: () -> Unit, showDocFab: Boolean = false) {
+fun SettingsSandboxPage(sandboxManager: SandboxManager, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -158,7 +158,6 @@ fun SettingsSandboxPage(sandboxManager: SandboxManager, onBack: () -> Unit, show
         title = stringResource(R.string.sandbox_mgmt_title),
         onBack = onBack,
         listState = listState,
-        floatingActionButton = { if (showDocFab) DocumentationFab("sandbox.md") }
     ) {
             // ═══ Dashboard ═══
                 item {
@@ -593,10 +592,6 @@ fun SettingsSandboxPage(sandboxManager: SandboxManager, onBack: () -> Unit, show
                         Spacer(Modifier.height(16.dp))
                     }
 
-                    // Doc FAB clearance
-                    if (showDocFab) {
-                        item(key = "doc_spacer") { Spacer(modifier = Modifier.height(80.dp)) }
-                    }
                 }
     }
 

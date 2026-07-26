@@ -78,7 +78,6 @@ fun SystemPromptEditorPage(
         userPostpendItems: List<PromptTemplateItem>
     ) -> Unit,
     onBack: () -> Unit,
-    showDocFab: Boolean = true
 ) {
     val isEdit = entry != null
     var title by remember { mutableStateOf(entry?.title ?: "") }
@@ -103,6 +102,24 @@ fun SystemPromptEditorPage(
     var showVariablePicker by remember { mutableStateOf(false) }
     var insertAtIndex by remember { mutableIntStateOf(-1) }
     var titleError by remember { mutableStateOf(false) }
+    // Simple mode: one big system text box. Advanced: segment editor.
+    var simpleEditor by remember {
+        mutableStateOf(
+            entry == null || (
+                entry.userPrependItems.isEmpty() &&
+                entry.userPostpendItems.isEmpty() &&
+                (entry.resolvedSystemItems.size <= 1)
+            )
+        )
+    }
+    var simpleSystemText by remember {
+        mutableStateOf(
+            entry?.resolvedSystemItems
+                ?.filter { it.type == PromptItemType.CUSTOM }
+                ?.joinToString("\n") { it.value }
+                .orEmpty()
+        )
+    }
 
     val currentItems: MutableList<PromptTemplateItem> = when (selectedTab) {
         0 -> systemItems
@@ -126,12 +143,17 @@ fun SystemPromptEditorPage(
                     titleError = true
                     return@IconButton
                 }
-                onSave(title, systemItems.toList(), userPrependItems.toList(), userPostpendItems.toList())
+                if (simpleEditor) {
+                    val sys = if (simpleSystemText.isBlank()) emptyList()
+                    else listOf(PromptTemplateItem(type = PromptItemType.CUSTOM, value = simpleSystemText))
+                    onSave(title, sys, emptyList(), emptyList())
+                } else {
+                    onSave(title, systemItems.toList(), userPrependItems.toList(), userPostpendItems.toList())
+                }
             }) {
                 Icon(Icons.Default.Save, contentDescription = stringResource(R.string.provider_save))
             }
         },
-        floatingActionButton = { if (showDocFab) DocumentationFab("system-prompts.md") }
     ) {
             OutlinedTextField(
                 value = title,
@@ -146,8 +168,66 @@ fun SystemPromptEditorPage(
                 singleLine = true
             )
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Simple vs advanced editor switch.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    stringResource(R.string.prompts_editor_mode),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                SingleChoiceSegmentedButtonRow {
+                    SegmentedButton(
+                        selected = simpleEditor,
+                        onClick = {
+                            if (!simpleEditor) {
+                                simpleSystemText = systemItems
+                                    .filter { it.type == PromptItemType.CUSTOM }
+                                    .joinToString("\n") { it.value }
+                            }
+                            simpleEditor = true
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                    ) { Text(stringResource(R.string.prompts_editor_simple)) }
+                    SegmentedButton(
+                        selected = !simpleEditor,
+                        onClick = {
+                            if (simpleEditor) {
+                                systemItems.clear()
+                                if (simpleSystemText.isNotBlank()) {
+                                    systemItems.add(
+                                        PromptTemplateItem(type = PromptItemType.CUSTOM, value = simpleSystemText)
+                                    )
+                                }
+                                selectedTab = 0
+                            }
+                            simpleEditor = false
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                    ) { Text(stringResource(R.string.prompts_editor_advanced)) }
+                }
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
+            if (simpleEditor) {
+                OutlinedTextField(
+                    value = simpleSystemText,
+                    onValueChange = { simpleSystemText = it },
+                    label = { Text(stringResource(R.string.template_tab_system)) },
+                    supportingText = { Text(stringResource(R.string.template_tab_system_desc)) },
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 280.dp),
+                    minLines = 12,
+                )
+            } else {
             val tabLabels = listOf(
                 stringResource(R.string.template_tab_system),
                 stringResource(R.string.template_tab_prepend),
@@ -280,10 +360,11 @@ fun SystemPromptEditorPage(
                 )
             }
 
-            if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
     }
 
     // Variable picker bottom sheet
+            } // end advanced editor
+
     if (showVariablePicker) {
         val targetIndex = insertAtIndex
         ModalBottomSheet(

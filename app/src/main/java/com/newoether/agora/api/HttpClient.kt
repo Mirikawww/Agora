@@ -7,6 +7,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSource
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 object HttpClient {
@@ -144,37 +145,49 @@ object HttpClient {
         .proxyAuthenticator(proxyAuthenticator)
         .build()
 
-    /** The currently active streaming handle, if any. Used to cancel
-     *  generation immediately by closing the underlying socket. */
-    @Volatile var activeStreamHandle: StreamHandle? = null
+    /** Active streaming handles (one per concurrent generation). */
+        private val activeStreamHandles = ConcurrentHashMap.newKeySet<StreamHandle>()
 
-    class StreamHandle(private val call: okhttp3.Call, private val response: okhttp3.Response) {
-        val code: Int get() = response.code
-        val source: BufferedSource? get() = response.body?.source()
-        val errorBody: String? by lazy {
-            try { response.body?.string() } catch (_: Exception) { null }
-        }
-        fun close() {
-            if (HttpClient.activeStreamHandle === this) {
-                HttpClient.activeStreamHandle = null
+        /** The most recently started stream (legacy single-slot). Prefer cancel by conversation. */
+        @Volatile var activeStreamHandle: StreamHandle? = null
+
+        class StreamHandle(private val call: okhttp3.Call, private val response: okhttp3.Response) {
+            val code: Int get() = response.code
+            val source: BufferedSource? get() = response.body?.source()
+            val errorBody: String? by lazy {
+                try { response.body?.string() } catch (_: Exception) { null }
             }
-            response.close()
+            fun close() {
+                HttpClient.activeStreamHandles.remove(this)
+                if (HttpClient.activeStreamHandle === this) {
+                    HttpClient.activeStreamHandle = null
+                }
+                response.close()
+            }
+            fun readLine(): String? = source?.readUtf8Line()
+            /** Cancel the underlying HTTP call immediately — unblocks [readLine]. */
+            fun cancel() = call.cancel()
         }
-        fun readLine(): String? = source?.readUtf8Line()
-        /** Cancel the underlying HTTP call immediately — unblocks [readLine]. */
-        fun cancel() = call.cancel()
-    }
 
-    fun streamPost(url: String, jsonBody: String, headers: Map<String, String> = emptyMap()): StreamHandle {
-        guardCleartextCredentials(url, headers)
-        val body = jsonBody.toRequestBody(JSON)
-        val requestBuilder = Request.Builder().url(url).post(body)
-        headers.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
-        val call = client.newCall(requestBuilder.build())
-        val handle = StreamHandle(call, call.execute())
-        activeStreamHandle = handle
-        return handle
-    }
+        fun streamPost(url: String, jsonBody: String, headers: Map<String, String> = emptyMap()): StreamHandle {
+            guardCleartextCredentials(url, headers)
+            val body = jsonBody.toRequestBody(JSON)
+            val requestBuilder = Request.Builder().url(url).post(body)
+            headers.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
+            val call = client.newCall(requestBuilder.build())
+            val handle = StreamHandle(call, call.execute())
+            activeStreamHandles.add(handle)
+            activeStreamHandle = handle
+            return handle
+        }
+
+        /** Cancel every in-flight streaming call (used when tearing down all generations). */
+        fun cancelAllActiveStreams() {
+            val snapshot = activeStreamHandles.toList()
+            activeStreamHandles.clear()
+            activeStreamHandle = null
+            snapshot.forEach { runCatching { it.cancel() } }
+        }
 
     fun post(url: String, jsonBody: String, headers: Map<String, String> = emptyMap()): String? {
         guardCleartextCredentials(url, headers)
@@ -188,6 +201,25 @@ object HttpClient {
                 DebugLog.e("HttpClient", "POST $url failed: ${it.code} ${it.body?.string()}")
                 null
             }
+        }
+    }
+
+    /** GET result that keeps the status code, so callers can tell 401 from a network failure. */
+    data class GetResult(val code: Int, val body: String?, val error: String? = null) {
+        val isSuccessful: Boolean get() = code in 200..299
+    }
+
+    /** GET that never throws: transport failures come back as [GetResult] with code 0. */
+    fun get(url: String, headers: Map<String, String> = emptyMap()): GetResult {
+        return try {
+            guardCleartextCredentials(url, headers)
+            val requestBuilder = Request.Builder().url(url).get()
+            headers.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
+            client.newCall(requestBuilder.build()).execute().use {
+                GetResult(it.code, it.body?.string())
+            }
+        } catch (e: Exception) {
+            GetResult(0, null, e.message ?: e.javaClass.simpleName)
         }
     }
 

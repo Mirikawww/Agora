@@ -31,7 +31,11 @@ class McpToolProvider(
     override suspend fun execute(name: String, arguments: String, ctx: GenerationContext): String {
         if (!ctx.mcpEnabled) return error("MCP is disabled")
         val server = manager.serverForTool(name, ctx.mcpServers)
-        if (server != null && manager.toolNeedsConfirmation(name, ctx.mcpServers)) {
+        // Built-in connectors never go through the shell-style MCP approval sheet.
+        if (server != null &&
+            !server.id.startsWith("connector:") &&
+            manager.toolNeedsConfirmation(name, ctx.mcpServers)
+        ) {
             val approved = confirm?.invoke(server.name, "$name\n$arguments") ?: false
             if (!approved) return error("MCP tool call denied by user")
         }

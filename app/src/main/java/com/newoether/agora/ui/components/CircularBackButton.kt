@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -35,6 +36,31 @@ fun CircularBackButton(
     tonalElevation: Dp = 6.dp,
     size: Dp = 40.dp,
 ) {
+    CircularIconButton(
+        icon = Icons.AutoMirrored.Filled.ArrowBack,
+        onClick = onClick,
+        modifier = modifier,
+        contentDescription = contentDescription,
+        containerColor = containerColor,
+        contentColor = contentColor,
+        tonalElevation = tonalElevation,
+        size = size,
+    )
+}
+
+/** Circular top-bar action with the same visual treatment as [CircularBackButton]. */
+@Composable
+fun CircularIconButton(
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    contentDescription: String? = null,
+    containerColor: Color = MaterialTheme.colorScheme.surface,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    tonalElevation: Dp = 6.dp,
+    size: Dp = 40.dp,
+    enabled: Boolean = true,
+) {
     Surface(
         onClick = onClick,
         modifier = modifier.size(size),
@@ -42,10 +68,11 @@ fun CircularBackButton(
         color = containerColor,
         contentColor = contentColor,
         tonalElevation = tonalElevation,
+        enabled = enabled,
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
+                icon,
                 contentDescription = contentDescription,
             )
         }

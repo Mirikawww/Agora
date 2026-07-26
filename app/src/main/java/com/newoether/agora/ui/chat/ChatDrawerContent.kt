@@ -25,23 +25,26 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -62,9 +65,13 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.ripple
 import com.newoether.agora.R
 import com.newoether.agora.ui.chat.search.DrawerSearchBar
 import com.newoether.agora.ui.chat.search.SearchResultItem
@@ -95,7 +102,8 @@ internal fun ChatDrawerContent(
     onOpenSettings: (String?) -> Unit,
     onRequestRename: (String, String) -> Unit,
     onRequestDelete: (String) -> Unit,
-    onPendingDrawerHaptic: (String?) -> Unit
+    onPendingDrawerHaptic: (String?) -> Unit,
+    onOpenSystemPrompt: () -> Unit = {}
 ) {
     val haptics = LocalAgoraHaptics.current
     val focusManager = LocalFocusManager.current
@@ -108,6 +116,12 @@ internal fun ChatDrawerContent(
     val isNewChatMode by viewModel.isNewChatMode.collectAsState()
     val isSwitching by viewModel.isSwitching.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val generatingConversationIds by viewModel.generatingConversationIds.collectAsState()
+    val conversationCount by viewModel.conversationCount.collectAsState()
+
+    var showDeleteAllChatsConfirm by remember { mutableStateOf(false) }
+    var isDeletingAllChats by remember { mutableStateOf(false) }
+    val settingsInteraction = remember { MutableInteractionSource() }
 
     ModalDrawerSheet(
         drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
@@ -150,7 +164,46 @@ internal fun ChatDrawerContent(
                 .padding(horizontal = 16.dp, vertical = 20.dp)
                 .clearFocusOnTap()
         ) {
-            Text(stringResource(R.string.conversations), style = ChatType.conversationsTitle)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    stringResource(R.string.conversations),
+                    style = ChatType.conversationsTitle,
+                    modifier = Modifier.weight(1f)
+                )
+                // System-prompt switcher: circular chip matching the composer + button.
+                // Always has a background; mono uses solid container, non-mono uses surface+tone.
+                val isMonochrome = com.newoether.agora.ui.theme.LocalIsMonochrome.current
+                val promptChipColor = if (isMonochrome) {
+                    MaterialTheme.colorScheme.surfaceContainerHigh
+                } else {
+                    MaterialTheme.colorScheme.surface
+                }
+                val promptChipTonal = if (isMonochrome) 0.dp else 4.dp
+                Surface(
+                    onClick = {
+                        haptics.action()
+                        onOpenSystemPrompt()
+                    },
+                    shape = CircleShape,
+                    color = promptChipColor,
+                    tonalElevation = promptChipTonal,
+                    shadowElevation = 0.dp,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            Icons.Default.Psychology,
+                            contentDescription = stringResource(R.string.drawer_system_prompt),
+                            // Black/white (onSurface), not gray and not scheme primary.
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(12.dp))
 
             val search = rememberDrawerSearchState(viewModel)
@@ -224,6 +277,7 @@ internal fun ChatDrawerContent(
                         )
                     }
                 } else {
+
                     items(conversations) { conversation ->
                         val isSelected = conversation.id == currentConversationId
                         var showMenu by remember { mutableStateOf(false) }
@@ -270,13 +324,30 @@ internal fun ChatDrawerContent(
                                 color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
                                 shape = CircleShape
                             ) {
-                                Text(
-                                    text = conversation.title,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                                    maxLines = 1,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
-                                )
+                                val isGenerating = conversation.id in generatingConversationIds
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = conversation.title,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (isGenerating) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                            color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer
+                                            else MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
                             }
 
                             DropdownMenu(
@@ -295,56 +366,152 @@ internal fun ChatDrawerContent(
                                         haptics.action()
                                         showMenu = false
                                         viewModel.generateTitle(conversation.id)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.rename)) },
-                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                                enabled = !isSwitching && !isLoading,
-                                onClick = {
-                                    haptics.action()
-                                    showMenu = false
-                                    onRequestRename(conversation.id, conversation.title)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.delete), color = if (!isSwitching && !isLoading) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.error.copy(alpha = 0.5f)) },
-                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = if (!isSwitching && !isLoading) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.error.copy(alpha = 0.5f)) },
-                                enabled = !isSwitching && !isLoading,
-                                onClick = {
-                                    showMenu = false
-                                    onRequestDelete(conversation.id)
-                                }
-                            )
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.rename)) },
+                                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                                    enabled = !isSwitching && !isLoading,
+                                    onClick = {
+                                        haptics.action()
+                                        showMenu = false
+                                        onRequestRename(conversation.id, conversation.title)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            stringResource(R.string.delete),
+                                            color = if (!isSwitching && !isLoading) MaterialTheme.colorScheme.error
+                                            else MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = null,
+                                            tint = if (!isSwitching && !isLoading) MaterialTheme.colorScheme.error
+                                            else MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
+                                        )
+                                    },
+                                    enabled = !isSwitching && !isLoading,
+                                    onClick = {
+                                        showMenu = false
+                                        onRequestDelete(conversation.id)
+                                    }
+                                )
+                            }
                         }
                     }
                 }
             }
-            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            FilledTonalButton(
-                onClick = {
-                    haptics.action()
-                    focusManager.clearFocus()
-                    onOpenSettings(null)
-                    scope.launch { drawerState.close() }
-                },
+            // Tap → Settings. Long-press → delete-all-chats confirm (same as Data Control danger zone).
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(42.dp)
+                    .clip(CircleShape)
+                    .combinedClickable(
+                        interactionSource = settingsInteraction,
+                        indication = ripple(),
+                        onClick = {
+                            haptics.action()
+                            focusManager.clearFocus()
+                            onOpenSettings(null)
+                            scope.launch { drawerState.close() }
+                        },
+                        onLongClick = {
+                            haptics.longPress()
+                            focusManager.clearFocus()
+                            val count = conversations.size.coerceAtLeast(conversationCount)
+                            if (count > 0 && !isDeletingAllChats) {
+                                if (conversationCount == 0) viewModel.refreshDataCounts()
+                                showDeleteAllChatsConfirm = true
+                            }
+                        }
+                    )
                     .onGloballyPositioned { coords ->
                         val screenHeightPx = configuration.screenHeightDp * density.density
                         val buttonTopPx = coords.positionInWindow().y
                         onSettingsButtonTop((screenHeightPx - buttonTopPx) / density.density)
                     },
-                shape = CircleShape
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
             ) {
-                Icon(Icons.Default.Settings, null, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.settings), style = ChatType.drawerButton)
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(Icons.Default.Settings, null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.settings), style = ChatType.drawerButton)
+                }
             }
         }
+    }
+
+    if (showDeleteAllChatsConfirm) {
+        val count = conversations.size.coerceAtLeast(conversationCount)
+        AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            onDismissRequest = { if (!isDeletingAllChats) showDeleteAllChatsConfirm = false },
+            title = {
+                Text(
+                    stringResource(R.string.data_delete_all_chats),
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(stringResource(R.string.data_delete_all_chats_confirm, count))
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteAllChatsConfirm = false
+                        isDeletingAllChats = true
+                        viewModel.deleteAllConversations { _ ->
+                            isDeletingAllChats = false
+                        }
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = Color(0xFFD32F2F)
+                    )
+                ) { Text(stringResource(R.string.delete)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showDeleteAllChatsConfirm = false },
+                    enabled = !isDeletingAllChats
+                ) { Text(stringResource(R.string.cancel)) }
+            }
+        )
+    }
+
+    if (isDeletingAllChats) {
+        AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            onDismissRequest = {},
+            title = {
+                Text(
+                    stringResource(R.string.data_delete_all_chats),
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(stringResource(R.string.data_delete_all_chats_progress))
+                }
+            },
+            confirmButton = {}
+        )
     }
 }

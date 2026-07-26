@@ -37,7 +37,6 @@ fun SettingsProviderPage(viewModel: ChatViewModel, onBack: () -> Unit) {
 
     var selectedProvider by rememberSaveable { mutableStateOf<String?>(null) }
     var showAddCustomDialog by remember { mutableStateOf(false) }
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
     val scrollState = rememberSaveable(saver = androidx.compose.foundation.ScrollState.Saver) { androidx.compose.foundation.ScrollState(0) }
 
     BackHandler {
@@ -76,7 +75,6 @@ fun SettingsProviderPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                     title = stringResource(R.string.settings_provider),
                     onBack = onBack,
                     scrollState = scrollState,
-                    floatingActionButton = { if (showDocFab) DocumentationFab("provider.md") }
                 ) {
                         SettingsGroupColumn {
                             SettingsGroup(title = stringResource(R.string.provider_built_in), items = builtInNames.map { name ->
@@ -111,77 +109,83 @@ fun SettingsProviderPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                             )
                                         },
                                         trailingContent = {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Switch(
-                                                    checked = providerOn,
-                                                    onCheckedChange = { viewModel.settings.setProviderEnabled(name, it) }
-                                                )
-                                                Icon(
-                                                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                                    null,
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                                )
-                                            }
-                                        },
-                                        modifier = Modifier.clickable { selectedProvider = name }
-                                    )
-                                }
-                            })
-
-                            SettingsGroup(title = stringResource(R.string.custom_provider_section), items = buildList {
-                                if (customProviders.isEmpty()) {
-                                    add {
-                                        SettingsItem(
-                                            headlineContent = { Text(stringResource(R.string.custom_provider_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                            leadingContent = { Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), modifier = Modifier.size(24.dp)) },
-                                            modifier = Modifier.heightIn(min = 64.dp)
-                                        )
-                                    }
-                                }
-                                customProviders.forEach { config ->
-                                    add {
-                                        val configured = !providerBaseUrls[config.name].isNullOrBlank()
-                                        val providerOn = config.name !in disabledProviders
-                                        val activeLook = configured && providerOn
-                                        val muted = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                                        SettingsItem(
-                                            headlineContent = {
-                                                Text(
-                                                    config.name,
-                                                    color = if (activeLook) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            },
-                                            supportingContent = {
-                                                Text(
-                                                    providerBaseUrls[config.name]?.takeIf { it.isNotBlank() } ?: stringResource(R.string.not_configured),
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (activeLook) 1f else 0.7f)
-                                                )
-                                            },
-                                            leadingContent = {
-                                                Icon(
-                                                    Icons.Default.Cloud,
-                                                    null,
-                                                    tint = if (activeLook) MaterialTheme.colorScheme.primary else muted,
-                                                    modifier = Modifier.size(24.dp)
-                                                )
-                                            },
-                                            trailingContent = {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                                    Switch(
-                                                        checked = providerOn,
-                                                        onCheckedChange = { viewModel.settings.setProviderEnabled(config.name, it) }
-                                                    )
-                                                    Icon(
-                                                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                                        null,
-                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                                    )
+                                                Switch(
+                                                    checked = providerOn && configured,
+                                                    enabled = configured,
+                                                    onCheckedChange = { enabled ->
+                                                        if (configured) viewModel.settings.setProviderEnabled(name, enabled)
+                                                    }
+                                                )
+                                                Icon(
+                                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                null,
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                                                                        )
                                                 }
-                                            },
-                                            modifier = Modifier.clickable { selectedProvider = config.name }
-                                        )
-                                    }
-                                }
+                                                },
+                                                modifier = Modifier.clickable { selectedProvider = name }
+                                                                            )
+                                                }
+                                                })
+
+                                                                    SettingsGroup(title = stringResource(R.string.custom_provider_section), items = buildList {
+                                                                        if (customProviders.isEmpty()) {
+                                                                            add {
+                                                                                SettingsItem(
+                                                                                    headlineContent = { Text(stringResource(R.string.custom_provider_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                                                                    leadingContent = { Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), modifier = Modifier.size(24.dp)) },
+                                                                                    modifier = Modifier.heightIn(min = 64.dp)
+                                                                                )
+                                                }
+                                                }
+                                                                        customProviders.forEach { config ->
+                                                                            add {
+                                                                                val configured = !providerBaseUrls[config.name].isNullOrBlank()
+                                                                                val providerOn = config.name !in disabledProviders
+                                                                                val activeLook = configured && providerOn
+                                                                                val muted = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                                                                SettingsItem(
+                                                                                    headlineContent = {
+                                                                                        Text(
+                                                                                            config.name,
+                                                                                            color = if (activeLook) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                                                                                        )
+                                                },
+                                                                                    supportingContent = {
+                                                                                        Text(
+                                                                                            providerBaseUrls[config.name]?.takeIf { it.isNotBlank() } ?: stringResource(R.string.not_configured),
+                                                                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (activeLook) 1f else 0.7f)
+                                                                                        )
+                                                },
+                                                                                    leadingContent = {
+                                                Icon(
+                                                Icons.Default.Cloud,
+                                                null,
+                                                tint = if (activeLook) MaterialTheme.colorScheme.primary else muted,
+                                                                                            modifier = Modifier.size(24.dp)
+                                                                                        )
+                                                },
+                                                                                    trailingContent = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Switch(
+                                                        checked = providerOn && configured,
+                                                        enabled = configured,
+                                                        onCheckedChange = { enabled ->
+                                                            if (configured) viewModel.settings.setProviderEnabled(config.name, enabled)
+                                                        }
+                                                    )
+                                                Icon(
+                                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                                null,
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                                                                            )
+                                                }
+                                                },
+                                                modifier = Modifier.clickable { selectedProvider = config.name }
+                                                                                )
+                                                }
+                                                }
                                 add {
                                     Box(modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { showAddCustomDialog = true }.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -205,7 +209,6 @@ fun SettingsProviderPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                             })
                         }
 
-                        if (showDocFab) Spacer(modifier = Modifier.height(80.dp))
                 }
 
                 // Add Custom Provider Dialog

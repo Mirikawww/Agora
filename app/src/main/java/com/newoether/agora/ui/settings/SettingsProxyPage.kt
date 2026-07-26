@@ -34,14 +34,12 @@ fun SettingsProxyPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val username by viewModel.settings.proxyUsername.collectAsState()
     val password by viewModel.settings.proxyPassword.collectAsState()
     val bypass by viewModel.settings.proxyBypass.collectAsState()
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
 
     val proxyTypes = listOf("http" to "HTTP", "https" to "HTTPS", "socks5" to "SOCKS5")
 
     CollapsingSettingsScaffold(
         title = stringResource(R.string.settings_proxy),
         onBack = onBack,
-        floatingActionButton = { if (showDocFab) DocumentationFab("proxy.md") }
     ) {
         SettingsGroupColumn {
             SettingsGroup(
@@ -137,7 +135,6 @@ fun SettingsProxyPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 )
             }
         }
-        if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
     }
 }
 

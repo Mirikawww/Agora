@@ -54,6 +54,7 @@ import com.newoether.agora.model.ModelId
 import com.newoether.agora.model.Participant
 import com.newoether.agora.model.apiModelName
 import com.newoether.agora.ui.chat.bottombar.ChatBottomBar
+import com.newoether.agora.ui.chat.bottombar.MessageQueuePanel
 import com.newoether.agora.ui.chat.message.hasActiveAnswerSegment
 import com.newoether.agora.ui.components.AnimatedBlobBackground
 import com.newoether.agora.ui.components.clearFocusOnTap
@@ -114,6 +115,7 @@ fun ChatApp(
     val selectedModel by viewModel.currentActiveModel.collectAsState()
     val welcomeMessagesRaw by viewModel.settings.welcomeMessages.collectAsState()
     val welcomeDisplayMode by viewModel.settings.welcomeDisplayMode.collectAsState()
+    val welcomeEnabled by viewModel.settings.welcomeEnabled.collectAsState()
     val defaultWelcome = stringResource(R.string.welcome_to_agora)
     val welcomeLines = remember(welcomeMessagesRaw, defaultWelcome) {
         welcomeMessagesRaw.lines().map { it.trim() }.filter { it.isNotEmpty() }
@@ -125,6 +127,7 @@ fun ChatApp(
         viewModel.modelCapabilitiesFor(selectedModel)
     }
     val enabledModels by viewModel.settings.enabledModels.collectAsState()
+    val showComposerExpandButton by viewModel.settings.showComposerExpandButton.collectAsState()
     val disabledProviders by viewModel.settings.disabledProviders.collectAsState()
     val chatEnabledModels = remember(enabledModels, disabledProviders) {
         enabledModels.filter {
@@ -133,6 +136,7 @@ fun ChatApp(
         }.toSet()
     }
     val modelAliases by viewModel.settings.modelAliases.collectAsState()
+    val modelKeyNicknames by viewModel.settings.modelKeyNicknames.collectAsState()
     val thoughtExpandedStates = remember(currentConversationId) { mutableStateMapOf<String, Boolean>() }
     val isNewChatMode by viewModel.isNewChatMode.collectAsState()
     val isSwitching by viewModel.isSwitching.collectAsState()
@@ -146,6 +150,7 @@ fun ChatApp(
     val globalThinkingLevel by viewModel.settings.thinkingLevel.collectAsState()
     val globalThinkingBudgetEnabled by viewModel.settings.thinkingBudgetEnabled.collectAsState()
     val globalThinkingBudgetTokens by viewModel.settings.thinkingBudgetTokens.collectAsState()
+    val globalFastEnabled by viewModel.settings.fastEnabled.collectAsState()
     val globalWebSearch by viewModel.settings.webSearchEnabled.collectAsState()
     val webSearchApiKeys by viewModel.settings.webSearchApiKeys.collectAsState()
     val globalShell by viewModel.settings.shellEnabled.collectAsState()
@@ -162,7 +167,7 @@ fun ChatApp(
     val thinkingLevel = convOverride?.thinkingLevel ?: globalThinkingLevel
     val thinkingBudgetEnabled = convOverride?.thinkingBudgetEnabled ?: globalThinkingBudgetEnabled
     val thinkingBudgetTokens = convOverride?.thinkingBudgetTokens ?: globalThinkingBudgetTokens
-    val fastEnabled = convOverride?.fastEnabled ?: false
+    val fastEnabled = convOverride?.fastEnabled ?: globalFastEnabled
     // Search modes inherit global defaults until this conversation chooses an explicit mode.
     val webSearchEnabled = convOverride?.webSearchEnabled ?: globalWebSearch
     val shellEnabled = globalShell && (convOverride?.shellEnabled ?: true)
@@ -178,6 +183,26 @@ fun ChatApp(
     var showPromptDialog by remember { mutableStateOf(false) }
     var showAdvancedDialog by remember { mutableStateOf(false) }
     var isExpanded by remember { mutableStateOf(false) }
+    val forceWebSearch by viewModel.forceWebSearch.collectAsState()
+    val forceImageGen by viewModel.forceImageGen.collectAsState()
+    val forceGithub by viewModel.forceGithub.collectAsState()
+    val forceTodoist by viewModel.forceTodoist.collectAsState()
+    val githubConnectorEnabled by viewModel.settings.githubConnectorEnabled.collectAsState()
+    val githubToken by viewModel.settings.githubToken.collectAsState()
+    val showGithubConnector = githubConnectorEnabled && githubToken.isNotBlank()
+    val todoistConnectorEnabled by viewModel.settings.todoistConnectorEnabled.collectAsState()
+    val todoistOAuth by viewModel.settings.todoistOAuth.collectAsState()
+    val showTodoistConnector = todoistConnectorEnabled && (todoistOAuth?.isAuthorized == true)
+    val forceNotion by viewModel.forceNotion.collectAsState()
+    val notionConnectorEnabled by viewModel.settings.notionConnectorEnabled.collectAsState()
+    val notionOAuth by viewModel.settings.notionOAuth.collectAsState()
+    val showNotionConnector = notionConnectorEnabled && (notionOAuth?.isAuthorized == true)
+    val editingSentMessageId by viewModel.editingSentMessageId.collectAsState()
+    val messageQueues by viewModel.messageQueues.collectAsState()
+    val editingQueueItemId by viewModel.editingQueueItemId.collectAsState()
+    val currentQueuedMessages = remember(messageQueues, currentConversationId) {
+        if (currentConversationId == null) emptyList() else messageQueues[currentConversationId].orEmpty()
+    }
     var outerSpacerStartNanos by remember { mutableLongStateOf(0L) }
     var outerSpacerTickNanos by remember { mutableLongStateOf(0L) }
     val spacerDurationMs = 400f
@@ -238,7 +263,22 @@ fun ChatApp(
     LaunchedEffect(targetSnackbarOffset) { onSnackbarOffsetChanged(targetSnackbarOffset) }
     val listState = rememberLazyListState()
     val textFieldState = rememberSaveable(saver = androidx.compose.foundation.text.input.TextFieldState.Saver) { androidx.compose.foundation.text.input.TextFieldState() }
-    val inputFocusRequester = remember { FocusRequester() }
+        val inputFocusRequester = remember { FocusRequester() }
+        val composerDraftKey = if (isNewChatMode || currentConversationId == null) "new" else currentConversationId!!
+        // Only persist after the draft for this key has been loaded into the field.
+        // Without this gate, switching chats races: save effect writes the PREVIOUS chat's
+        // still-visible text into the NEW key (e.g. other-chat text pollutes "new").
+        var draftHydratedKey by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(composerDraftKey) {
+            draftHydratedKey = null
+            val draft = viewModel.composerDraftFor(composerDraftKey)
+            textFieldState.edit { replace(0, length, draft) }
+            draftHydratedKey = composerDraftKey
+        }
+        LaunchedEffect(composerDraftKey, textFieldState.text, draftHydratedKey) {
+            if (draftHydratedKey != composerDraftKey) return@LaunchedEffect
+            viewModel.setComposerDraft(composerDraftKey, textFieldState.text.toString())
+        }
 
     val messageHeights = remember { androidx.compose.runtime.mutableStateMapOf<String, Int>() }
     var viewportHeightPx by remember { mutableIntStateOf(0) }
@@ -480,7 +520,8 @@ fun ChatApp(
                 onOpenSettings = onOpenSettings,
                 onRequestRename = { id, title -> showRenameDialog = id; conversationToRename = title },
                 onRequestDelete = { id -> showDeleteConfirmDialog = id },
-                onPendingDrawerHaptic = { pendingDrawerConversationHaptic = it }
+                onOpenSystemPrompt = { showPromptDialog = true },
+                        onPendingDrawerHaptic = { pendingDrawerConversationHaptic = it }
             )
         }
     ) {
@@ -512,6 +553,7 @@ fun ChatApp(
                         currentConversationId = currentConversationId,
                         selectedModel = selectedModel,
                         modelAliases = modelAliases,
+                        modelKeyNicknames = modelKeyNicknames,
                         enabledModels = chatEnabledModels,
                         thinkingEnabled = thinkingEnabled,
                         thinkingLevel = thinkingLevel,
@@ -540,29 +582,67 @@ fun ChatApp(
                                 context.getString(R.string.default_model_set, label)
                             )
                         },
-                        onThinkingSelect = { effort ->
-                            haptics.selection()
-                            viewModel.updateConversationSetting(currentConversationId) { current ->
-                                current.copy(
-                                    thinkingEnabled = effort != null,
-                                    thinkingLevel = effort ?: current.thinkingLevel,
-                                    thinkingBudgetEnabled = if (effort != null) false else current.thinkingBudgetEnabled
-                                )
-                            }
-                        },
-                        onFastToggle = { enabled ->
-                            haptics.selection()
-                            viewModel.updateConversationSetting(currentConversationId) { it.copy(fastEnabled = enabled) }
-                        },
-                        onSearchModeSelect = { builtIn, external ->
-                            haptics.selection()
-                            viewModel.updateConversationSetting(currentConversationId) {
-                                it.copy(
-                                    googleSearchEnabled = builtIn,
-                                    webSearchEnabled = external
-                                )
-                            }
-                        },
+                        onThinkingSetDefault = { effort ->
+                                                    // Long-press: apply to current conversation AND persist as app defaults.
+                                                    haptics.longPress()
+                                                    viewModel.updateConversationSetting(currentConversationId) { current ->
+                                                        current.copy(
+                                                            thinkingEnabled = effort != null,
+                                                            thinkingLevel = effort ?: current.thinkingLevel,
+                                                            thinkingBudgetEnabled = if (effort != null) false else current.thinkingBudgetEnabled
+                                                        )
+                                                    }
+                                                    if (effort == null) {
+                                                        viewModel.settings.setThinkingEnabled(false)
+                                                    } else {
+                                                        viewModel.settings.setThinkingEnabled(true)
+                                                        viewModel.settings.setThinkingLevel(effort)
+                                                    }
+                                                    viewModel.emitSnackbar(context.getString(R.string.default_set_snackbar))
+                                                },
+                                                onThinkingSelect = { effort ->
+                                                    haptics.selection()
+                                                    viewModel.updateConversationSetting(currentConversationId) { current ->
+                                                        current.copy(
+                                                            thinkingEnabled = effort != null,
+                                                            thinkingLevel = effort ?: current.thinkingLevel,
+                                                            thinkingBudgetEnabled = if (effort != null) false else current.thinkingBudgetEnabled
+                                                        )
+                                                    }
+                                                },
+                                                onFastSetDefault = { enabled ->
+                                                    // Long-press: apply to current conversation AND persist as app default.
+                                                    haptics.longPress()
+                                                    viewModel.updateConversationSetting(currentConversationId) { it.copy(fastEnabled = enabled) }
+                                                    viewModel.settings.setFastEnabled(enabled)
+                                                    viewModel.emitSnackbar(context.getString(R.string.default_set_snackbar))
+                                                },
+                                                onFastToggle = { enabled ->
+                                                    haptics.selection()
+                                                    viewModel.updateConversationSetting(currentConversationId) { it.copy(fastEnabled = enabled) }
+                                                },
+                                                onSearchModeSetDefault = { builtIn, external ->
+                                                    // Long-press: apply to current conversation AND persist as app defaults.
+                                                    haptics.longPress()
+                                                    viewModel.updateConversationSetting(currentConversationId) {
+                                                        it.copy(
+                                                            googleSearchEnabled = builtIn,
+                                                            webSearchEnabled = external
+                                                        )
+                                                    }
+                                                    viewModel.settings.setGoogleSearchEnabled(builtIn)
+                                                    viewModel.settings.setWebSearchEnabled(external)
+                                                    viewModel.emitSnackbar(context.getString(R.string.default_set_snackbar))
+                                                },
+                                                onSearchModeSelect = { builtIn, external ->
+                                                    haptics.selection()
+                                                    viewModel.updateConversationSetting(currentConversationId) {
+                                                        it.copy(
+                                                            googleSearchEnabled = builtIn,
+                                                            webSearchEnabled = external
+                                                        )
+                                                    }
+                                                },
                         onAdvancedClick = {
                             haptics.action()
                             showAdvancedDialog = true
@@ -642,6 +722,13 @@ fun ChatApp(
                                         }
                                     }
                                 },
+                                onBeginComposerEdit = { id ->
+                                    haptics.action()
+                                    val text = viewModel.beginEditSentMessage(id)
+                                    if (text != null) {
+                                        textFieldState.edit { replace(0, length, text) }
+                                    }
+                                },
                                 onSwitchBranch = { parentId, currentMessageId, direction ->
                                     haptics.selection()
                                     viewModel.switchBranch(parentId, currentMessageId, direction)
@@ -666,32 +753,34 @@ fun ChatApp(
                                     bottom = bottomBarHeight + 8.dp
                                 )
                             )
-                        } else if (targetShowLaunch) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(bottom = bottomBarHeight),
-                                contentAlignment = Alignment.TopCenter
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .verticalScroll(rememberScrollState()),
-                                    contentAlignment = Alignment.TopCenter
-                                ) {
-                                    TypewriterTexts(
-                                        texts = welcomeLines,
-                                        mode = welcomeDisplayMode,
-                                        style = MaterialTheme.typography.headlineMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onBackground,
-                                        modifier = Modifier.padding(top = ((LocalConfiguration.current.screenHeightDp + topBarH.value / 2f - bottomBarHeight.value) / 2).coerceAtLeast(0f).dp)
-                                    )
-                                }
-                            }
-                        } else {
-                            Box(modifier = Modifier.fillMaxSize())
-                        }
+                        } else if (targetShowLaunch && welcomeEnabled) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxSize()
+                                                            .padding(bottom = bottomBarHeight),
+                                                        contentAlignment = Alignment.TopCenter
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .fillMaxSize()
+                                                                .verticalScroll(rememberScrollState()),
+                                                            contentAlignment = Alignment.TopCenter
+                                                        ) {
+                                                            TypewriterTexts(
+                                                                texts = welcomeLines,
+                                                                mode = welcomeDisplayMode,
+                                                                style = MaterialTheme.typography.headlineMedium,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = MaterialTheme.colorScheme.onBackground,
+                                                                modifier = Modifier.padding(top = ((LocalConfiguration.current.screenHeightDp + topBarH.value / 2f - bottomBarHeight.value) / 2).coerceAtLeast(0f).dp)
+                                                            )
+                                                        }
+                                                    }
+                                                } else if (targetShowLaunch) {
+                                                    Box(modifier = Modifier.fillMaxSize())
+                                                } else {
+                                                    Box(modifier = Modifier.fillMaxSize())
+                                                }
                     }
 
                     val showButton by remember {
@@ -782,38 +871,71 @@ fun ChatApp(
             ) {
                 Column {
                     if (outerSpacerHeightPx > 0f) {
-                        Spacer(modifier = Modifier.height(with(density) { outerSpacerHeightPx.toDp() }))
-                    }
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .then(if (isExpanded) Modifier.fillMaxHeight() else Modifier)
-                            .onSizeChanged {
-                            if (!isExpanded) bottomBarHeightPx = it.height.toFloat()
-                        }
-                        .navigationBarsPadding()
-                        .imePadding()
-                        .padding(8.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 2.dp,
-                    shadowElevation = 8.dp,
-                    shape = RoundedCornerShape(28.dp)
-                ) {
-                    Box(
-                        contentAlignment = Alignment.BottomCenter
-                    ) {
-                        ChatBottomBar(
+                                            Spacer(modifier = Modifier.height(with(density) { outerSpacerHeightPx.toDp() }))
+                                        }
+                                        // Queue lives ABOVE the composer surface (not inside the text field card).
+                                        if (currentQueuedMessages.isNotEmpty()) {
+                                            MessageQueuePanel(
+                                                items = currentQueuedMessages,
+                                                editingItemId = editingQueueItemId,
+                                                onEdit = { item ->
+                                                    haptics.action()
+                                                    val q = viewModel.beginEditQueuedMessage(item.conversationId, item.id)
+                                                    if (q != null) {
+                                                        textFieldState.edit { replace(0, length, q.text) }
+                                                    }
+                                                },
+                                                onCancel = { item ->
+                                                    haptics.action()
+                                                    val wasEditing = editingQueueItemId == item.id
+                                                    viewModel.removeQueuedMessage(item.conversationId, item.id)
+                                                    if (wasEditing) {
+                                                        textFieldState.edit { replace(0, length, "") }
+                                                    }
+                                                },
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 8.dp)
+                                                    .padding(bottom = 4.dp),
+                                            )
+                                        }
+                                        Surface(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .then(if (isExpanded) Modifier.fillMaxHeight() else Modifier)
+                                                .onSizeChanged {
+                                                if (!isExpanded) bottomBarHeightPx = it.height.toFloat()
+                                            }
+                                            .navigationBarsPadding()
+                                            .imePadding()
+                                            .padding(8.dp),
+                                        color = MaterialTheme.colorScheme.surface,
+                                        tonalElevation = 2.dp,
+                                        shadowElevation = 8.dp,
+                                        shape = RoundedCornerShape(28.dp)
+                                    ) {
+                                        Box(
+                                            contentAlignment = Alignment.BottomCenter
+                                        ) {
+                                            ChatBottomBar(
                         onSendMessage = { text, attachments ->
-                            viewModel.sendMessage(text, attachments = attachments).also { sent ->
-                                if (sent) {
-                                    haptics.action()
-                                    scope.launch {
-                                        delay(200)
-                                        scrollToLastUserMessage(animate = true)
-                                    }
-                                }
-                            }
-                        },
+                                                    val draftKeyAtSend = composerDraftKey
+                                                    viewModel.sendMessage(text, attachments = attachments).also { sent ->
+                                                        if (sent) {
+                                                            haptics.action()
+                                                            // Clear the draft that was just sent so it cannot reappear in a new chat.
+                                                            viewModel.setComposerDraft(draftKeyAtSend, "")
+                                                            if (draftKeyAtSend != "new") {
+                                                                // Sending from an existing chat must not leave residue on the empty home draft.
+                                                                viewModel.setComposerDraft("new", "")
+                                                            }
+                                                            scope.launch {
+                                                                delay(200)
+                                                                scrollToLastUserMessage(animate = true)
+                                                            }
+                                                        }
+                                                    }
+                                                },
                         onStopGeneration = {
                             haptics.generationStopped()
                             viewModel.stopGeneration()
@@ -832,20 +954,62 @@ fun ChatApp(
                         isExpandAnimating = isExpandAnimating,
                         onCollapse = { haptics.action(); isExpanded = false },
                         onExpand = { haptics.action(); isExpanded = true },
+                        showExpandButton = showComposerExpandButton,
+                        forceWebSearch = forceWebSearch,
+                        onToggleForceWebSearch = { viewModel.setForceWebSearch(!forceWebSearch) },
+                        forceImageGen = forceImageGen,
+                        onToggleForceImageGen = { viewModel.setForceImageGen(!forceImageGen) },
+                        forceGithub = forceGithub,
+                        onToggleForceGithub = { viewModel.setForceGithub(!forceGithub) },
+                        showGithubConnector = showGithubConnector,
+                        forceTodoist = forceTodoist,
+                        onToggleForceTodoist = { viewModel.setForceTodoist(!forceTodoist) },
+                        showTodoistConnector = showTodoistConnector,
+                        forceNotion = forceNotion,
+                        onToggleForceNotion = { viewModel.setForceNotion(!forceNotion) },
+                        showNotionConnector = showNotionConnector,
+                        isEditingSentMessage = editingSentMessageId != null,
+                        onClearSentMessageEdit = {
+                            haptics.selection()
+                            textFieldState.edit { replace(0, length, "") }
+                            viewModel.clearSentMessageEdit()
+                        },
+                        queuedMessages = currentQueuedMessages,
+                        editingQueueItemId = editingQueueItemId,
+                        onEditQueuedMessage = { item ->
+                            haptics.action()
+                            val q = viewModel.beginEditQueuedMessage(item.conversationId, item.id)
+                            if (q != null) {
+                                textFieldState.edit { replace(0, length, q.text) }
+                            }
+                            // Attachments are re-picked by user if needed; text is restored.
+                        },
+                        onCancelQueuedMessage = { item ->
+                            haptics.action()
+                            val wasEditing = editingQueueItemId == item.id
+                            viewModel.removeQueuedMessage(item.conversationId, item.id)
+                            if (wasEditing) {
+                                textFieldState.edit { replace(0, length, "") }
+                            }
+                        },
+                        onClearQueueEdit = {
+                            haptics.selection()
+                            viewModel.clearQueueEdit()
+                        },
                         onPdfPagesClick = { pages, idx -> haptics.action(); onPdfPagesClick?.invoke(pages, idx) },
                         onPdfPreviewSelect = { pages, idx -> haptics.action(); onPdfPreviewSelect?.invoke(pages, idx) },
                         pdfViewerSelection = pdfViewerSelection,
                         onTogglePdfSelection = onTogglePdfSelection,
                         onInitPdfSelection = onInitPdfSelection,
                         fullScreenViewerUrls = fullScreenViewerUrls
-                    )
-                }
-            }
-            }
-        }
-        }
-    }
-    }
+                                            )
+                                        }
+                                    }
+                                    }
+                                }
+                                }
+                            }
+                            }
 
     showRenameDialog?.let { id ->
         ChatRenameDialog(

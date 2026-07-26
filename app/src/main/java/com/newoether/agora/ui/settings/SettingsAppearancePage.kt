@@ -31,7 +31,6 @@ import com.newoether.agora.model.ToolCallDisplayModes
 import com.newoether.agora.ui.theme.ColorSchemePreset
 import com.newoether.agora.ui.theme.SchemeStyle
 import com.newoether.agora.ui.theme.colorSchemeForPreset
-import com.newoether.agora.util.readFontName
 import com.newoether.agora.viewmodel.ChatViewModel
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -48,60 +47,13 @@ fun SettingsAppearancePage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val blurEffectsEnabled by viewModel.settings.blurEffectsEnabled.collectAsState()
     val hapticsEnabled by viewModel.settings.hapticsEnabled.collectAsState()
     val toolCallDisplayMode by viewModel.settings.toolCallDisplayMode.collectAsState()
-    val fontPreference by viewModel.settings.fontPreference.collectAsState()
-    val customFontPath by viewModel.settings.customFontPath.collectAsState()
-    val customFontName by viewModel.settings.customFontName.collectAsState()
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
+    val showComposerExpand by viewModel.settings.showComposerExpandButton.collectAsState()
     val welcomeMessages by viewModel.settings.welcomeMessages.collectAsState()
     val welcomeDisplayMode by viewModel.settings.welcomeDisplayMode.collectAsState()
+    val welcomeEnabled by viewModel.settings.welcomeEnabled.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Clear custom font when switching away from custom
-    LaunchedEffect(fontPreference) {
-        if (fontPreference != "custom" && customFontPath.isNotBlank()) {
-            File(customFontPath).delete()
-            viewModel.settings.setCustomFontPath("")
-            viewModel.settings.setCustomFontName("")
-        }
-    }
-
-    val fontPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    // Delete old custom font file if it exists
-                    customFontPath.takeIf { it.isNotBlank() }?.let { File(it).delete() }
-                    val dest = File(context.filesDir, "custom_font_${java.util.UUID.randomUUID()}")
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        dest.outputStream().use { output -> input.copyTo(output) }
-                    }
-                    // Validate magic bytes (TTF: 0x00010000, OTTO, true, typ1)
-                    val magic = ByteArray(4)
-                    dest.inputStream().use { it.read(magic) }
-                    val validFont = when {
-                        magic[0] == 0.toByte() && magic[1] == 1.toByte() && magic[2] == 0.toByte() && magic[3] == 0.toByte() -> true
-                        magic[0] == 'O'.code.toByte() && magic[1] == 'T'.code.toByte() && magic[2] == 'T'.code.toByte() && magic[3] == 'O'.code.toByte() -> true
-                        magic[0] == 't'.code.toByte() && magic[1] == 'r'.code.toByte() && magic[2] == 'u'.code.toByte() && magic[3] == 'e'.code.toByte() -> true
-                        magic[0] == 't'.code.toByte() && magic[1] == 'y'.code.toByte() && magic[2] == 'p'.code.toByte() && magic[3] == '1'.code.toByte() -> true
-                        else -> false
-                    }
-                    if (!validFont) {
-                        dest.delete()
-                        withContext(Dispatchers.Main) {
-                            viewModel.emitSnackbar(context.getString(R.string.font_invalid_file))
-                        }
-                        return@launch
-                    }
-                    val fontName = readFontName(dest)
-                    withContext(Dispatchers.Main) {
-                        viewModel.settings.setCustomFontPath(dest.absolutePath)
-                        viewModel.settings.setCustomFontName(fontName)
-                    }
-                } catch (_: Exception) {}
-            }
-        }
-    }
 
     val isDynamicAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     val currentPreset = try { ColorSchemePreset.valueOf(colorSchemeName) } catch (_: Exception) { ColorSchemePreset.MIDNIGHT }
@@ -115,9 +67,25 @@ fun SettingsAppearancePage(viewModel: ChatViewModel, onBack: () -> Unit) {
     CollapsingSettingsScaffold(
         title = stringResource(R.string.appearance_title),
         onBack = onBack,
-        floatingActionButton = { if (showDocFab) DocumentationFab("appearance.md") }
     ) {
             SettingsGroupColumn {
+
+            SettingsGroup(title = stringResource(R.string.composer_show_expand), items = listOf({
+                SettingsItem(
+                    headlineContent = { Text(stringResource(R.string.composer_show_expand)) },
+                    supportingContent = { Text(stringResource(R.string.composer_show_expand_desc)) },
+                    trailingContent = {
+                        Switch(
+                            checked = showComposerExpand,
+                            onCheckedChange = { viewModel.settings.setShowComposerExpandButton(it) }
+                        )
+                    },
+                    modifier = Modifier.clickable {
+                        viewModel.settings.setShowComposerExpandButton(!showComposerExpand)
+                    }
+                )
+            }))
+
                 // ── Theme Mode ──
                 SettingsGroup(
                     title = stringResource(R.string.theme_mode),
@@ -345,12 +313,9 @@ fun SettingsAppearancePage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                                         Box(modifier = Modifier.size(20.dp).clip(CircleShape).background(presetPrimary))
                                                     },
                                                     onClick = {
-                                                        viewModel.settings.setColorScheme(preset.name)
-                                                        if (preset == ColorSchemePreset.MONOCHROME && dynamicColor) {
-                                                            viewModel.settings.setDynamicColor(false)
-                                                        }
-                                                        expanded = false
-                                                    }
+                                                                                                            viewModel.settings.setColorScheme(preset.name)
+                                                                                                            expanded = false
+                                                                                                        }
                                                 )
                                             }
                                         }
@@ -401,89 +366,6 @@ fun SettingsAppearancePage(viewModel: ChatViewModel, onBack: () -> Unit) {
                     )
                 )
 
-                // ── Font ──
-                SettingsGroup(
-                    title = stringResource(R.string.font_title),
-                    items = buildList {
-                        add {
-                            var expanded by remember { mutableStateOf(false) }
-                            val selectedLabel = when (fontPreference) {
-                                "system" -> stringResource(R.string.font_system_default)
-                                "custom" -> stringResource(R.string.font_custom)
-                                else -> stringResource(R.string.font_app_default)
-                            }
-                            val options = listOf(
-                                "app_default" to stringResource(R.string.font_app_default),
-                                "system" to stringResource(R.string.font_system_default),
-                                "custom" to stringResource(R.string.font_custom)
-                            )
-                            SettingsItem(
-                                headlineContent = { Text(stringResource(R.string.font_title)) },
-                                supportingContent = { Text(selectedLabel) },
-                                trailingContent = {
-                                    Box {
-                                        Text(
-                                            selectedLabel,
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.width(96.dp).padding(end = 4.dp),
-                                            textAlign = TextAlign.End,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        DropdownMenu(
-                                            expanded = expanded,
-                                            onDismissRequest = { expanded = false },
-                                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                                            tonalElevation = 16.dp,
-                                            shape = RoundedCornerShape(12.dp)
-                                        ) {
-                                            options.forEach { (value, label) ->
-                                                DropdownMenuItem(
-                                                    text = { Text(label) },
-                                                    leadingIcon = {
-                                                        if (fontPreference == value) Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
-                                                    },
-                                                    onClick = { viewModel.settings.setFontPreference(value); expanded = false }
-                                                )
-                                            }
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.clickable { expanded = true }
-                            )
-                        }
-                        if (fontPreference == "custom") {
-                            add {
-                                val hasFont = customFontName.isNotBlank() && customFontPath.isNotBlank() && File(customFontPath).exists()
-                                SettingsItem(
-                                    headlineContent = {
-                                        Text(
-                                            text = if (hasFont) customFontName else stringResource(R.string.font_no_file_selected),
-                                            fontWeight = if (hasFont) FontWeight.Medium else FontWeight.Normal,
-                                            color = if (hasFont) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    },
-                                    supportingContent = {
-                                        Text(
-                                            text = stringResource(R.string.font_custom_pick),
-                                            color = if (hasFont) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                        )
-                                    },
-                                    leadingContent = {
-                                        Icon(
-                                            imageVector = Icons.Default.Add,
-                                            contentDescription = null,
-                                            tint = if (hasFont) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f) else MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    },
-                                    modifier = Modifier.clickable { fontPickerLauncher.launch(arrayOf("font/*", "*/*")) }
-                                )
-                            }
-                        }
-                    }
-                )
             }
 
                 // ── Home welcome messages ──
@@ -491,29 +373,38 @@ fun SettingsAppearancePage(viewModel: ChatViewModel, onBack: () -> Unit) {
                     title = stringResource(R.string.welcome_messages_title),
                     items = buildList {
                         add {
+                            SettingsItem(
+                                headlineContent = { Text(stringResource(R.string.welcome_enabled)) },
+                                supportingContent = { Text(stringResource(R.string.welcome_enabled_desc)) },
+                                trailingContent = {
+                                    Switch(
+                                        checked = welcomeEnabled,
+                                        onCheckedChange = { viewModel.settings.setWelcomeEnabled(it) }
+                                    )
+                                },
+                                modifier = Modifier.clickable {
+                                    viewModel.settings.setWelcomeEnabled(!welcomeEnabled)
+                                }
+                            )
+                        }
+                        add {
                             var draft by remember(welcomeMessages) { mutableStateOf(welcomeMessages) }
+                            // Debounced auto-save; no extra Save button.
+                            LaunchedEffect(draft) {
+                                if (draft == welcomeMessages) return@LaunchedEffect
+                                kotlinx.coroutines.delay(400)
+                                if (draft != welcomeMessages) viewModel.settings.setWelcomeMessages(draft)
+                            }
                             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-                                Text(
-                                    text = stringResource(R.string.welcome_messages_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
                                 OutlinedTextField(
                                     value = draft,
                                     onValueChange = { draft = it },
                                     modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
                                     minLines = 4,
                                     maxLines = 10,
-                                    placeholder = { Text(stringResource(R.string.welcome_messages_placeholder)) }
+                                    placeholder = { Text(stringResource(R.string.welcome_messages_placeholder)) },
+                                    enabled = welcomeEnabled,
                                 )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                                    TextButton(
-                                        onClick = { viewModel.settings.setWelcomeMessages(draft) },
-                                        enabled = draft != welcomeMessages
-                                    ) { Text(stringResource(R.string.save)) }
-                                }
                             }
                         }
                         add {
@@ -546,7 +437,6 @@ fun SettingsAppearancePage(viewModel: ChatViewModel, onBack: () -> Unit) {
                     }
                 )
 
-            if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
     }
 }
 

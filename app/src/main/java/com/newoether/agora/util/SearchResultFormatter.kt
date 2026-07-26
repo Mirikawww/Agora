@@ -62,7 +62,9 @@ object SearchResultFormatter {
         if (results.isEmpty()) return context.getString(R.string.search_no_results)
 
         val untitled = context.getString(R.string.search_untitled)
-        val body = results.take(10).mapIndexed { i, element ->
+        // No cap here: the tool already returns exactly what the user's "Max Results"
+        // setting allows, and trimming to 10 made a 40-result search look like a 10-result one.
+        val body = results.mapIndexed { i, element ->
             val obj = element.jsonObject
             val title = (obj["title"] as? JsonPrimitive)?.content ?: untitled
             val url = (obj["url"] as? JsonPrimitive)?.content ?: ""

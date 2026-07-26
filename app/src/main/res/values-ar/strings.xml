@@ -364,7 +364,7 @@
     <string name="web_search_tavily_key">مفتاح API لـ Tavily</string>
     <string name="web_search_tavily_key_hint">مفتاح API من tavily.com</string>
     <string name="web_search_num_results">أقصى عدد للنتائج</string>
-    <string name="web_search_num_results_desc">عدد النتائج المراد جلبها: %1$d (1-10)</string>
+    <string name="web_search_num_results_desc">عدد النتائج المراد جلبها: %1$d (0-100)</string>
     <string name="web_search_searxng_fallback_desc">غالبًا ما تكون النسخ العامة محدودة المعدل. يُوصى بالاستضافة الذاتية للاستخدام الموثوق.</string>
     <string name="web_search_advanced">متقدم</string>
     <string name="web_search_searxng_url">عنوان URL الأساسي لـ SearXNG</string>
@@ -534,13 +534,6 @@
     <string name="scheme_style_expressive">معبّر</string>
     <string name="scheme_style_vibrant">نابض</string>
     <string name="scheme_style_neutral">محايد</string>
-    <string name="font_title">الخط</string>
-    <string name="font_app_default">افتراضي</string>
-    <string name="font_system_default">النظام</string>
-    <string name="font_custom">مخصص</string>
-    <string name="font_custom_pick">اختر ملف خط</string>
-    <string name="font_no_file_selected">لم يتم الاختيار</string>
-    <string name="font_invalid_file">ملف خط غير صالح</string>
     <string name="dynamic_color">اللون الديناميكي</string>
     <string name="dynamic_color_desc">استخدام ألوان يولّدها النظام بناءً على الخلفية (Android 12 وأحدث)</string>
     <string name="visual_effects">المؤثرات البصرية</string>
@@ -677,6 +670,24 @@
     <string name="provider_no_local_models_desc">استورد نموذج GGUF للبدء</string>
     <string name="provider_keys_summary">%1$d مفتاح API</string>
     <string name="provider_connection">الاتصال</string>
+
+    <!-- الإعدادات - رصيد حساب المزوّد -->
+    <string name="provider_balance_title">رصيد الحساب</string>
+    <string name="provider_balance_fetch">جلب رصيد الحساب</string>
+    <string name="provider_balance_path">مسار واجهة الرصيد</string>
+    <string name="provider_balance_json_key">مفتاح JSON للنتيجة</string>
+    <string name="provider_balance_hint">يُضاف المسار إلى عنوان URL الأساسي (مثل ‎/credits). والمفتاح مسار بالنقاط داخل الاستجابة (مثل data.total_usage).</string>
+    <string name="provider_balance_refresh">تحديث</string>
+    <string name="provider_balance_querying">جارٍ الاستعلام…</string>
+    <string name="provider_balance_value">الرصيد: %1$s</string>
+    <string name="provider_balance_incomplete">أدخل المسار ومفتاح JSON</string>
+    <string name="provider_balance_error_no_base_url">اضبط عنوان URL الأساسي أولاً</string>
+    <string name="provider_balance_error_network">خطأ في الشبكة: %1$s</string>
+    <string name="provider_balance_error_http">فشل الطلب: %1$s</string>
+    <string name="provider_balance_error_key">لم يُعثر على المفتاح \"%1$s\" في الاستجابة</string>
+    <string name="provider_balance_error_json">الاستجابة ليست JSON صالحًا</string>
+    <string name="provider_balance_error_empty">استجابة فارغة</string>
+    <string name="provider_balance_error_generic">فشل الاستعلام عن الرصيد</string>
     <string name="import_model_chat">استيراد نموذج GGUF</string>
     <string name="add_local_chat_model">إضافة نموذج محلي</string>
     <string name="local_ctx_size">حجم السياق</string>
@@ -825,9 +836,6 @@
     <string name="could_not_read_file">تعذّر قراءة الملف</string>
 
     <!-- Documentation -->
-    <string name="documentation">الوثائق</string>
-    <string name="show_documentation_links">عرض روابط الوثائق</string>
-    <string name="show_documentation_links_desc">عرض زر الوثائق في صفحات الإعدادات</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">مرحبًا بك في Agora</string>
@@ -916,10 +924,10 @@
 
     <!-- Crash reporting -->
     <string name="crash_title">أُغلق Agora بشكل غير متوقع</string>
-    <string name="crash_message">نعتذر عن ذلك. يمكنك المساعدة في إصلاح هذا بإرسال تقرير تعطّل مجهول.</string>
+    <string name="crash_message">نعتذر عن ذلك. تبقى التفاصيل أدناه على جهازك — انسخها وأرفقها في issue إن رغبت في المساعدة على إصلاحها.</string>
     <string name="crash_submit">إرسال التقرير</string>
-    <string name="crash_dismiss">عدم الإرسال</string>
-    <string name="crash_privacy_note">يُرسَل سجل التعطّل فقط إلى newoether.space. لا يتم جمع أي معلومات أخرى.</string>
+    <string name="crash_dismiss">إغلاق</string>
+    <string name="crash_privacy_note">يبقى سجل التعطّل على جهازك ولا يُرسَل إلى أي مكان. انسخه وأرفقه في issue إذا أردت الإبلاغ عنه.</string>
     <string name="crash_submitted">تم إرسال تقرير التعطّل. شكرًا لك!</string>
     <string name="settings_group_network">الشبكة</string>
     <string name="settings_proxy">الوكيل</string>

@@ -43,7 +43,7 @@ This policy may be updated from time to time. Changes will be posted on this pag
 
 ## Contact
 
-If you have questions about this policy, open an issue at [github.com/newo-ether/Agora](https://github.com/newo-ether/Agora).
+If you have questions about this policy, open an issue at [github.com/Mirikawww/Agora](https://github.com/Mirikawww/Agora).
 
 ---
 
@@ -85,4 +85,4 @@ Agora 不面向 13 岁以下儿童。
 
 ## 联系
 
-如有问题，请在 [github.com/newo-ether/Agora](https://github.com/newo-ether/Agora) 提交 issue。
+如有问题，请在 [github.com/Mirikawww/Agora](https://github.com/Mirikawww/Agora) 提交 issue。

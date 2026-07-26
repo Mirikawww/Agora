@@ -394,9 +394,13 @@ class DataImporter(
                         settingsManager.saveThinkingLevel(ThinkingLevels.normalize(s.thinkingLevel))
                         settingsManager.saveThinkingBudgetEnabled(s.thinkingBudgetEnabled || legacyBudgetTokens != null)
                         settingsManager.saveThinkingBudgetTokens(s.thinkingBudgetTokens ?: legacyBudgetTokens ?: ThinkingLevels.DefaultBudgetTokens)
+                        settingsManager.saveFastEnabled(s.fastEnabled)
                         settingsManager.saveAutoCacheEnabled(s.autoCacheEnabled)
                         for ((provider, url) in s.providerBaseUrls) {
                             settingsManager.saveProviderBaseUrl(provider, url)
+                        }
+                        for ((provider, balance) in s.providerBalanceConfigs) {
+                            settingsManager.saveProviderBalanceConfig(provider, balance)
                         }
                         settingsManager.saveTitleGenerationEnabled(s.titleGenerationEnabled)
                         s.titleGenerationModel?.let { settingsManager.saveTitleGenerationModel(it) }
@@ -431,21 +435,8 @@ class DataImporter(
                         } catch (_: Exception) { /* older exports may not have extra_settings.json */ }
                     }
 
-                    // Restore custom font file
-                    for (path in archive.names()) {
-                        if (!path.startsWith("custom_font/")) continue
-                        val bytes = archive.bytes(path) ?: continue
-                        val fileName = path.removePrefix("custom_font/")
-                        val fontFile = java.io.File(context.filesDir, "custom_font_$fileName")
-                        fontFile.writeBytes(bytes)
-                        // Update the font path to point to the restored file
-                        settingsManager.saveCustomFontPath(fontFile.absolutePath)
-                        // Re-read font name from the restored file
-                        try {
-                            val name = com.newoether.agora.util.readFontName(fontFile)
-                            settingsManager.saveCustomFontName(name)
-                        } catch (_: Exception) {}
-                    }
+                    // custom_font/ entries in older archives are ignored: the custom-font
+                    // feature was removed along with the bundled UI fonts.
                 } catch (e: Exception) {
                     errors.add("Settings: ${e.localizedMessage ?: "Unknown error"}")
                 }
@@ -579,8 +570,10 @@ class DataImporter(
         val thinkingLevel: String = "medium",
         val thinkingBudgetEnabled: Boolean = false,
         val thinkingBudgetTokens: Int? = null,
+        val fastEnabled: Boolean = false,
         val autoCacheEnabled: Boolean = true,
         val providerBaseUrls: Map<String, String> = emptyMap(),
+        val providerBalanceConfigs: Map<String, ProviderBalanceConfig> = emptyMap(),
         val titleGenerationEnabled: Boolean = true,
         val titleGenerationModel: String? = null,
         val titleGenerationPrompt: String? = null,

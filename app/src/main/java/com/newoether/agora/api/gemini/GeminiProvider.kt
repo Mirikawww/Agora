@@ -325,26 +325,32 @@ class GeminiProvider : LlmProvider {
                 "$baseUrl/v1beta/models/$cleanModelName:streamGenerateContent?alt=sse"
             }
 
-            val headers = mapOf(
-                "Content-Type" to "application/json",
-                "x-goog-api-key" to config.apiKey
-            )
-            val requestJson = json.encodeToString(ApiGenerateContentRequest.serializer(), requestBody)
-            DebugLog.d("AgoraAPI", "[Gemini] REQ → $finalUrlString | model=$cleanModelName | msgs=${apiContents.size} | thinking=${config.thinkingEnabled} | tools=${tools.size}")
-            DebugLog.d("AgoraAPI", "[Gemini] BODY: ${requestJson.take(4000)}")
-            val maxAttempts = 3
-            val retryableCodes = setOf(401, 429, 502, 503, 504)
-            var attempt = 0
-            var done = false
+            val headers = mutableMapOf(
+                            "Content-Type" to "application/json",
+                        )
+                        val apiKey = config.apiKey.trim()
+                        fun applyAuthHeader() {
+                            headers["x-goog-api-key"] = apiKey
+                        }
+                        applyAuthHeader()
+                        val requestJson = json.encodeToString(ApiGenerateContentRequest.serializer(), requestBody)
+                        DebugLog.d("AgoraAPI", "[Gemini] REQ → $finalUrlString | model=$cleanModelName | msgs=${apiContents.size} | thinking=${config.thinkingEnabled} | tools=${tools.size}")
+                        DebugLog.d("AgoraAPI", "[Gemini] BODY: ${requestJson.take(4000)}")
+                        val maxAttempts = 3
+                        // 401 is NOT retryable: bound key failed → surface error to user.
+                        val retryableCodes = setOf(429, 502, 503, 504)
+                        var attempt = 0
+                        var done = false
 
-            while (attempt < maxAttempts && !done) {
-                attempt++
-                val handle = HttpClient.streamPost(finalUrlString, requestJson, headers)
-                try {
-                if (handle.code == 200) {
-                    done = true
-                    var line: String? = null
-                    var currentThoughtSignature: String? = null
+                        while (attempt < maxAttempts && !done) {
+                            attempt++
+                            applyAuthHeader()
+                            val handle = HttpClient.streamPost(finalUrlString, requestJson, headers)
+                            try {
+                            if (handle.code == 200) {
+                                done = true
+                                var line: String? = null
+                                var currentThoughtSignature: String? = null
                     var inThoughtBlock = false
                     while (currentCoroutineContext().isActive) {
                         try {
@@ -436,27 +442,29 @@ class GeminiProvider : LlmProvider {
                         throw kotlinx.coroutines.CancellationException("Stream cancelled")
                     }
                 } else {
-                    val errorRaw = handle.errorBody ?: "Unknown error (Code: ${handle.code})"
-                    DebugLog.e("AgoraAPI", "[Gemini] ERR ${handle.code}: $errorRaw")
+                                    val errorRaw = handle.errorBody ?: "Unknown error (Code: ${handle.code})"
+                                    DebugLog.e("AgoraAPI", "[Gemini] ERR ${handle.code}: $errorRaw")
 
-                    if (handle.code in retryableCodes && attempt < maxAttempts) {
-                        DebugLog.w("AgoraAPI", "[Gemini] Transient error ${handle.code} on attempt $attempt/$maxAttempts, retrying in ${1000 * attempt}ms...")
-                        emit(StreamEvent.Retrying(attempt, maxAttempts))
-                        delay(1000L * attempt)
-                    } else {
-                        val genError = try {
-                            val errorJson = json.decodeFromString<ApiErrorResponse>(errorRaw)
-                            GenerationError.Api(
-                                code = (errorJson.error.code ?: handle.code).toString(),
-                                type = errorJson.error.status,
-                                message = errorJson.error.message ?: "No error message provided"
-                            )
-                        } catch (e: Exception) {
-                            GenerationError.Network(statusCode = handle.code, message = errorRaw)
-                        }
-                        emit(StreamEvent.Error(genError))
-                    }
-                }
+                                    // Auth/key errors fail hard — no sibling-key rotation.
+                                    if (handle.code in retryableCodes && attempt < maxAttempts) {
+                                        DebugLog.w("AgoraAPI", "[Gemini] Transient error ${handle.code} on attempt $attempt/$maxAttempts, retrying in ${1000 * attempt}ms...")
+                                        emit(StreamEvent.Retrying(attempt, maxAttempts))
+                                        delay(1000L * attempt)
+                                    } else {
+                                        val genError = try {
+                                            val errorJson = json.decodeFromString<ApiErrorResponse>(errorRaw)
+                                            GenerationError.Api(
+                                                code = (errorJson.error.code ?: handle.code).toString(),
+                                                type = errorJson.error.status,
+                                                message = errorJson.error.message ?: "No error message provided"
+                                            )
+                                        } catch (e: Exception) {
+                                            GenerationError.Network(statusCode = handle.code, message = errorRaw)
+                                        }
+                                        emit(StreamEvent.Error(genError))
+                                        done = true
+                                    }
+                                }
                 } finally { handle.close() }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {

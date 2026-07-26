@@ -19,7 +19,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,6 +38,10 @@ import com.newoether.agora.R
 import com.newoether.agora.util.noOpBringIntoView
 import com.newoether.agora.viewmodel.ChatViewModel
 
+/**
+ * Personalization fields as a single SettingsGroup of wide items
+ * (no nested Surface card per field — that caused a double-wrap look).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsPersonalizationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
@@ -58,7 +61,7 @@ fun SettingsPersonalizationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 title = stringResource(R.string.personalization_profile_title),
                 items = listOf(
                     {
-                        ProfileFieldCard(
+                        ProfileFieldItem(
                             icon = Icons.Default.Person,
                             label = stringResource(R.string.personalization_nickname),
                             value = nickname,
@@ -67,7 +70,7 @@ fun SettingsPersonalizationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         )
                     },
                     {
-                        ProfileFieldCard(
+                        ProfileFieldItem(
                             icon = Icons.Default.Person,
                             label = stringResource(R.string.personalization_gender),
                             value = gender,
@@ -76,7 +79,7 @@ fun SettingsPersonalizationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         )
                     },
                     {
-                        ProfileFieldCard(
+                        ProfileFieldItem(
                             icon = Icons.Default.Edit,
                             label = stringResource(R.string.personalization_age),
                             value = age,
@@ -86,7 +89,7 @@ fun SettingsPersonalizationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         )
                     },
                     {
-                        ProfileFieldCard(
+                        ProfileFieldItem(
                             icon = Icons.Default.Edit,
                             label = stringResource(R.string.personalization_height),
                             value = height,
@@ -95,7 +98,7 @@ fun SettingsPersonalizationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         )
                     },
                     {
-                        ProfileFieldCard(
+                        ProfileFieldItem(
                             icon = Icons.Default.Work,
                             label = stringResource(R.string.personalization_occupation),
                             value = occupation,
@@ -104,7 +107,7 @@ fun SettingsPersonalizationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         )
                     },
                     {
-                        ProfileFieldCard(
+                        ProfileFieldItem(
                             icon = Icons.Default.Edit,
                             label = stringResource(R.string.personalization_other),
                             value = other,
@@ -129,7 +132,7 @@ fun SettingsPersonalizationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
 }
 
 @Composable
-private fun ProfileFieldCard(
+private fun ProfileFieldItem(
     icon: ImageVector,
     label: String,
     value: String,
@@ -142,52 +145,47 @@ private fun ProfileFieldCard(
     var draft by remember { mutableStateOf(value) }
     LaunchedEffect(value) { if (value != draft) draft = value }
 
-    Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp,
+    // Single-layer item: SettingsGroup already provides the card background.
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
+            // Wider content than default SettingsItem padding (less left/right inset).
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    label,
-                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-            OutlinedTextField(
-                value = draft,
-                onValueChange = {
-                    draft = it
-                    onChange(it)
-                },
-                placeholder = placeholder?.let { ph ->
-                    { Text(ph, style = MaterialTheme.typography.bodyMedium) }
-                },
-                singleLine = singleLine,
-                minLines = minLines,
-                keyboardOptions = KeyboardOptions(keyboardType = keyboard),
-                shape = RoundedCornerShape(16.dp),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .noOpBringIntoView()
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
+        OutlinedTextField(
+            value = draft,
+            onValueChange = {
+                draft = it
+                onChange(it)
+            },
+            placeholder = placeholder?.let { ph ->
+                { Text(ph, style = MaterialTheme.typography.bodyMedium) }
+            },
+            singleLine = singleLine,
+            minLines = minLines,
+            keyboardOptions = KeyboardOptions(keyboardType = keyboard),
+            shape = RoundedCornerShape(14.dp),
+            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                color = MaterialTheme.colorScheme.onSurface
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .noOpBringIntoView()
+        )
     }
 }

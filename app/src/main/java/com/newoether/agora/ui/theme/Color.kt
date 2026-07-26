@@ -90,7 +90,8 @@ fun monochromeColorScheme(isDark: Boolean): ColorScheme {
             onTertiary = black,
             tertiaryContainer = g16,
             onTertiaryContainer = g80,
-            // Grayscale "error" — still readable, no red.
+            // Grayscale "error" only for monochrome non-destructive surfaces.
+            // Destructive actions that must stay red (e.g. delete-all) use an explicit Color.
             error = g80,
             onError = black,
             errorContainer = g22,
@@ -101,6 +102,15 @@ fun monochromeColorScheme(isDark: Boolean): ColorScheme {
             onSurface = g90,
             surfaceVariant = g12,
             onSurfaceVariant = g70,
+            // Explicit surface containers: DropdownMenu / menus default to these tokens.
+            // Leaving them unset falls back to Material purple defaults.
+            surfaceBright = g16,
+            surfaceDim = black,
+            surfaceContainer = g12,
+            surfaceContainerHigh = g16,
+            surfaceContainerHighest = g22,
+            surfaceContainerLow = g08,
+            surfaceContainerLowest = black,
             outline = g40,
             outlineVariant = g22,
             scrim = black,
@@ -133,6 +143,13 @@ fun monochromeColorScheme(isDark: Boolean): ColorScheme {
             onSurface = g08,
             surfaceVariant = g94,
             onSurfaceVariant = g40,
+            surfaceBright = white,
+            surfaceDim = g90,
+            surfaceContainer = g96,
+            surfaceContainerHigh = g94,
+            surfaceContainerHighest = g90,
+            surfaceContainerLow = g98,
+            surfaceContainerLowest = white,
             outline = g60,
             outlineVariant = g80,
             scrim = black,
@@ -144,6 +161,13 @@ fun monochromeColorScheme(isDark: Boolean): ColorScheme {
     }
 }
 
+/**
+ * Map Material Kolor [DynamicScheme] into a full Compose [ColorScheme].
+ *
+ * Must include the surface-container ladder (`surfaceContainer*`, `surfaceBright`,
+ * `surfaceDim`, `surfaceTint`, scrim/inverse). Menus, dialogs, and many M3
+ * components read those tokens; omitting them leaves Compose's purple defaults.
+ */
 private fun DynamicScheme.toColorScheme(): ColorScheme {
     val c = { argb: Int -> Color(argb) }
     return if (isDark) darkColorScheme(
@@ -158,7 +182,19 @@ private fun DynamicScheme.toColorScheme(): ColorScheme {
         background = c(background), onBackground = c(onBackground),
         surface = c(surface), onSurface = c(onSurface),
         surfaceVariant = c(surfaceVariant), onSurfaceVariant = c(onSurfaceVariant),
+        surfaceBright = c(surfaceBright),
+        surfaceDim = c(surfaceDim),
+        surfaceContainer = c(surfaceContainer),
+        surfaceContainerHigh = c(surfaceContainerHigh),
+        surfaceContainerHighest = c(surfaceContainerHighest),
+        surfaceContainerLow = c(surfaceContainerLow),
+        surfaceContainerLowest = c(surfaceContainerLowest),
         outline = c(outline), outlineVariant = c(outlineVariant),
+        scrim = c(scrim),
+        inverseSurface = c(inverseSurface),
+        inverseOnSurface = c(inverseOnSurface),
+        inversePrimary = c(inversePrimary),
+        surfaceTint = c(surfaceTint),
     ) else lightColorScheme(
         primary = c(primary), onPrimary = c(onPrimary),
         primaryContainer = c(primaryContainer), onPrimaryContainer = c(onPrimaryContainer),
@@ -171,6 +207,18 @@ private fun DynamicScheme.toColorScheme(): ColorScheme {
         background = c(background), onBackground = c(onBackground),
         surface = c(surface), onSurface = c(onSurface),
         surfaceVariant = c(surfaceVariant), onSurfaceVariant = c(onSurfaceVariant),
+        surfaceBright = c(surfaceBright),
+        surfaceDim = c(surfaceDim),
+        surfaceContainer = c(surfaceContainer),
+        surfaceContainerHigh = c(surfaceContainerHigh),
+        surfaceContainerHighest = c(surfaceContainerHighest),
+        surfaceContainerLow = c(surfaceContainerLow),
+        surfaceContainerLowest = c(surfaceContainerLowest),
         outline = c(outline), outlineVariant = c(outlineVariant),
+        scrim = c(scrim),
+        inverseSurface = c(inverseSurface),
+        inverseOnSurface = c(inverseOnSurface),
+        inversePrimary = c(inversePrimary),
+        surfaceTint = c(surfaceTint),
     )
 }

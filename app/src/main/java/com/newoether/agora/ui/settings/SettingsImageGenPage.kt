@@ -88,7 +88,6 @@ fun SettingsImageGenPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val modelAliases by viewModel.settings.modelAliases.collectAsState()
     var showModelDialog by remember { mutableStateOf(false) }
     var showAllModels by remember { mutableStateOf(false) }
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
 
     // Source from ALL synced models (image models needn't be enabled for chat). Default to the
     // image-likely subset so the list stays short; "show all" is the escape hatch for odd names.
@@ -99,7 +98,6 @@ fun SettingsImageGenPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     CollapsingSettingsScaffold(
         title = stringResource(R.string.settings_image_gen),
         onBack = onBack,
-        floatingActionButton = { if (showDocFab) DocumentationFab("image-generation.md") }
     ) {
             SettingsGroupColumn {
                 SettingsGroup(title = stringResource(R.string.settings_image_gen), items = listOf({

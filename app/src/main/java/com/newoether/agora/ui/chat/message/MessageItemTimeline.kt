@@ -307,10 +307,9 @@ private fun CompactSegmentBlock(
                     .clickable { expandedStates[expansionKey] = !isExpanded }
                     .padding(10.dp)
             ) {
-                if (isToolCalling || isToolInProgress) {
-                    Icon(Icons.Default.Build, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
-                } else if (!isThinking && !hasThought && toolCount > 0) {
-                    Icon(Icons.Default.Build, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+                if (isToolCalling || isToolInProgress || (!isThinking && !hasThought && toolCount > 0)) {
+                    val headerTool = lastSeg.takeIf { it.type == "tool" }?.toolName
+                    ToolTypeIcon(headerTool)
                 } else if (isTranscribing || collapsedTitle == "Image Transcription") {
                     Icon(Icons.Filled.Image, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
                 } else {
@@ -424,11 +423,13 @@ private fun CompactSegmentBlock(
                             }
                         }
                         if (idx < segs.lastIndex) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 2.dp),
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
-                            )
-                        }
+                                                    HorizontalDivider(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(vertical = 2.dp),
+                                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
+                                                    )
+                                                }
                        }
                       }
                     }
@@ -528,19 +529,18 @@ internal fun TimelineSegmentsContent(
                         previousVisibleWasAnswer = false
                         index = blockEnd
                     } else {
-                        // Stitch consecutive timeline items into one card with dividers
-                        // between rows, instead of rendering each tool as a separate chip.
+                        // New timeline style: stitch adjacent info rows into one card with
+                        // dividers, while answer segments remain full-width timeline anchors.
                         val blockSegments = mutableListOf<MessageSegment>()
                         val blockDetailIndices = mutableListOf<Int>()
-                        var blockEnd = index
-                        while (blockEnd < segments.size && !segments[blockEnd].isVisibleAnswerSegment()) {
-                            val blockSeg = segments[blockEnd]
+                        val blockEnd = timelineInfoBlockEnd(segments, index)
+                        for (blockIndex in index until blockEnd) {
+                            val blockSeg = segments[blockIndex]
                             if (blockSeg.isInfoSegment()) {
                                 blockSegments.add(blockSeg)
                                 blockDetailIndices.add(detailIndex)
                                 detailIndex++
                             }
-                            blockEnd++
                         }
                         val firstDetail = blockDetailIndices.firstOrNull() ?: index
                         val timelineKey = "${message.id}:timeline:$firstDetail"
@@ -609,7 +609,7 @@ private fun TimelineInfoSegmentGroup(
                     val isTool = seg.type == "tool"
                     val isTranscription = seg.type == "transcription"
                     if (isTool) {
-                        Icon(Icons.Default.Build, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+                        ToolTypeIcon(seg.toolName)
                     } else if (isTranscription) {
                         Icon(Icons.Filled.Image, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
                     } else {
@@ -656,7 +656,7 @@ private fun TimelineInfoSegmentGroup(
                 }
                 if (idx < segs.lastIndex) {
                     HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 10.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
                     )
                 }
@@ -691,7 +691,7 @@ private fun TimelineInfoSegmentCard(
             val isTool = seg.type == "tool"
             val isTranscription = seg.type == "transcription"
             if (isTool) {
-                Icon(Icons.Default.Build, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+                ToolTypeIcon(seg.toolName)
             } else if (isTranscription) {
                 Icon(Icons.Filled.Image, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
             } else {

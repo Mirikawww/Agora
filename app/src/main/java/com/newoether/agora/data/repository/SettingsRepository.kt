@@ -10,6 +10,7 @@ import com.newoether.agora.data.EmbeddingModelConfig
 import com.newoether.agora.data.LocalChatModelConfig
 import com.newoether.agora.data.McpServerConfig
 import com.newoether.agora.data.PromptTemplateItem
+import com.newoether.agora.data.ProviderBalanceConfig
 import com.newoether.agora.data.SettingsManager
 import com.newoether.agora.data.ShellDeviceConfig
 import com.newoether.agora.data.SystemPromptEntry
@@ -46,6 +47,8 @@ class SettingsRepository(
     val selectedModel: StateFlow<String> = hot(settingsManager.selectedModel, Constants.EXAMPLE_MODEL_ID)
     val availableModels: StateFlow<Map<String, List<String>>> = hot(settingsManager.availableModels, emptyMap())
     val modelFastSupport: StateFlow<Map<String, Boolean>> = hot(settingsManager.modelFastSupport, emptyMap())
+    val modelKeyNicknames: StateFlow<Map<String, List<String>>> = hot(settingsManager.modelKeyNicknames, emptyMap())
+    val modelKeyIds: StateFlow<Map<String, String>> = hot(settingsManager.modelKeyIds, emptyMap())
     val enabledModels: StateFlow<Set<String>> = hot(settingsManager.enabledModels, emptySet())
     val disabledProviders: StateFlow<Set<String>> = hot(settingsManager.disabledProviders, emptySet())
     val modelAliases: StateFlow<Map<String, String>> = hot(settingsManager.modelAliases, emptyMap())
@@ -61,7 +64,9 @@ class SettingsRepository(
     val thinkingLevel: StateFlow<String> = hot(settingsManager.thinkingLevel, "medium")
     val thinkingBudgetEnabled: StateFlow<Boolean> = hot(settingsManager.thinkingBudgetEnabled, false)
     val thinkingBudgetTokens: StateFlow<Int> = hot(settingsManager.thinkingBudgetTokens, 4096)
+    val fastEnabled: StateFlow<Boolean> = hot(settingsManager.fastEnabled, false)
     val providerBaseUrls: StateFlow<Map<String, String>> = hot(settingsManager.providerBaseUrls, emptyMap())
+    val providerBalanceConfigs: StateFlow<Map<String, ProviderBalanceConfig>> = hot(settingsManager.providerBalanceConfigs, emptyMap())
     val titleGenerationEnabled: StateFlow<Boolean> = hot(settingsManager.titleGenerationEnabled, true)
     val titleGenerationModel: StateFlow<String?> = hot(settingsManager.titleGenerationModel, null)
     val titleGenerationPrompt: StateFlow<String> = hot(settingsManager.titleGenerationPrompt, BuiltInPrompts.TITLE_GENERATION_SYSTEM)
@@ -89,15 +94,26 @@ class SettingsRepository(
     val imageGenEnabled: StateFlow<Boolean> = hot(settingsManager.imageGenEnabled, false)
     val imageGenModel: StateFlow<String?> = hot(settingsManager.imageGenModel, null)
     val imageGenSize: StateFlow<String> = hot(settingsManager.imageGenSize, "1024x1024")
-    val showDocumentationFab: StateFlow<Boolean> = hot(settingsManager.showDocumentationFab, true)
+    val showComposerExpandButton: StateFlow<Boolean> = hot(settingsManager.showComposerExpandButton, true)
     val welcomeMessages: StateFlow<String> = hot(settingsManager.welcomeMessages, "")
     val welcomeDisplayMode: StateFlow<String> = hot(settingsManager.welcomeDisplayMode, "random")
+    val welcomeEnabled: StateFlow<Boolean> = hot(settingsManager.welcomeEnabled, true)
+    val composerDraftsJson: StateFlow<String> = hot(settingsManager.composerDraftsJson, "{}")
+    val messageQueuesJson: StateFlow<String> = hot(settingsManager.messageQueuesJson, "{}")
     val userProfileNickname: StateFlow<String> = hot(settingsManager.userProfileNickname, "")
     val userProfileGender: StateFlow<String> = hot(settingsManager.userProfileGender, "")
     val userProfileAge: StateFlow<String> = hot(settingsManager.userProfileAge, "")
     val userProfileHeight: StateFlow<String> = hot(settingsManager.userProfileHeight, "")
     val userProfileOccupation: StateFlow<String> = hot(settingsManager.userProfileOccupation, "")
     val userProfileOther: StateFlow<String> = hot(settingsManager.userProfileOther, "")
+    val githubConnectorEnabled: StateFlow<Boolean> = hot(settingsManager.githubConnectorEnabled, false)
+    val githubToken: StateFlow<String> = hot(settingsManager.githubToken, "")
+    val todoistConnectorEnabled: StateFlow<Boolean> = hot(settingsManager.todoistConnectorEnabled, false)
+    val todoistOAuth: StateFlow<com.newoether.agora.data.McpOAuthState?> = hot(settingsManager.todoistOAuth, null)
+    val notionConnectorEnabled: StateFlow<Boolean> = hot(settingsManager.notionConnectorEnabled, false)
+    val notionOAuth: StateFlow<com.newoether.agora.data.McpOAuthState?> = hot(settingsManager.notionOAuth, null)
+    val skillsEnabled: StateFlow<Boolean> = hot(settingsManager.skillsEnabled, true)
+    val skillsApiToken: StateFlow<String> = hot(settingsManager.skillsApiToken, "")
     val shellEnabled: StateFlow<Boolean> = hot(settingsManager.shellEnabled, false)
     val proxyEnabled: StateFlow<Boolean> = hot(settingsManager.proxyEnabled, false)
     val proxyType: StateFlow<String> = hot(settingsManager.proxyType, "http")
@@ -124,9 +140,6 @@ class SettingsRepository(
     val hapticsEnabled: StateFlow<Boolean> = hot(settingsManager.hapticsEnabled, true)
     val toolCallDisplayMode: StateFlow<String> = hot(settingsManager.toolCallDisplayMode, ToolCallDisplayModes.DEFAULT)
     val schemeStyle: StateFlow<String> = hot(settingsManager.schemeStyle, "TONAL_SPOT")
-    val fontPreference: StateFlow<String> = hot(settingsManager.fontPreference, "app_default")
-    val customFontPath: StateFlow<String> = hot(settingsManager.customFontPath, "")
-    val customFontName: StateFlow<String> = hot(settingsManager.customFontName, "")
     val searchContextWindow: StateFlow<Int> = hot(settingsManager.searchContextWindow, 8)
     val searchMatchLimit: StateFlow<Int> = hot(settingsManager.searchMatchLimit, 10)
     val ragThreshold: StateFlow<Float> = hot(settingsManager.ragThreshold, 0.5f)
@@ -193,14 +206,74 @@ class SettingsRepository(
         }
     }
 
-    // API keys
-    fun addApiKey(name: String, key: String, provider: String) {
+
+    /** Manual override for whether [model] supports "fast" tier (persisted in modelFastSupport). */
+    fun setModelFastOverride(model: String, enabled: Boolean?) {
         scope.launch {
-            val entry = ApiKeyEntry(name = name, key = key, provider = provider)
-            settingsManager.saveApiKeys(apiKeys.value + entry)
-            val enabled = activeApiKeyIds.value[provider].orEmpty()
-            settingsManager.setActiveApiKeyIds(provider, enabled + entry.id)
+            val provider = ModelId.parse(model).providerName
+            val current = modelFastSupport.value.toMutableMap()
+            if (enabled == null) current.remove(model) else current[model] = enabled
+            // saveModelFastSupport replaces whole provider slice; rebuild from current map for provider
+            val forProvider = current.filterKeys { it.startsWith("$provider:") }
+            settingsManager.saveModelFastSupport(provider, forProvider)
         }
+    }
+
+    // API keys
+    /**
+     * Refresh model-source (key nickname) badges for [provider] from the current active
+     * keys + already-cached available models — no network fetch required.
+     *
+     * Call with the post-mutation [keysForProvider] / [activeIds] when StateFlows may still
+     * hold pre-write values (DataStore edits are async).
+     *
+     * Full catalog refresh ([ProviderRegistry.fetchModelsForProvider]) still overwrites with
+     * precise per-key model unions when the user refreshes models.
+     */
+    private suspend fun syncKeyNicknameBadges(
+        provider: String,
+        keysForProvider: List<ApiKeyEntry>? = null,
+        activeIds: List<String>? = null,
+    ) {
+        val models = availableModels.value[provider].orEmpty()
+        if (models.isEmpty()) {
+            settingsManager.saveModelKeyNicknames(provider, emptyMap())
+            return
+        }
+        val keys = keysForProvider ?: apiKeys.value.filter { it.provider == provider }
+        val ids = activeIds ?: activeApiKeyIds.value[provider].orEmpty()
+        val byId = keys.associateBy { it.id }
+        val activeNames = ids.mapNotNull { id ->
+            byId[id]?.name?.takeIf { it.isNotBlank() }
+        }.distinct()
+        val nickMap = if (activeNames.isEmpty()) {
+            emptyMap()
+        } else {
+            models.associateWith { activeNames }
+        }
+        settingsManager.saveModelKeyNicknames(provider, nickMap)
+    }
+
+    fun addApiKey(name: String, key: String, provider: String): Boolean {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
+        val duplicate = apiKeys.value.any {
+            it.provider == provider && it.name.equals(trimmed, ignoreCase = true)
+        }
+        if (duplicate) return false
+        scope.launch {
+            val entry = ApiKeyEntry(name = trimmed, key = key, provider = provider)
+            val newKeys = apiKeys.value + entry
+            val newActive = activeApiKeyIds.value[provider].orEmpty() + entry.id
+            settingsManager.saveApiKeys(newKeys)
+            settingsManager.setActiveApiKeyIds(provider, newActive)
+            syncKeyNicknameBadges(
+                provider = provider,
+                keysForProvider = newKeys.filter { it.provider == provider },
+                activeIds = newActive,
+            )
+        }
+        return true
     }
 
     /**
@@ -213,8 +286,15 @@ class SettingsRepository(
             val current = apiKeys.value
             val existing = current.firstOrNull { it.provider == provider }
             val entry = existing?.copy(name = name, key = key) ?: ApiKeyEntry(name = name, key = key, provider = provider)
-            settingsManager.saveApiKeys(current.filter { it.provider != provider } + entry)
-            settingsManager.setActiveApiKeyIds(provider, listOf(entry.id))
+            val newKeys = current.filter { it.provider != provider } + entry
+            val newActive = listOf(entry.id)
+            settingsManager.saveApiKeys(newKeys)
+            settingsManager.setActiveApiKeyIds(provider, newActive)
+            syncKeyNicknameBadges(
+                provider = provider,
+                keysForProvider = newKeys.filter { it.provider == provider },
+                activeIds = newActive,
+            )
         }
     }
 
@@ -226,13 +306,66 @@ class SettingsRepository(
             val remainingEnabled = activeApiKeyIds.value[entry.provider].orEmpty().filter { it != id }
             settingsManager.setActiveApiKeyIds(entry.provider, remainingEnabled)
             settingsManager.saveApiKeys(newList)
+            syncKeyNicknameBadges(
+                provider = entry.provider,
+                keysForProvider = newList.filter { it.provider == entry.provider },
+                activeIds = remainingEnabled,
+            )
+            // Last key removed or no enabled keys left → drop stale catalog immediately.
+            if (remainingEnabled.isEmpty()) {
+                val stillHasKeys = newList.any { it.provider == entry.provider }
+                if (!stillHasKeys || entry.provider != Constants.PROVIDER_OLLAMA) {
+                    // No keys at all, or remaining keys are all disabled: clear catalog for
+                    // non-keyless providers. Pure keyless (no keys ever) is handled elsewhere.
+                    if (stillHasKeys || newList.none { it.provider == entry.provider }) {
+                        val hasAnyKeysForProvider = newList.any { it.provider == entry.provider }
+                        if (hasAnyKeysForProvider || entry.provider != Constants.PROVIDER_OLLAMA) {
+                            // If provider still has disabled keys only, or zero keys after delete of last:
+                            // clear when not Ollama keyless path.
+                            if (entry.provider != Constants.PROVIDER_OLLAMA || hasAnyKeysForProvider) {
+                                saveAvailableModels(entry.provider, emptyList())
+                                saveModelKeyNicknames(entry.provider, emptyMap())
+                                saveModelKeyIds(entry.provider, emptyMap())
+                                saveModelFastSupport(entry.provider, emptyMap())
+                                val allAvailable = getAvailableModels().values.flatten().toSet()
+                                val newEnabled = enabledModels.value.intersect(allAvailable)
+                                if (newEnabled != enabledModels.value) setEnabledModels(newEnabled)
+                                val selected = selectedModel.value
+                                if (selected.startsWith("${entry.provider}:") && selected !in allAvailable) {
+                                    setSelectedModel(
+                                        newEnabled.firstOrNull()
+                                            ?: allAvailable.firstOrNull()
+                                            ?: Constants.EXAMPLE_MODEL_ID
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    fun updateApiKey(id: String, name: String, key: String) {
-        scope.launch {
-            settingsManager.saveApiKeys(apiKeys.value.map { if (it.id == id) it.copy(name = name, key = key) else it })
+    fun updateApiKey(id: String, name: String, key: String): Boolean {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
+        val current = apiKeys.value.find { it.id == id } ?: return false
+        val duplicate = apiKeys.value.any {
+            it.id != id && it.provider == current.provider && it.name.equals(trimmed, ignoreCase = true)
         }
+        if (duplicate) return false
+        scope.launch {
+            val newKeys = apiKeys.value.map {
+                if (it.id == id) it.copy(name = trimmed, key = key) else it
+            }
+            settingsManager.saveApiKeys(newKeys)
+            syncKeyNicknameBadges(
+                provider = current.provider,
+                keysForProvider = newKeys.filter { it.provider == current.provider },
+                activeIds = activeApiKeyIds.value[current.provider].orEmpty(),
+            )
+        }
+        return true
     }
 
     /** Enable or disable [id] among the multi-selected keys for [provider]. */
@@ -245,6 +378,35 @@ class SettingsRepository(
                 current.filter { it != id }
             }
             settingsManager.setActiveApiKeyIds(provider, next)
+            syncKeyNicknameBadges(
+                provider = provider,
+                keysForProvider = apiKeys.value.filter { it.provider == provider },
+                activeIds = next,
+            )
+            // Immediately drop this provider's catalog when no enabled keys remain and
+            // the provider is not keyless. Avoids stale model rows + stuck full sync.
+            if (next.isEmpty()) {
+                val hasStoredKeys = apiKeys.value.any { it.provider == provider }
+                if (hasStoredKeys && provider != Constants.PROVIDER_OLLAMA) {
+                    saveAvailableModels(provider, emptyList())
+                    saveModelKeyNicknames(provider, emptyMap())
+                    saveModelKeyIds(provider, emptyMap())
+                    saveModelFastSupport(provider, emptyMap())
+                    val allAvailable = getAvailableModels().values.flatten().toSet()
+                    val newEnabled = enabledModels.value.intersect(allAvailable)
+                    if (newEnabled != enabledModels.value) {
+                        setEnabledModels(newEnabled)
+                    }
+                    val selected = selectedModel.value
+                    if (selected.startsWith("$provider:") && selected !in allAvailable) {
+                        setSelectedModel(
+                            newEnabled.firstOrNull()
+                                ?: allAvailable.firstOrNull()
+                                ?: Constants.EXAMPLE_MODEL_ID
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -325,6 +487,10 @@ class SettingsRepository(
                 if (oldName in disabledProviders.value) {
                     settingsManager.saveDisabledProviders(disabledProviders.value - oldName + newName)
                 }
+                providerBalanceConfigs.value[oldName]?.let { balance ->
+                    settingsManager.saveProviderBalanceConfig(newName, balance)
+                    settingsManager.saveProviderBalanceConfig(oldName, ProviderBalanceConfig())
+                }
             }
             onProviderAdd(newName, CustomOpenAiProvider(newName, url))
         }
@@ -341,6 +507,7 @@ class SettingsRepository(
             settingsManager.saveApiKeys(apiKeys.value.filter { it.provider != name })
             settingsManager.setActiveApiKeyIds(name, emptyList())
             settingsManager.saveDisabledProviders(disabledProviders.value - name)
+            settingsManager.saveProviderBalanceConfig(name, ProviderBalanceConfig())
         }
     }
 
@@ -357,6 +524,7 @@ class SettingsRepository(
     fun setMaxContextWindow(window: Int) = scope.launch { settingsManager.saveMaxContextWindow(window) }
     fun setVisualizeContextRollout(enabled: Boolean) = scope.launch { settingsManager.saveVisualizeContextRollout(enabled) }
     fun setProviderBaseUrl(provider: String, url: String) = scope.launch { settingsManager.saveProviderBaseUrl(provider, url) }
+    fun setProviderBalanceConfig(provider: String, config: ProviderBalanceConfig) = scope.launch { settingsManager.saveProviderBalanceConfig(provider, config) }
     fun setTitleGenerationEnabled(enabled: Boolean) = scope.launch { settingsManager.saveTitleGenerationEnabled(enabled) }
     fun setTitleGenerationModel(model: String?) = scope.launch { settingsManager.saveTitleGenerationModel(model) }
     fun setTitleGenerationPrompt(prompt: String) = scope.launch { settingsManager.saveTitleGenerationPrompt(prompt) }
@@ -381,15 +549,26 @@ class SettingsRepository(
     fun setImageGenEnabled(enabled: Boolean) = scope.launch { settingsManager.saveImageGenEnabled(enabled) }
     fun setImageGenModel(model: String?) = scope.launch { settingsManager.saveImageGenModel(model) }
     fun setImageGenSize(size: String) = scope.launch { settingsManager.saveImageGenSize(size) }
-    fun setShowDocumentationFab(enabled: Boolean) = scope.launch { settingsManager.saveShowDocumentationFab(enabled) }
+    fun setShowComposerExpandButton(enabled: Boolean) = scope.launch { settingsManager.saveShowComposerExpandButton(enabled) }
     fun setWelcomeMessages(value: String) = scope.launch { settingsManager.saveWelcomeMessages(value) }
     fun setWelcomeDisplayMode(mode: String) = scope.launch { settingsManager.saveWelcomeDisplayMode(mode) }
+    fun setWelcomeEnabled(enabled: Boolean) = scope.launch { settingsManager.saveWelcomeEnabled(enabled) }
+    fun setComposerDraftsJson(value: String) = scope.launch { settingsManager.saveComposerDraftsJson(value) }
+    fun setMessageQueuesJson(value: String) = scope.launch { settingsManager.saveMessageQueuesJson(value) }
     fun setUserProfileNickname(value: String) = scope.launch { settingsManager.saveUserProfileNickname(value) }
     fun setUserProfileGender(value: String) = scope.launch { settingsManager.saveUserProfileGender(value) }
     fun setUserProfileAge(value: String) = scope.launch { settingsManager.saveUserProfileAge(value) }
     fun setUserProfileHeight(value: String) = scope.launch { settingsManager.saveUserProfileHeight(value) }
     fun setUserProfileOccupation(value: String) = scope.launch { settingsManager.saveUserProfileOccupation(value) }
     fun setUserProfileOther(value: String) = scope.launch { settingsManager.saveUserProfileOther(value) }
+    fun setGithubConnectorEnabled(enabled: Boolean) = scope.launch { settingsManager.saveGithubConnectorEnabled(enabled) }
+    fun setGithubToken(token: String) = scope.launch { settingsManager.saveGithubToken(token) }
+    fun setTodoistConnectorEnabled(enabled: Boolean) = scope.launch { settingsManager.saveTodoistConnectorEnabled(enabled) }
+    fun setTodoistOAuth(oauth: com.newoether.agora.data.McpOAuthState?) = scope.launch { settingsManager.saveTodoistOAuth(oauth) }
+    fun setNotionConnectorEnabled(enabled: Boolean) = scope.launch { settingsManager.saveNotionConnectorEnabled(enabled) }
+    fun setNotionOAuth(oauth: com.newoether.agora.data.McpOAuthState?) = scope.launch { settingsManager.saveNotionOAuth(oauth) }
+    fun setSkillsEnabled(enabled: Boolean) = scope.launch { settingsManager.saveSkillsEnabled(enabled) }
+    fun setSkillsApiToken(token: String) = scope.launch { settingsManager.saveSkillsApiToken(token) }
     fun setShellEnabled(enabled: Boolean) = scope.launch { settingsManager.saveShellEnabled(enabled) }
     fun setMcpEnabled(enabled: Boolean) = scope.launch { settingsManager.saveMcpEnabled(enabled) }
     fun setProxyEnabled(enabled: Boolean) = scope.launch { settingsManager.saveProxyEnabled(enabled) }
@@ -400,10 +579,12 @@ class SettingsRepository(
     fun setProxyPassword(pass: String) = scope.launch { settingsManager.saveProxyPassword(pass) }
     fun setProxyBypass(bypass: String) = scope.launch { settingsManager.saveProxyBypass(bypass) }
     fun setSandboxEnabled(enabled: Boolean) = scope.launch { settingsManager.saveSandboxEnabled(enabled) }
+    fun setGoogleSearchEnabled(enabled: Boolean) = scope.launch { settingsManager.saveGoogleSearchEnabled(enabled) }
     fun setThinkingEnabled(enabled: Boolean) = scope.launch { settingsManager.saveThinkingEnabled(enabled) }
     fun setThinkingLevel(level: String) = scope.launch { settingsManager.saveThinkingLevel(level) }
     fun setThinkingBudgetEnabled(enabled: Boolean) = scope.launch { settingsManager.saveThinkingBudgetEnabled(enabled) }
     fun setThinkingBudgetTokens(tokens: Int) = scope.launch { settingsManager.saveThinkingBudgetTokens(tokens) }
+    fun setFastEnabled(enabled: Boolean) = scope.launch { settingsManager.saveFastEnabled(enabled) }
     fun setDefaultTemperature(v: Float?) = scope.launch { settingsManager.saveDefaultTemperature(v) }
     fun setDefaultMaxTokens(v: Int?) = scope.launch { settingsManager.saveDefaultMaxTokens(v) }
     fun setDefaultTopP(v: Float?) = scope.launch { settingsManager.saveDefaultTopP(v) }
@@ -416,9 +597,6 @@ class SettingsRepository(
     fun setHapticsEnabled(enabled: Boolean) = scope.launch { settingsManager.saveHapticsEnabled(enabled) }
     fun setToolCallDisplayMode(mode: String) = scope.launch { settingsManager.saveToolCallDisplayMode(mode) }
     fun setSchemeStyle(style: String) = scope.launch { settingsManager.saveSchemeStyle(style) }
-    fun setFontPreference(value: String) = scope.launch { settingsManager.saveFontPreference(value) }
-    fun setCustomFontPath(value: String) = scope.launch { settingsManager.saveCustomFontPath(value) }
-    fun setCustomFontName(value: String) = scope.launch { settingsManager.saveCustomFontName(value) }
     fun setSearchMatchLimit(n: Int) = scope.launch { settingsManager.saveSearchMatchLimit(n) }
     fun setSearchContextWindow(n: Int) = scope.launch { settingsManager.saveSearchContextWindow(n) }
     fun setRagThreshold(threshold: Float) = scope.launch { settingsManager.saveRagThreshold(threshold) }
@@ -443,6 +621,15 @@ class SettingsRepository(
 
     /** Synchronous variant used by MCP metadata/OAuth reconciliation to avoid stale write races. */
     suspend fun updateMcpServerNow(server: McpServerConfig) {
+        // Built-in connectors are not user MCP rows — persist their OAuth blobs separately.
+        if (server.id == com.newoether.agora.tool.TodoistConnector.SERVER_ID) {
+            settingsManager.saveTodoistOAuth(server.oauth)
+            return
+        }
+        if (server.id == com.newoether.agora.tool.NotionConnector.SERVER_ID) {
+            settingsManager.saveNotionOAuth(server.oauth)
+            return
+        }
         settingsManager.updateMcpServer(server)
     }
 
@@ -461,6 +648,36 @@ class SettingsRepository(
 
     /** First enabled cleartext API key for [provider], or `null`. */
     fun resolveActiveKey(provider: String): String? = resolveActiveKeys(provider).firstOrNull()
+
+    /**
+     * API key that owns [modelIdWithPrefix] ("Provider:model").
+     * Prefer the key that listed this model in catalog fetch; never rotates across keys.
+     */
+    fun resolveApiKeyForModel(modelIdWithPrefix: String, provider: String): String? {
+        val keyId = modelKeyIds.value[modelIdWithPrefix]
+        if (!keyId.isNullOrBlank()) {
+            val enabled = activeApiKeyIds.value[provider].orEmpty()
+            if (keyId in enabled) {
+                apiKeys.value.find { it.id == keyId && it.provider == provider }?.key
+                    ?.takeIf { it.isNotBlank() }?.let { return it }
+            }
+        }
+        return resolveActiveKey(provider)
+    }
+
+    suspend fun awaitApiKeyForModel(modelIdWithPrefix: String, provider: String): String? {
+        val keyIdsMap = settingsManager.modelKeyIds.first()
+        val keyId = keyIdsMap[modelIdWithPrefix]
+        if (!keyId.isNullOrBlank()) {
+            val enabled = settingsManager.activeApiKeyIds.first()[provider].orEmpty()
+            if (keyId in enabled) {
+                val keys = settingsManager.apiKeys.first()
+                keys.find { it.id == keyId && it.provider == provider }?.key
+                    ?.takeIf { it.isNotBlank() }?.let { return it }
+            }
+        }
+        return awaitActiveKey(provider)
+    }
 
     /**
      * Like [resolveActiveKeys] but awaits on-disk DataStore values instead of
@@ -503,6 +720,11 @@ class SettingsRepository(
     suspend fun getSystemPrompts(): List<SystemPromptEntry> = settingsManager.systemPrompts.first()
 
     suspend fun saveAvailableModels(provider: String, models: List<String>) = settingsManager.saveAvailableModels(provider, models)
+    suspend fun saveModelKeyNicknames(provider: String, nicknames: Map<String, List<String>>) =
+        settingsManager.saveModelKeyNicknames(provider, nicknames)
+
+    suspend fun saveModelKeyIds(provider: String, keyIds: Map<String, String>) =
+        settingsManager.saveModelKeyIds(provider, keyIds)
     suspend fun saveModelFastSupport(provider: String, support: Map<String, Boolean>) =
         settingsManager.saveModelFastSupport(provider, support)
     suspend fun saveModelAliases(aliases: Map<String, String>) = settingsManager.saveModelAliases(aliases)

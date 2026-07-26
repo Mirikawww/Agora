@@ -20,6 +20,42 @@ fun buildToolCallId(toolName: String, arguments: String, prefix: String = Consta
     return "$prefix${toolName}_$shortHash"
 }
 
+/**
+ * Some model streams / proxies emit concatenated JSON tool args
+ * (`{"a":1}{"a":1}`). Keep the first complete top-level object/array so
+ * local tool execution and provider re-serialization stay valid.
+ */
+fun normalizeToolArguments(raw: String?): String {
+    val s = raw?.trim().orEmpty()
+    if (s.isEmpty()) return "{}"
+    val start = s.indexOfFirst { it == '{' || it == '[' }
+    if (start < 0) return s
+    var depth = 0
+    var inString = false
+    var escape = false
+    for (i in start until s.length) {
+        val c = s[i]
+        if (inString) {
+            when {
+                escape -> escape = false
+                c.code == 92 -> escape = true
+                c == '"' -> inString = false
+            }
+            continue
+        }
+        when (c) {
+            '"' -> inString = true
+            '{', '[' -> depth++
+            '}', ']' -> {
+                depth--
+                if (depth == 0) return s.substring(start, i + 1)
+            }
+        }
+    }
+    return s.substring(start)
+}
+
+
 fun encodeImageToBase64(imagePath: String): Pair<String, String>? {
     return try {
         val file = File(imagePath)
@@ -51,101 +87,121 @@ fun convertToOpenAiMessages(
     }
 
     apiMessages.addAll(messages.flatMap { msg ->
-        val entries = mutableListOf<OpenAiMessage>()
+            val entries = mutableListOf<OpenAiMessage>()
 
-        // tool_ messages: assistant turn with tool_calls only
-        // (tool results come from the following result_ messages)
-        if (msg.id.startsWith(Constants.TOOL_MSG_PREFIX)) {
-            val toolSegs = msg.segments?.filter { it.type == "tool" }
-            val thoughtContent = msg.segments?.lastOrNull { it.type == "thought" }?.content
-            if (!toolSegs.isNullOrEmpty()) {
-                val toolCalls = toolSegs.map { seg ->
-                    val tid = seg.toolCallId ?: buildToolCallId(seg.toolName ?: "", seg.toolArgs ?: "{}")
-                    OpenAiRequestToolCall(
-                        id = tid,
-                        function = OpenAiRequestFunction(name = seg.toolName ?: "", arguments = seg.toolArgs ?: "{}")
-                    )
-                }
-                entries.add(OpenAiMessage(
-                    role = "assistant",
-                    content = listOf(OpenAiContentPart(type = "text", text = " ")),
-                    toolCalls = toolCalls,
-                    reasoningContent = thoughtContent?.ifEmpty { null }
-                ))
-            } else if (msg.toolCall != null) {
-                val tc = msg.toolCall!!
-                val toolId = tc.toolCallId ?: buildToolCallId(tc.toolName, tc.arguments)
-                entries.add(OpenAiMessage(
-                    role = "assistant",
-                    content = listOf(OpenAiContentPart(type = "text", text = " ")),
-                    toolCalls = listOf(OpenAiRequestToolCall(
-                        id = toolId,
-                        function = OpenAiRequestFunction(name = tc.toolName, arguments = tc.arguments)
-                    )),
-                    reasoningContent = thoughtContent?.ifEmpty { null }
-                ))
-            }
-            return@flatMap entries
-        }
+            // tool_ messages: assistant turn with tool_calls only
+                    // (tool results come from the following result_ messages)
+                    if (msg.id.startsWith(Constants.TOOL_MSG_PREFIX)) {
+                        val toolSegs = msg.segments?.filter { it.type == "tool" }
+                        val thoughtContent = msg.segments?.lastOrNull { it.type == "thought" }?.content
+                        if (!toolSegs.isNullOrEmpty()) {
+                            val toolCalls = toolSegs.map { seg ->
+                                val args = normalizeToolArguments(seg.toolArgs)
+                                val tid = seg.toolCallId?.takeIf { it.isNotBlank() }
+                                    ?: buildToolCallId(seg.toolName ?: "", args)
+                                OpenAiRequestToolCall(
+                                    id = tid,
+                                    function = OpenAiRequestFunction(name = seg.toolName ?: "", arguments = args)
+                                )
+                            }
+                            // Prefer real pre-tool assistant text when present; otherwise omit content.
+                            // A synthetic " " confuses some proxies into finishing without a follow-up.
+                            val preToolText = msg.text.takeIf { it.isNotBlank() }
+                                ?: msg.segments?.filter { it.type == "answer" }
+                                    ?.joinToString("") { it.content }
+                                    ?.takeIf { it.isNotBlank() }
+                            entries.add(OpenAiMessage(
+                                role = "assistant",
+                                content = if (preToolText != null) {
+                                    listOf(OpenAiContentPart(type = "text", text = preToolText))
+                                } else {
+                                    // Keep a non-null content list for serializers that require it, but
+                                    // use empty string rather than a space token that models echo.
+                                    listOf(OpenAiContentPart(type = "text", text = ""))
+                                },
+                                toolCalls = toolCalls,
+                                reasoningContent = thoughtContent?.ifEmpty { null }
+                            ))
+                        } else if (msg.toolCall != null) {
+                            val tc = msg.toolCall!!
+                            val args = normalizeToolArguments(tc.arguments)
+                            val toolId = tc.toolCallId?.takeIf { it.isNotBlank() }
+                                ?: buildToolCallId(tc.toolName, args)
+                            entries.add(OpenAiMessage(
+                                role = "assistant",
+                                content = listOf(OpenAiContentPart(type = "text", text = "")),
+                                toolCalls = listOf(OpenAiRequestToolCall(
+                                    id = toolId,
+                                    function = OpenAiRequestFunction(name = tc.toolName, arguments = args)
+                                )),
+                                reasoningContent = thoughtContent?.ifEmpty { null }
+                            ))
+                        }
+                        return@flatMap entries
+                    }
 
-        // result_ messages carry the tool result(s)
-        if (msg.id.startsWith(Constants.RESULT_MSG_PREFIX)) {
-            val toolSegs = msg.segments?.filter { it.type == "tool" }
-            if (!toolSegs.isNullOrEmpty()) {
-                for (seg in toolSegs) {
-                    val toolId = seg.toolCallId ?: buildToolCallId(seg.toolName ?: "", seg.toolArgs ?: "{}")
+            // result_ messages carry the tool result(s)
+            if (msg.id.startsWith(Constants.RESULT_MSG_PREFIX)) {
+                val toolSegs = msg.segments?.filter { it.type == "tool" }
+                if (!toolSegs.isNullOrEmpty()) {
+                    for (seg in toolSegs) {
+                        val args = normalizeToolArguments(seg.toolArgs)
+                        val toolId = seg.toolCallId?.takeIf { it.isNotBlank() }
+                            ?: buildToolCallId(seg.toolName ?: "", args)
+                        entries.add(OpenAiMessage(
+                            role = "tool",
+                            content = listOf(OpenAiContentPart(type = "text", text = seg.toolResult ?: "")),
+                            toolCallId = toolId
+                        ))
+                    }
+                } else if (msg.toolCall != null) {
+                    val tc = msg.toolCall!!
+                    val args = normalizeToolArguments(tc.arguments)
+                    val toolId = tc.toolCallId?.takeIf { it.isNotBlank() }
+                        ?: buildToolCallId(tc.toolName, args)
                     entries.add(OpenAiMessage(
                         role = "tool",
-                        content = listOf(OpenAiContentPart(type = "text", text = seg.toolResult ?: "")),
+                        content = listOf(OpenAiContentPart(type = "text", text = tc.result)),
                         toolCallId = toolId
                     ))
                 }
-            } else if (msg.toolCall != null) {
-                val tc = msg.toolCall!!
-                val toolId = tc.toolCallId ?: buildToolCallId(tc.toolName, tc.arguments)
-                entries.add(OpenAiMessage(
-                    role = "tool",
-                    content = listOf(OpenAiContentPart(type = "text", text = tc.result)),
-                    toolCallId = toolId
-                ))
+                return@flatMap entries
             }
-            return@flatMap entries
-        }
 
-        // Normal message: text + images
-        val parts = mutableListOf<OpenAiContentPart>()
-        if (msg.text.isNotEmpty()) {
-            parts.add(OpenAiContentPart(type = "text", text = msg.text))
-        }
+            // Normal message: text + images
+            val parts = mutableListOf<OpenAiContentPart>()
+            if (msg.text.isNotEmpty()) {
+                parts.add(OpenAiContentPart(type = "text", text = msg.text))
+            }
 
-        if (includeImages && msg.participant == Participant.USER) {
-            for (imagePath in msg.images) {
-                val encoded = encodeImageToBase64(imagePath)
-                if (encoded != null) {
-                    val (mimeType, base64) = encoded
-                    parts.add(
-                        OpenAiContentPart(
-                            type = "image_url",
-                            imageUrl = OpenAiImageUrl(url = "data:$mimeType;base64,$base64")
+            if (includeImages && msg.participant == Participant.USER) {
+                for (imagePath in msg.images) {
+                    val encoded = encodeImageToBase64(imagePath)
+                    if (encoded != null) {
+                        val (mimeType, base64) = encoded
+                        parts.add(
+                            OpenAiContentPart(
+                                type = "image_url",
+                                imageUrl = OpenAiImageUrl(url = "data:$mimeType;base64,$base64")
+                            )
                         )
-                    )
+                    }
                 }
             }
-        }
 
-        if (parts.isEmpty()) {
-            parts.add(OpenAiContentPart(type = "text", text = " "))
-        }
+            if (parts.isEmpty()) {
+                parts.add(OpenAiContentPart(type = "text", text = " "))
+            }
 
-        entries.add(OpenAiMessage(
-            role = if (msg.participant == Participant.USER) "user" else "assistant",
-            content = parts
-        ))
-        entries
-    })
+            entries.add(OpenAiMessage(
+                role = if (msg.participant == Participant.USER) "user" else "assistant",
+                content = parts
+            ))
+            entries
+        })
 
-    return apiMessages
-}
+        return apiMessages
+    }
 
 fun limitContext(messages: List<ChatMessage>, maxUserMessages: Int): List<ChatMessage> {
     val result = mutableListOf<ChatMessage>()

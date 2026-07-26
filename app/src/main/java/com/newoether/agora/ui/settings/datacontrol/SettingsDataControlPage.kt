@@ -26,7 +26,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import com.newoether.agora.R
 import com.newoether.agora.ui.settings.CollapsingSettingsScaffold
-import com.newoether.agora.ui.settings.DocumentationFab
 import com.newoether.agora.ui.settings.SettingsGroup
 import com.newoether.agora.ui.settings.SettingsGroupColumn
 import com.newoether.agora.ui.settings.SettingsItem
@@ -151,12 +150,10 @@ fun SettingsDataControlPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val isGptImporting = gptImportProgress != null
     val isProgressVisible = isExporting || isImporting || isClaudeImporting || isGptImporting
 
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
     Box(modifier = Modifier.fillMaxSize()) {
         CollapsingSettingsScaffold(
             title = stringResource(R.string.settings_data_control),
             onBack = onBack,
-            floatingActionButton = { if (showDocFab) DocumentationFab("import-export.md") }
         ) {
                 // Import/Export group
                 SettingsGroupColumn {
@@ -219,36 +216,38 @@ fun SettingsDataControlPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                     title = stringResource(R.string.data_danger_zone),
                     bottomPadding = 0.dp,
                     items = listOf({
-                        SettingsItem(
-                            headlineContent = {
-                                Text(
-                                    stringResource(R.string.data_delete_all_chats),
-                                    color = MaterialTheme.colorScheme.error,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            },
-                            supportingContent = {
-                                Text(
-                                    stringResource(
-                                        R.string.data_delete_all_chats_desc,
-                                        conversationCount
-                                    ),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            },
-                            leadingContent = {
-                                Icon(
-                                    Icons.Default.DeleteForever,
-                                    null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            },
-                            modifier = Modifier.clickable(
-                                enabled = !isDeletingAllChats && conversationCount > 0
-                            ) {
-                                showDeleteAllChatsConfirm = true
-                            }
-                        )
+                        // Keep true red even on monochrome / low-chroma schemes where scheme.error is gray.
+                                                val destructiveRed = Color(0xFFD32F2F)
+                                                SettingsItem(
+                                                    headlineContent = {
+                                                        Text(
+                                                            stringResource(R.string.data_delete_all_chats),
+                                                            color = destructiveRed,
+                                                            fontWeight = FontWeight.Medium
+                                                        )
+                                                    },
+                                                    supportingContent = {
+                                                        Text(
+                                                            stringResource(
+                                                                R.string.data_delete_all_chats_desc,
+                                                                conversationCount
+                                                            ),
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    },
+                                                    leadingContent = {
+                                                        Icon(
+                                                            Icons.Default.DeleteForever,
+                                                            null,
+                                                            tint = destructiveRed
+                                                        )
+                                                    },
+                                                    modifier = Modifier.clickable(
+                                                        enabled = !isDeletingAllChats && conversationCount > 0
+                                                    ) {
+                                                        showDeleteAllChatsConfirm = true
+                                                    }
+                                                )
                     })
                 )
                 Spacer(Modifier.height(16.dp))
@@ -283,7 +282,6 @@ fun SettingsDataControlPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                     }
                 }
 
-                if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
         }
 
         // Progress dialog
@@ -359,19 +357,19 @@ fun SettingsDataControlPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 Text(stringResource(R.string.data_delete_all_chats_confirm, conversationCount))
             },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        showDeleteAllChatsConfirm = false
-                        isDeletingAllChats = true
-                        viewModel.deleteAllConversations { _ ->
-                            isDeletingAllChats = false
-                        }
-                    },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) { Text(stringResource(R.string.delete)) }
-            },
+                            TextButton(
+                                onClick = {
+                                    showDeleteAllChatsConfirm = false
+                                    isDeletingAllChats = true
+                                    viewModel.deleteAllConversations { _ ->
+                                        isDeletingAllChats = false
+                                    }
+                                },
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = Color(0xFFD32F2F)
+                                )
+                            ) { Text(stringResource(R.string.delete)) }
+                        },
             dismissButton = {
                 TextButton(
                     onClick = { showDeleteAllChatsConfirm = false },

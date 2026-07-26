@@ -137,18 +137,19 @@ private fun AutoBackupPeriodDropdown(currentHours: Int, onSelect: (Int) -> Unit)
             modifier = Modifier.clickable { expanded = true }
         )
         DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            periods.forEach { (hours, labelRes) ->
-                DropdownMenuItem(
-                    text = { Text(stringResource(labelRes)) },
-                    onClick = { onSelect(hours); expanded = false },
-                    leadingIcon = if (hours == currentHours) {{ Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary) }} else {{}}
-                )
-            }
-        }
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    periods.forEach { (hours, labelRes) ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(labelRes)) },
+                            onClick = { onSelect(hours); expanded = false },
+                            leadingIcon = if (hours == currentHours) {{ Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary) }} else {{}}
+                        )
+                    }
+                }
     }
 }
 
@@ -172,18 +173,19 @@ private fun AutoDeletePeriodDropdown(currentHours: Int, backupHours: Int, onSele
             modifier = Modifier.clickable { expanded = true }
         )
         DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            validPeriods.forEach { (hours, labelRes) ->
-                DropdownMenuItem(
-                    text = { Text(stringResource(labelRes)) },
-                    onClick = { onSelect(hours); expanded = false },
-                    leadingIcon = if (hours == currentHours) {{ Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary) }} else {{}}
-                )
-            }
-        }
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    validPeriods.forEach { (hours, labelRes) ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(labelRes)) },
+                            onClick = { onSelect(hours); expanded = false },
+                            leadingIcon = if (hours == currentHours) {{ Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary) }} else {{}}
+                        )
+                    }
+                }
     }
 }
 

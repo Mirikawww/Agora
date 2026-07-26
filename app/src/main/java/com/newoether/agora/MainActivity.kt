@@ -1,5 +1,7 @@
 package com.newoether.agora
 
+import com.newoether.agora.util.UpdateInstaller
+
 import android.Manifest
 import android.app.Activity
 import android.content.Context
@@ -141,8 +143,6 @@ class MainActivity : ComponentActivity() {
             val colorSchemeName by settingsManager.colorScheme.collectAsState(initial = "DEFAULT")
             val schemeStyleName by settingsManager.schemeStyle.collectAsState(initial = "TONAL_SPOT")
             val dynamicColor by settingsManager.dynamicColor.collectAsState(initial = true)
-            val fontPreference by settingsManager.fontPreference.collectAsState(initial = "app_default")
-            val customFontPath by settingsManager.customFontPath.collectAsState(initial = "")
 
             val themeModeEnum = try { com.newoether.agora.ui.theme.ThemeMode.valueOf(themeMode) } catch (_: Exception) { com.newoether.agora.ui.theme.ThemeMode.FOLLOW_DEVICE }
             val colorSchemePreset = try { com.newoether.agora.ui.theme.ColorSchemePreset.valueOf(colorSchemeName) } catch (_: Exception) { com.newoether.agora.ui.theme.ColorSchemePreset.MIDNIGHT }
@@ -167,13 +167,12 @@ class MainActivity : ComponentActivity() {
                 colorSchemePreset = colorSchemePreset,
                 schemeStyle = schemeStyle,
                 dynamicColor = dynamicColor,
-                fontPreference = fontPreference,
-                customFontPath = customFontPath
             ) {
                 val activity = LocalActivity.current
 
                 if (needsErrorDialog) {
                     AlertDialog(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
                         onDismissRequest = { activity?.finish() },
                         title = { Text(stringResource(R.string.database_incompatible), fontWeight = FontWeight.Bold) },
                         text = { Text(stringResource(R.string.database_incompatible_desc)) },
@@ -458,15 +457,61 @@ fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
     val focusManager = LocalFocusManager.current
     val crashScope = rememberCoroutineScope()
 
-    // Update dialog
+    // Update dialog (in-app download → default installer; no DownloadManager)
     val updateDialogData by viewModel.updateDialogData.collectAsState()
     if (updateDialogData != null) {
         val info = updateDialogData!!
         val ctx = LocalContext.current
+        val updateScope = rememberCoroutineScope()
+        var downloading by remember(info) { mutableStateOf(false) }
+        var downloadProgress by remember(info) { mutableStateOf<Float?>(null) }
+        var downloadError by remember(info) { mutableStateOf<String?>(null) }
+        val installLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+        ) { /* returned from unknown-sources settings */ }
+
+        fun startDownloadAndInstall() {
+                    val apkUrl = info.apkUrlForDevice() ?: info.apkUrl
+                    if (apkUrl.isNullOrBlank()) {
+                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.htmlUrl.ifBlank { info.url })))
+                        viewModel.dismissUpdateDialog()
+                        return
+                    }
+            if (!UpdateInstaller.canRequestInstall(ctx)) {
+                installLauncher.launch(UpdateInstaller.installPermissionSettingsIntent(ctx))
+                return
+            }
+            downloading = true
+            downloadError = null
+            downloadProgress = 0f
+            updateScope.launch {
+                try {
+                    val result = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        UpdateInstaller.downloadApk(apkUrl, ctx) { p ->
+                            downloadProgress = p
+                        }
+                    }
+                    downloading = false
+                    UpdateInstaller.installWithDefaultInstaller(ctx, result.file)
+                    viewModel.dismissUpdateDialog()
+                } catch (e: Exception) {
+                    downloading = false
+                    downloadError = e.localizedMessage ?: e.toString()
+                }
+            }
+        }
+
         AlertDialog(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
-            onDismissRequest = { viewModel.dismissUpdateDialog() },
-            icon = { Icon(Icons.Default.Download, null, modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary) },
+            onDismissRequest = { if (!downloading) viewModel.dismissUpdateDialog() },
+            icon = {
+                Icon(
+                    Icons.Default.Download,
+                    null,
+                    modifier = Modifier.size(32.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
             title = {
                 Text(
                     text = stringResource(R.string.about_update_available, info.version),
@@ -482,46 +527,78 @@ fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
                     )
                     if (info.body.isNotBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        Column {
-                            // Lightweight markdown render of the release notes, kept on the
-                            // shared type scale: '## ' → bold section label, '- ' → indented
-                            // bullet, blank line → vertical gap, everything else → paragraph.
-                            info.body.split("\n").forEach { line ->
-                                when {
-                                    line.startsWith("## ") -> Text(
-                                        text = line.removePrefix("## "),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.padding(top = 14.dp, bottom = 2.dp)
-                                    )
-                                    line.startsWith("- ") -> Text(
-                                        text = "•  ${line.removePrefix("- ")}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(top = 3.dp, start = 2.dp)
-                                    )
-                                    line.isBlank() -> Spacer(modifier = Modifier.height(4.dp))
-                                    else -> Text(
-                                        text = line,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(top = 3.dp)
-                                    )
-                                }
-                            }
+                        // Release notes are GitHub-flavoured Markdown. The old hand-rolled
+                        // line matcher only understood "## " and "- ", so links, emphasis,
+                        // code spans and nested lists came through as raw syntax.
+                        com.mikepenz.markdown.m3.Markdown(
+                            content = info.body,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = com.mikepenz.markdown.m3.markdownColor(
+                                text = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                            typography = com.mikepenz.markdown.m3.markdownTypography(
+                                h1 = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                h2 = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                h3 = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                h4 = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                h5 = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                h6 = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                text = MaterialTheme.typography.bodySmall,
+                                paragraph = MaterialTheme.typography.bodySmall,
+                                ordered = MaterialTheme.typography.bodySmall,
+                                bullet = MaterialTheme.typography.bodySmall,
+                                list = MaterialTheme.typography.bodySmall,
+                                quote = MaterialTheme.typography.bodySmall,
+                                inlineCode = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                ),
+                            ),
+                        )
+                    }
+                    if (downloading) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        val p = downloadProgress
+                        if (p != null) {
+                            LinearProgressIndicator(
+                                progress = { p },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                stringResource(R.string.about_downloading_update, (p * 100).toInt()),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 6.dp)
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
+                    }
+                    downloadError?.let { err ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.about_download_failed, err),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.url)))
-                    viewModel.dismissUpdateDialog()
-                }) { Text(stringResource(R.string.about_view_release)) }
+                TextButton(
+                    enabled = !downloading,
+                    onClick = { startDownloadAndInstall() }
+                ) {
+                    Text(
+                        if (info.canDownloadApk) stringResource(R.string.about_download_update)
+                        else stringResource(R.string.about_view_release)
+                    )
+                }
             },
             dismissButton = {
-                TextButton(onClick = { viewModel.dismissUpdateDialog() }) {
+                TextButton(
+                    enabled = !downloading,
+                    onClick = { viewModel.dismissUpdateDialog() }
+                ) {
                     Text(stringResource(R.string.about_later))
                 }
             }
@@ -569,6 +646,16 @@ fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) { Text(stringResource(R.string.shell_confirm_deny)) }
             }
+        )
+    }
+
+    // Question sheet raised by the model's ask_user tool
+    val pendingAsk by viewModel.pendingAsk.collectAsState()
+    pendingAsk?.let { ask ->
+        com.newoether.agora.ui.chat.AskSheet(
+            pending = ask,
+            onAnswer = { values, custom -> viewModel.resolveAsk(values, custom) },
+            onDismiss = { viewModel.dismissAsk() },
         )
     }
 
@@ -667,20 +754,24 @@ fun MainNavigation(viewModel: ChatViewModel, settingsManager: SettingsManager) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    pendingCrash = null
-                    CrashReporter.clear(crashContext)
-                    crashScope.launch {
-                        val ok = withContext(Dispatchers.IO) { CrashReporter.submit(report) }
-                        if (ok) {
-                            try {
-                                snackbarHostState.showSnackbar(crashSubmittedMsg)
-                            } finally {
-                                snackbarVersion++
+                // No upload endpoint is configured in this fork, so Submit would always
+                // fail — offer only Dismiss (the stack above is selectable/copyable).
+                if (CrashReporter.isSubmitEnabled) {
+                    TextButton(onClick = {
+                        pendingCrash = null
+                        CrashReporter.clear(crashContext)
+                        crashScope.launch {
+                            val ok = withContext(Dispatchers.IO) { CrashReporter.submit(report) }
+                            if (ok) {
+                                try {
+                                    snackbarHostState.showSnackbar(crashSubmittedMsg)
+                                } finally {
+                                    snackbarVersion++
+                                }
                             }
                         }
-                    }
-                }) { Text(stringResource(R.string.crash_submit)) }
+                    }) { Text(stringResource(R.string.crash_submit)) }
+                }
             },
             dismissButton = {
                 TextButton(onClick = { CrashReporter.clear(crashContext); pendingCrash = null }) {

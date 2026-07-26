@@ -40,12 +40,10 @@ fun SettingsWebSearchPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     LaunchedEffect(webSearchProvider) { apiKeyText = webSearchApiKeys[webSearchProvider] ?: "" }
 
     // No-op bring-into-view to prevent auto-scrolling on text field focus
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
 
     CollapsingSettingsScaffold(
         title = stringResource(R.string.web_search_title),
         onBack = onBack,
-        floatingActionButton = { if (showDocFab) DocumentationFab("web-search.md") }
     ) {
             SettingsGroupColumn {
                 SettingsGroup(title = stringResource(R.string.web_search_title), items = buildList {
@@ -194,22 +192,36 @@ fun SettingsWebSearchPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                     Icon(Icons.Default.Tune, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 2.dp))
                                     Spacer(modifier = Modifier.width(16.dp))
                                     Column(modifier = Modifier.weight(1f)) {
+                                        // Local draft: never write DataStore on every drag frame.
+                                        val persistedNumResults = webSearchNumResults.toFloat()
+                                        var numResultsDraft by remember { mutableFloatStateOf(persistedNumResults) }
+                                        LaunchedEffect(persistedNumResults) {
+                                            numResultsDraft = persistedNumResults
+                                        }
+                                        val numResultsValue = numResultsDraft.toInt().coerceIn(0, 100)
                                         Text(
                                             stringResource(R.string.web_search_num_results),
                                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium),
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
                                         Text(
-                                            stringResource(R.string.web_search_num_results_desc, webSearchNumResults),
+                                            stringResource(R.string.web_search_num_results_desc, numResultsValue),
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.padding(top = 4.dp)
                                         )
                                         Slider(
-                                            value = webSearchNumResults.toFloat(),
-                                            onValueChange = { viewModel.settings.setWebSearchNumResults(it.toInt()) },
-                                            valueRange = 1f..10f,
-                                            steps = 8,
+                                            value = numResultsDraft,
+                                            onValueChange = { numResultsDraft = it },
+                                            onValueChangeFinished = {
+                                                val committed = numResultsDraft.toInt().coerceIn(0, 100)
+                                                numResultsDraft = committed.toFloat()
+                                                if (committed != webSearchNumResults) {
+                                                    viewModel.settings.setWebSearchNumResults(committed)
+                                                }
+                                            },
+                                            valueRange = 0f..100f,
+                                            steps = 99,
                                             modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                                         )
                                     }
@@ -220,7 +232,6 @@ fun SettingsWebSearchPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 }
             }
 
-            if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
     }
 
     if (showProviderDialog) {

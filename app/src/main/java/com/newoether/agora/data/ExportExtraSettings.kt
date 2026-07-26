@@ -66,7 +66,6 @@ object ExportExtraSettings {
             }
         }
 
-        put("showDocumentationFab", JsonPrimitive(sm.showDocumentationFab.first()))
         put("welcomeMessages", JsonPrimitive(sm.welcomeMessages.first()))
         put("welcomeDisplayMode", JsonPrimitive(sm.welcomeDisplayMode.first()))
         put("userProfileNickname", JsonPrimitive(sm.userProfileNickname.first()))
@@ -75,6 +74,20 @@ object ExportExtraSettings {
         put("userProfileHeight", JsonPrimitive(sm.userProfileHeight.first()))
         put("userProfileOccupation", JsonPrimitive(sm.userProfileOccupation.first()))
         put("userProfileOther", JsonPrimitive(sm.userProfileOther.first()))
+        put("githubConnectorEnabled", JsonPrimitive(sm.githubConnectorEnabled.first()))
+        if (includeApiKeys) put("githubToken", JsonPrimitive(sm.githubToken.first()))
+        put("todoistConnectorEnabled", JsonPrimitive(sm.todoistConnectorEnabled.first()))
+        if (includeApiKeys) {
+            sm.todoistOAuth.first()?.let { oauth ->
+                put("todoistOAuth", JsonPrimitive(json.encodeToString(com.newoether.agora.data.McpOAuthState.serializer(), oauth)))
+            }
+        }
+        put("notionConnectorEnabled", JsonPrimitive(sm.notionConnectorEnabled.first()))
+        if (includeApiKeys) {
+            sm.notionOAuth.first()?.let { oauth ->
+                put("notionOAuth", JsonPrimitive(json.encodeToString(com.newoether.agora.data.McpOAuthState.serializer(), oauth)))
+            }
+        }
         put("disabledProviders", JsonPrimitive(sm.disabledProviders.first().joinToString(",")))
         put("themeMode", JsonPrimitive(sm.themeMode.first()))
         put("colorScheme", JsonPrimitive(sm.colorScheme.first()))
@@ -82,9 +95,6 @@ object ExportExtraSettings {
         put("blurEffectsEnabled", JsonPrimitive(sm.blurEffectsEnabled.first()))
         put("hapticsEnabled", JsonPrimitive(sm.hapticsEnabled.first()))
         put("schemeStyle", JsonPrimitive(sm.schemeStyle.first()))
-        put("fontPreference", JsonPrimitive(sm.fontPreference.first()))
-        put("customFontPath", JsonPrimitive(sm.customFontPath.first()))
-        put("customFontName", JsonPrimitive(sm.customFontName.first()))
         put("autoUpdateCheck", JsonPrimitive(sm.autoUpdateCheck.first()))
         put("proxyEnabled", JsonPrimitive(sm.proxyEnabled.first()))
         put("proxyType", JsonPrimitive(sm.proxyType.first()))
@@ -142,7 +152,6 @@ object ExportExtraSettings {
             )
             if (!cs.isAllNull()) sm.saveConversationSettings(convId, cs)
         }
-        obj["showDocumentationFab"]?.jsonPrimitive?.boolean?.let { sm.saveShowDocumentationFab(it) }
         obj["welcomeMessages"]?.jsonPrimitive?.contentOrNull?.let { sm.saveWelcomeMessages(it) }
         obj["welcomeDisplayMode"]?.jsonPrimitive?.contentOrNull?.let { sm.saveWelcomeDisplayMode(it) }
         obj["userProfileNickname"]?.jsonPrimitive?.contentOrNull?.let { sm.saveUserProfileNickname(it) }
@@ -151,6 +160,24 @@ object ExportExtraSettings {
         obj["userProfileHeight"]?.jsonPrimitive?.contentOrNull?.let { sm.saveUserProfileHeight(it) }
         obj["userProfileOccupation"]?.jsonPrimitive?.contentOrNull?.let { sm.saveUserProfileOccupation(it) }
         obj["userProfileOther"]?.jsonPrimitive?.contentOrNull?.let { sm.saveUserProfileOther(it) }
+        obj["githubConnectorEnabled"]?.jsonPrimitive?.boolean?.let { sm.saveGithubConnectorEnabled(it) }
+        obj["githubToken"]?.jsonPrimitive?.contentOrNull?.let { if (it.isNotEmpty()) sm.saveGithubToken(it) }
+        obj["todoistConnectorEnabled"]?.jsonPrimitive?.boolean?.let { sm.saveTodoistConnectorEnabled(it) }
+        obj["todoistOAuth"]?.jsonPrimitive?.contentOrNull?.let { raw ->
+            if (raw.isNotEmpty()) {
+                runCatching {
+                    json.decodeFromString(com.newoether.agora.data.McpOAuthState.serializer(), raw)
+                }.getOrNull()?.let { sm.saveTodoistOAuth(it) }
+            }
+        }
+        obj["notionConnectorEnabled"]?.jsonPrimitive?.boolean?.let { sm.saveNotionConnectorEnabled(it) }
+        obj["notionOAuth"]?.jsonPrimitive?.contentOrNull?.let { raw ->
+            if (raw.isNotEmpty()) {
+                runCatching {
+                    json.decodeFromString(com.newoether.agora.data.McpOAuthState.serializer(), raw)
+                }.getOrNull()?.let { sm.saveNotionOAuth(it) }
+            }
+        }
         obj["disabledProviders"]?.jsonPrimitive?.contentOrNull?.let {
             sm.saveDisabledProviders(it.split(",").filter { s -> s.isNotBlank() }.toSet())
         }
@@ -167,9 +194,6 @@ object ExportExtraSettings {
         obj["blurEffectsEnabled"]?.jsonPrimitive?.boolean?.let { sm.saveBlurEffectsEnabled(it) }
         obj["hapticsEnabled"]?.jsonPrimitive?.boolean?.let { sm.saveHapticsEnabled(it) }
         obj["schemeStyle"]?.jsonPrimitive?.contentOrNull?.let { sm.saveSchemeStyle(it) }
-        obj["fontPreference"]?.jsonPrimitive?.contentOrNull?.let { sm.saveFontPreference(it) }
-        obj["customFontPath"]?.jsonPrimitive?.contentOrNull?.let { sm.saveCustomFontPath(it) }
-        obj["customFontName"]?.jsonPrimitive?.contentOrNull?.let { sm.saveCustomFontName(it) }
         obj["autoUpdateCheck"]?.jsonPrimitive?.boolean?.let { sm.saveAutoUpdateCheck(it) }
 
         obj["modelAliases"]?.jsonObject?.let { aliasesObj ->

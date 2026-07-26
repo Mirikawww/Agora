@@ -32,9 +32,21 @@ app/src/fdroid/jniLibs/arm64-v8a/
 # Claude Code
 /.claude/
 signing.properties
+# Local keystore material (never commit)
+/signing/
+*.jks
+*.keystore
+!app/src/**/debug.keystore
 AGENTS.md
 
 # Cloudflare Worker local secrets / deps
 server/update-check/.dev.vars
 server/update-check/node_modules/
 server/update-check/.wrangler/
+
+# AI coding-session transcripts (contain full conversation logs — never publish)
+/.hermes/
+
+# JVM crash dumps
+hs_err_pid*.log
+replay_pid*.log

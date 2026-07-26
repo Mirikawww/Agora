@@ -364,7 +364,7 @@
     <string name="web_search_tavily_key">Tavily API 키</string>
     <string name="web_search_tavily_key_hint">tavily.com의 API 키</string>
     <string name="web_search_num_results">최대 결과 수</string>
-    <string name="web_search_num_results_desc">가져올 결과 수: %1$d(1-10)</string>
+    <string name="web_search_num_results_desc">가져올 결과 수: %1$d(0-100)</string>
     <string name="web_search_searxng_fallback_desc">공개 인스턴스는 종종 속도 제한이 있습니다. 안정적인 사용을 위해 자체 호스팅을 권장합니다.</string>
     <string name="web_search_advanced">고급</string>
     <string name="web_search_searxng_url">SearXNG 기본 URL</string>
@@ -534,13 +534,6 @@
     <string name="scheme_style_expressive">익스프레시브</string>
     <string name="scheme_style_vibrant">비비드</string>
     <string name="scheme_style_neutral">뉴트럴</string>
-    <string name="font_title">글꼴</string>
-    <string name="font_app_default">앱 기본</string>
-    <string name="font_system_default">시스템 기본</string>
-    <string name="font_custom">사용자 지정</string>
-    <string name="font_custom_pick">글꼴 파일 선택</string>
-    <string name="font_no_file_selected">선택 안 됨</string>
-    <string name="font_invalid_file">유효하지 않은 글꼴 파일</string>
     <string name="dynamic_color">동적 색상</string>
     <string name="dynamic_color_desc">배경화면을 기반으로 시스템이 생성한 색상 사용(Android 12 이상)</string>
     <string name="visual_effects">시각 효과</string>
@@ -677,6 +670,24 @@
     <string name="provider_no_local_models_desc">시작하려면 GGUF 모델을 가져오세요</string>
     <string name="provider_keys_summary">%1$d개의 API 키</string>
     <string name="provider_connection">연결</string>
+
+    <!-- 설정 - 제공자 잔액 조회 -->
+    <string name="provider_balance_title">계정 잔액</string>
+    <string name="provider_balance_fetch">계정 잔액 가져오기</string>
+    <string name="provider_balance_path">잔액 API 경로</string>
+    <string name="provider_balance_json_key">결과 JSON 키</string>
+    <string name="provider_balance_hint">경로는 Base URL 뒤에 추가됩니다(예: /credits). 키는 응답의 점 경로입니다(예: data.total_usage).</string>
+    <string name="provider_balance_refresh">새로 고침</string>
+    <string name="provider_balance_querying">조회 중…</string>
+    <string name="provider_balance_value">잔액: %1$s</string>
+    <string name="provider_balance_incomplete">경로와 JSON 키를 입력하세요</string>
+    <string name="provider_balance_error_no_base_url">먼저 Base URL을 설정하세요</string>
+    <string name="provider_balance_error_network">네트워크 오류: %1$s</string>
+    <string name="provider_balance_error_http">요청 실패: %1$s</string>
+    <string name="provider_balance_error_key">응답에서 \"%1$s\" 키를 찾을 수 없습니다</string>
+    <string name="provider_balance_error_json">응답이 유효한 JSON이 아닙니다</string>
+    <string name="provider_balance_error_empty">응답이 비어 있습니다</string>
+    <string name="provider_balance_error_generic">잔액 조회에 실패했습니다</string>
     <string name="import_model_chat">GGUF 모델 가져오기</string>
     <string name="add_local_chat_model">로컬 모델 추가</string>
     <string name="local_ctx_size">컨텍스트 크기</string>
@@ -825,9 +836,6 @@
     <string name="could_not_read_file">파일을 읽을 수 없습니다</string>
 
     <!-- Documentation -->
-    <string name="documentation">문서</string>
-    <string name="show_documentation_links">문서 링크 표시</string>
-    <string name="show_documentation_links_desc">설정 페이지에 문서 버튼 표시</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">Agora에 오신 것을 환영합니다</string>
@@ -916,10 +924,10 @@
 
     <!-- Crash reporting -->
     <string name="crash_title">Agora가 예기치 않게 종료되었습니다</string>
-    <string name="crash_message">불편을 드려 죄송합니다. 익명 크래시 보고서를 보내 문제 해결에 도움을 주실 수 있습니다.</string>
+    <string name="crash_message">죄송합니다. 아래 세부 정보는 기기에만 남습니다. 수정에 도움을 주시려면 복사해 issue에 붙여넣으세요.</string>
     <string name="crash_submit">보고서 보내기</string>
-    <string name="crash_dismiss">보내지 않기</string>
-    <string name="crash_privacy_note">크래시 로그만 newoether.space로 전송됩니다. 다른 정보는 수집되지 않습니다.</string>
+    <string name="crash_dismiss">닫기</string>
+    <string name="crash_privacy_note">크래시 로그는 기기에만 저장되며 업로드되지 않습니다. 제보하려면 복사해 issue에 붙여넣으세요.</string>
     <string name="crash_submitted">크래시 보고서를 보냈습니다. 감사합니다!</string>
     <string name="settings_group_network">네트워크</string>
     <string name="settings_proxy">프록시</string>

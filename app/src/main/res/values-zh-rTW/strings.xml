@@ -285,7 +285,7 @@
     <string name="web_search_tavily_key">Tavily API 金鑰</string>
     <string name="web_search_tavily_key_hint">來自 tavily.com 的 API 金鑰</string>
     <string name="web_search_num_results">最大結果數</string>
-    <string name="web_search_num_results_desc">取得的結果數量：%1$d（1-10）</string>
+    <string name="web_search_num_results_desc">取得的結果數量：%1$d（0-100）</string>
     <string name="web_search_searxng_url">SearXNG 基礎 URL</string>
     <string name="web_search_searxng_url_hint">https://searx.be</string>
     <string name="web_search_searxng_fallback_desc">公用執行個體常有頻率限制，建議自行架設以獲得穩定體驗。</string>
@@ -455,13 +455,6 @@
     <string name="scheme_style_expressive">活潑</string>
     <string name="scheme_style_vibrant">鮮豔</string>
     <string name="scheme_style_neutral">中性</string>
-    <string name="font_title">字體</string>
-    <string name="font_app_default">應用預設</string>
-    <string name="font_system_default">系統預設</string>
-    <string name="font_custom">自訂字體</string>
-    <string name="font_custom_pick">選擇字體檔案</string>
-    <string name="font_no_file_selected">未選擇字體</string>
-    <string name="font_invalid_file">無效的字體檔案</string>
     <string name="dynamic_color">動態顏色</string>
     <string name="dynamic_color_desc">根據桌布使用系統生成的顏色（Android 12+）</string>
     <string name="appearance_interface">介面</string>
@@ -701,6 +694,24 @@
     <string name="provider_no_local_models_desc">匯入 GGUF 模型以開始使用</string>
     <string name="provider_keys_summary">%1$d 個 API 金鑰</string>
     <string name="provider_connection">連線</string>
+
+    <!-- 設定 - 服務商額度查詢 -->
+    <string name="provider_balance_title">帳戶額度</string>
+    <string name="provider_balance_fetch">取得帳戶餘額</string>
+    <string name="provider_balance_path">餘額 API 路徑</string>
+    <string name="provider_balance_json_key">結果 JSON 鍵</string>
+    <string name="provider_balance_hint">路徑會接在 Base URL 之後（如 /credits）；JSON 鍵為回應中的點路徑（如 data.total_usage）。</string>
+    <string name="provider_balance_refresh">重新整理</string>
+    <string name="provider_balance_querying">查詢中…</string>
+    <string name="provider_balance_value">餘額：%1$s</string>
+    <string name="provider_balance_incomplete">請填寫路徑與 JSON 鍵</string>
+    <string name="provider_balance_error_no_base_url">請先設定 Base URL</string>
+    <string name="provider_balance_error_network">網路錯誤：%1$s</string>
+    <string name="provider_balance_error_http">請求失敗：%1$s</string>
+    <string name="provider_balance_error_key">回應中找不到鍵 \"%1$s\"</string>
+    <string name="provider_balance_error_json">回應不是有效的 JSON</string>
+    <string name="provider_balance_error_empty">回應為空</string>
+    <string name="provider_balance_error_generic">餘額查詢失敗</string>
     <string name="local_models_title">本機模型</string>
     <string name="local_mmproj_path">Vision Projector 路徑（選用）</string>
     <string name="local_mmproj_path_hint">選擇 vision 的 mmproj .gguf 檔案</string>
@@ -840,9 +851,6 @@
     <string name="import_out_of_memory">記憶體不足，無法匯入此檔案。請選擇較小的匯出檔案。</string>
 
     <!-- Documentation -->
-    <string name="documentation">檢視文件</string>
-    <string name="show_documentation_links">顯示文件連結</string>
-    <string name="show_documentation_links_desc">在設定頁面顯示文件按鈕</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">歡迎來到 Agora</string>
@@ -931,10 +939,10 @@
 
     <!-- Crash reporting -->
     <string name="crash_title">Agora 意外退出</string>
-    <string name="crash_message">很抱歉。您可以透過傳送匿名崩潰報告來協助修復此問題。</string>
+    <string name="crash_message">很抱歉。下方的詳細資訊僅儲存在本機——若願意協助修復，可複製後提交至 issue。</string>
     <string name="crash_submit">提交報告</string>
-    <string name="crash_dismiss">不傳送</string>
-    <string name="crash_privacy_note">僅向 newoether.space 傳送崩潰記錄，不收集任何其他資訊。</string>
+    <string name="crash_dismiss">關閉</string>
+    <string name="crash_privacy_note">崩潰記錄僅儲存在本機，不會上傳。如需回報，可複製後提交至 issue。</string>
     <string name="crash_submitted">崩潰報告已傳送，謝謝！</string>
     <string name="settings_group_network">網路</string>
     <string name="settings_proxy">代理</string>

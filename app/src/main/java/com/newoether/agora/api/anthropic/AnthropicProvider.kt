@@ -224,29 +224,34 @@ class AnthropicProvider : LlmProvider {
         )
 
         try {
-            val url = "$baseUrl/messages"
-            val headers = mutableMapOf("Content-Type" to "application/json")
-            headers["x-api-key"] = config.apiKey
-            headers["anthropic-version"] = "2023-06-01"
-            if (config.fastEnabled) headers["anthropic-beta"] = "fast-mode-2026-02-01"
-            val requestBodyJson = json.encodeToString(AnthropicRequest.serializer(), requestBody)
-            DebugLog.d("AgoraAPI", "[Anthropic] REQ → $baseUrl/messages | model=$modelName | msgs=${apiMessages.size} | thinking=${thinking != null} | tools=${anthropicTools?.size ?: 0}")
-            DebugLog.d("AgoraAPI", "[Anthropic] BODY: ${requestBodyJson.take(4000)}")
-            val maxAttempts = 3
-            val retryableCodes = setOf(429, 502, 503, 504)
-            var attempt = 0
-            var done = false
+                    val url = "$baseUrl/messages"
+                    val headers = mutableMapOf("Content-Type" to "application/json")
+                    val apiKey = config.apiKey.trim()
+                    fun applyAuthHeader() {
+                        headers["x-api-key"] = apiKey
+                    }
+                    applyAuthHeader()
+                    headers["anthropic-version"] = "2023-06-01"
+                    if (config.fastEnabled) headers["anthropic-beta"] = "fast-mode-2026-02-01"
+                    val requestBodyJson = json.encodeToString(AnthropicRequest.serializer(), requestBody)
+                    DebugLog.d("AgoraAPI", "[Anthropic] REQ → $baseUrl/messages | model=$modelName | msgs=${apiMessages.size} | thinking=${thinking != null} | tools=${anthropicTools?.size ?: 0}")
+                    DebugLog.d("AgoraAPI", "[Anthropic] BODY: ${requestBodyJson.take(4000)}")
+                    val maxAttempts = 3
+                    val retryableCodes = setOf(429, 502, 503, 504)
+                    var attempt = 0
+                    var done = false
 
-            while (attempt < maxAttempts && !done) {
-                attempt++
-                val handle = HttpClient.streamPost(url, requestBodyJson, headers)
-                try {
-                if (handle.code == 200) {
-                    done = true
-                    var line: String? = null
-                    var currentType: String? = null
-                    var toolUseId: String? = null
-                    var toolUseName: String? = null
+                    while (attempt < maxAttempts && !done) {
+                        attempt++
+                        applyAuthHeader()
+                        val handle = HttpClient.streamPost(url, requestBodyJson, headers)
+                        try {
+                        if (handle.code == 200) {
+                            done = true
+                            var line: String? = null
+                            var currentType: String? = null
+                            var toolUseId: String? = null
+                            var toolUseName: String? = null
                     var toolUseArgs = StringBuilder()
                     var thinkingSignature: String? = null
                     var messageInputTokens = 0
@@ -325,23 +330,25 @@ class AnthropicProvider : LlmProvider {
                         throw kotlinx.coroutines.CancellationException("Stream cancelled")
                     }
                 } else {
-                    val errorRaw = handle.errorBody ?: "Unknown error"
-                    DebugLog.e("AgoraAPI", "[Anthropic] ERR ${handle.code}: $errorRaw")
+                                    val errorRaw = handle.errorBody ?: "Unknown error"
+                                    DebugLog.e("AgoraAPI", "[Anthropic] ERR ${handle.code}: $errorRaw")
 
-                    if (handle.code in retryableCodes && attempt < maxAttempts) {
-                        DebugLog.w("AgoraAPI", "[Anthropic] Transient error ${handle.code} on attempt $attempt/$maxAttempts, retrying in ${1000 * attempt}ms...")
-                        emit(StreamEvent.Retrying(attempt, maxAttempts))
-                        delay(1000L * attempt)
-                    } else {
-                        val genError = try {
-                            val errorJson = json.decodeFromString<OpenAiErrorResponse>(errorRaw)
-                            GenerationError.Api(code = errorJson.error.code ?: handle.code.toString(), type = errorJson.error.type, message = errorJson.error.message)
-                        } catch (_: Exception) {
-                            GenerationError.Network(statusCode = handle.code, message = errorRaw)
-                        }
-                        emit(StreamEvent.Error(genError))
-                    }
-                }
+                                    // Auth/key errors fail hard — no sibling-key rotation.
+                                    if (handle.code in retryableCodes && attempt < maxAttempts) {
+                                        DebugLog.w("AgoraAPI", "[Anthropic] Transient error ${handle.code} on attempt $attempt/$maxAttempts, retrying in ${1000 * attempt}ms...")
+                                        emit(StreamEvent.Retrying(attempt, maxAttempts))
+                                        delay(1000L * attempt)
+                                    } else {
+                                        val genError = try {
+                                            val errorJson = json.decodeFromString<OpenAiErrorResponse>(errorRaw)
+                                            GenerationError.Api(code = errorJson.error.code ?: handle.code.toString(), type = errorJson.error.type, message = errorJson.error.message)
+                                        } catch (_: Exception) {
+                                            GenerationError.Network(statusCode = handle.code, message = errorRaw)
+                                        }
+                                        emit(StreamEvent.Error(genError))
+                                        done = true
+                                    }
+                                }
                 } finally { handle.close() }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {

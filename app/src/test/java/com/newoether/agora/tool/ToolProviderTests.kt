@@ -29,6 +29,27 @@ class WebSearchToolProviderTest {
         assertTrue(provider.handles("web_fetch"))
         assertFalse(provider.handles("unknown"))
     }
+
+    @Test
+    fun extractWebSearchQuery_acceptsCanonicalAndCommonAliases() {
+        assertEquals("kotlin flows", extractWebSearchQuery("""{"query":"kotlin flows"}"""))
+        assertEquals("kotlin flows", extractWebSearchQuery("""{"q":"kotlin flows"}"""))
+        assertEquals("kotlin flows", extractWebSearchQuery("""{"search_query":"kotlin flows"}"""))
+        assertEquals("kotlin flows", extractWebSearchQuery("""{"keyword":"kotlin flows"}"""))
+        assertEquals("kotlin flows", extractWebSearchQuery("""{"input":"kotlin flows"}"""))
+    }
+
+    @Test
+    fun extractWebSearchQuery_acceptsWrappedAndPlainTextArguments() {
+        assertEquals("kotlin flows", extractWebSearchQuery("""{"arguments":{"query":"kotlin flows"}}"""))
+        assertEquals("kotlin flows", extractWebSearchQuery("kotlin flows"))
+    }
+
+    @Test
+    fun extractWebSearchQuery_rejectsEmptyArguments() {
+        assertNull(extractWebSearchQuery("{}"))
+        assertNull(extractWebSearchQuery(""))
+    }
 }
 
 class RagToolProviderTest {

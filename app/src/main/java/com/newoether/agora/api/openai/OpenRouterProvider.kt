@@ -31,7 +31,7 @@ class OpenRouterProvider : BaseOpenAiProvider() {
     }
 
     override fun getExtraHeaders(config: ProviderConfig): Map<String, String> = mapOf(
-        "HTTP-Referer" to "https://github.com/newo-ether/Agora",
+        "HTTP-Referer" to "https://github.com/Mirikawww/Agora",
         "X-Title" to "Agora"
     )
 
@@ -55,7 +55,7 @@ class OpenRouterProvider : BaseOpenAiProvider() {
                 emit(StreamEvent.ThoughtChunk(it, extractThoughtTitle(it)))
             }
         }
-        delta.content?.let { content ->
+        extractTextContent(delta.content)?.let { content ->
             if (content.isNotEmpty()) emit(StreamEvent.TextChunk(content))
         }
     }

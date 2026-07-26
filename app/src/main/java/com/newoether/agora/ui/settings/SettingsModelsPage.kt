@@ -8,6 +8,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,9 +36,18 @@ import com.newoether.agora.R
 import com.newoether.agora.model.apiModelName
 import com.newoether.agora.ui.components.clearFocusOnTap
 import com.newoether.agora.ui.components.providerIcon
+import com.newoether.agora.ui.theme.LocalIsMonochrome
 import com.newoether.agora.util.Constants
 import com.newoether.agora.util.noOpBringIntoView
 import com.newoether.agora.viewmodel.ChatViewModel
+
+// Explicit green/red for sync change badges under Mono (scheme tertiary/error are grayscale there).
+private val MonoBadgeGreen = Color(0xFF2E7D32)
+private val MonoBadgeGreenContainer = Color(0xFFC8E6C9)
+private val MonoBadgeOnGreenContainer = Color(0xFF1B5E20)
+private val MonoBadgeRed = Color(0xFFD32F2F)
+private val MonoBadgeRedContainer = Color(0xFFFFCDD2)
+private val MonoBadgeOnRedContainer = Color(0xFFB71C1C)
 
 // Shape constants matching SettingsGroup's per-position rounding.
 // Each encodes top-corners / bottom-corners for its place in the group.
@@ -54,12 +65,13 @@ private data class ModelSyncChange(
     val removed: Set<String>,
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val enabledModels by viewModel.settings.enabledModels.collectAsState()
     val availableModels by viewModel.settings.availableModels.collectAsState()
     val modelAliases by viewModel.settings.modelAliases.collectAsState()
+    val modelKeyNicknames by viewModel.settings.modelKeyNicknames.collectAsState()
     val selectedModel by viewModel.settings.selectedModel.collectAsState()
     val disabledProviders by viewModel.settings.disabledProviders.collectAsState()
     val isSyncingModels by viewModel.isSyncingModels.collectAsState()
@@ -71,7 +83,6 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     var syncBaseline by remember { mutableStateOf<Map<String, List<String>>?>(null) }
     var observedSyncRunning by remember { mutableStateOf(false) }
 
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
     val lastFingerprint by viewModel.settings.lastModelsFetchFingerprint.collectAsState()
 
     val beginModelSync: () -> Unit = {
@@ -142,7 +153,6 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
         title = stringResource(R.string.models_title),
         onBack = onBack,
         contentHorizontalPadding = 0.dp,
-        floatingActionButton = { if (showDocFab) DocumentationFab("models.md") }
     ) {
             // ── Default Model section ──
             item(key = "section_default_title") {
@@ -307,24 +317,50 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
 
                                     SettingsItem(
                                         headlineContent = {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                            val keyNicks = modelKeyNicknames[model].orEmpty()
+                                            val isMono = LocalIsMonochrome.current
+                                            val nickContainer = if (isMono) {
+                                                MaterialTheme.colorScheme.onSurface
+                                            } else {
+                                                MaterialTheme.colorScheme.secondaryContainer
+                                            }
+                                            val nickContent = if (isMono) {
+                                                MaterialTheme.colorScheme.surface
+                                            } else {
+                                                MaterialTheme.colorScheme.onSecondaryContainer
+                                            }
+                                            val addedContainer = if (isMono) MonoBadgeGreenContainer else MaterialTheme.colorScheme.tertiaryContainer
+                                            val addedContent = if (isMono) MonoBadgeOnGreenContainer else MaterialTheme.colorScheme.onTertiaryContainer
+                                            val removedContainer = if (isMono) MonoBadgeRedContainer else MaterialTheme.colorScheme.errorContainer
+                                            val removedContent = if (isMono) MonoBadgeOnRedContainer else MaterialTheme.colorScheme.onErrorContainer
+                                            Column(modifier = Modifier.fillMaxWidth()) {
                                                 Text(displayName, color = modelTextColor)
-                                                when {
-                                                    isAdded -> {
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        ModelChangeBadge(
-                                                            text = stringResource(R.string.models_added_badge),
-                                                            containerColor = Color(0xFF2E7D32),
-                                                            contentColor = Color.White
-                                                        )
-                                                    }
-                                                    isRemoved -> {
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        ModelChangeBadge(
-                                                            text = stringResource(R.string.models_removed_badge),
-                                                            containerColor = MaterialTheme.colorScheme.error,
-                                                            contentColor = MaterialTheme.colorScheme.onError
-                                                        )
+                                                // Key nicknames + change badges wrap under the model name.
+                                                if (keyNicks.isNotEmpty() || isAdded || isRemoved) {
+                                                    Spacer(modifier = Modifier.height(4.dp))
+                                                    FlowRow(
+                                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                                    ) {
+                                                        keyNicks.forEach { nick ->
+                                                            ModelChangeBadge(
+                                                                text = nick,
+                                                                containerColor = nickContainer,
+                                                                contentColor = nickContent
+                                                            )
+                                                        }
+                                                        when {
+                                                            isAdded -> ModelChangeBadge(
+                                                                text = stringResource(R.string.models_added_badge),
+                                                                containerColor = addedContainer,
+                                                                contentColor = addedContent
+                                                            )
+                                                            isRemoved -> ModelChangeBadge(
+                                                                text = stringResource(R.string.models_removed_badge),
+                                                                containerColor = removedContainer,
+                                                                contentColor = removedContent
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
@@ -345,7 +381,7 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                                 ) {
                                                     Icon(
                                                         Icons.Default.Edit,
-                                                        contentDescription = stringResource(R.string.models_rename),
+                                                        contentDescription = stringResource(R.string.models_edit),
                                                         tint = if (isRemoved) {
                                                             MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
                                                         } else {
@@ -370,9 +406,6 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         }
                     }
                 }
-            }
-            if (showDocFab) {
-                item(key = "doc_spacer") { Spacer(modifier = Modifier.height(80.dp)) }
             }
     }
 
@@ -418,19 +451,28 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
         )
     }
 
-    // ── Model Alias Dialog ──
+    // ── Edit Model Dialog (alias + fast override) ──
     showModelAliasDialog?.let { model ->
         val aliasState = rememberTextFieldState(modelAliases[model] ?: "")
+        val modelFastSupport by viewModel.settings.modelFastSupport.collectAsState()
+        val fastDetected = modelFastSupport[model]
+        var fastEnabled by remember(model, fastDetected) {
+            mutableStateOf(fastDetected == true)
+        }
 
         AlertDialog(
             modifier = Modifier.clearFocusOnTap(),
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
             onDismissRequest = { showModelAliasDialog = null },
-            title = { Text(stringResource(R.string.models_rename), fontWeight = FontWeight.Bold) },
+            title = { Text(stringResource(R.string.models_edit), fontWeight = FontWeight.Bold) },
             text = {
                 val parsed = com.newoether.agora.model.ModelId.parse(model)
-                Column(Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.models_rename_current, parsed.apiModelName), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        stringResource(R.string.models_edit_current, parsed.apiModelName),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(modifier = Modifier.noOpBringIntoView()) {
                         OutlinedTextField(
@@ -441,18 +483,48 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                             placeholder = { Text(parsed.apiModelName) }
                         )
                     }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    // Manual fast-mode override (auto-detect can miss some models).
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                stringResource(R.string.models_fast_override),
+                                style = MaterialTheme.typography.bodyLarge,
+                                // AlertDialog text slot defaults to onSurfaceVariant; keep title fully opaque.
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                stringResource(R.string.models_fast_override_desc),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = fastEnabled,
+                            onCheckedChange = { fastEnabled = it }
+                        )
+                    }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.settings.updateModelAlias(model, aliasState.text.toString())
+                    viewModel.settings.setModelFastOverride(model, fastEnabled)
                     showModelAliasDialog = null
                 }) { Text(stringResource(R.string.provider_save)) }
             },
-            dismissButton = { TextButton(onClick = { showModelAliasDialog = null }) { Text(stringResource(R.string.provider_cancel)) } }
+            dismissButton = {
+                TextButton(onClick = { showModelAliasDialog = null }) {
+                    Text(stringResource(R.string.provider_cancel))
+                }
+            }
         )
     }
 }
+
 
 /**
  * Section title matching SettingsGroup's label style.

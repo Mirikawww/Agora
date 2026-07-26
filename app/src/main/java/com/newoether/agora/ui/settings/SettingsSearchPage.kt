@@ -83,12 +83,10 @@ fun SettingsSearchPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     LaunchedEffect(embeddingModels.size) {
         showMenuForModel = null
     }
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
 
     CollapsingSettingsScaffold(
         title = stringResource(R.string.search_title),
         onBack = onBack,
-        floatingActionButton = { if (showDocFab) DocumentationFab("search.md") }
     ) {
             SettingsGroupColumn {
                 SettingsGroup(
@@ -469,7 +467,6 @@ fun SettingsSearchPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 )
             )
             }
-            if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
 
         if (showRemoteDialog) {
             AddRemoteEmbeddingDialog(

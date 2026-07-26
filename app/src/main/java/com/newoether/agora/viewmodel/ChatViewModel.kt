@@ -1,5 +1,8 @@
 package com.newoether.agora.viewmodel
 
+
+
+
 import android.app.Application
 import android.content.Context
 import android.net.Uri
@@ -24,7 +27,13 @@ import com.newoether.agora.data.LocalChatModelConfig
 import com.newoether.agora.data.MemoryManager
 import com.newoether.agora.data.PredefinedVariables
 
+
+
+
 import com.newoether.agora.data.ShellDeviceConfig
+
+
+
 
 import com.newoether.agora.data.local.ChatEntity
 import com.newoether.agora.data.local.MessageEntity
@@ -69,6 +78,9 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
 
+
+
+
 class ChatViewModel(
     application: Application,
     // [chatDao] and [settingsManager] are retained ONLY to pass to ImportExportManager,
@@ -85,6 +97,9 @@ class ChatViewModel(
     settingsRepository: SettingsRepository
 ) : AndroidViewModel(application) {
 
+
+
+
     companion object {
         /** Overlay fade duration for conversation-switch transitions. */
         private const val SWITCH_OVERLAY_FADE_MS = 200L
@@ -92,14 +107,60 @@ class ChatViewModel(
         private val AUTO_DELETE_TIERS_HOURS = listOf(168, 720, 8760)
     }
 
+
+
+
+    private val _forceWebSearch = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val forceWebSearch: kotlinx.coroutines.flow.StateFlow<Boolean> = _forceWebSearch
+    fun setForceWebSearch(enabled: Boolean) { _forceWebSearch.value = enabled }
+
+    private val _forceImageGen = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val forceImageGen: kotlinx.coroutines.flow.StateFlow<Boolean> = _forceImageGen
+    fun setForceImageGen(enabled: Boolean) { _forceImageGen.value = enabled }
+
+    private val _forceGithub = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val forceGithub: kotlinx.coroutines.flow.StateFlow<Boolean> = _forceGithub
+    fun setForceGithub(enabled: Boolean) { _forceGithub.value = enabled }
+
+    private val _forceTodoist = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val forceTodoist: kotlinx.coroutines.flow.StateFlow<Boolean> = _forceTodoist
+    fun setForceTodoist(enabled: Boolean) { _forceTodoist.value = enabled }
+
+    private val _forceNotion = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val forceNotion: kotlinx.coroutines.flow.StateFlow<Boolean> = _forceNotion
+    fun setForceNotion(enabled: Boolean) { _forceNotion.value = enabled }
+
+    /** Composer-based edit of an already-sent user message (queue-edit style). */
+    private val _editingSentMessageId = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val editingSentMessageId: kotlinx.coroutines.flow.StateFlow<String?> = _editingSentMessageId
+    fun beginEditSentMessage(messageId: String): String? {
+        val msg = _allMessages.value.find { it.id == messageId } ?: return null
+        if (msg.participant != com.newoether.agora.model.Participant.USER) return null
+        clearQueueEdit()
+        _editingSentMessageId.value = messageId
+        return msg.text
+    }
+    fun clearSentMessageEdit() { _editingSentMessageId.value = null }
+
+
+
+
     val settings: SettingsRepository = settingsRepository
+    val skillsManager: com.newoether.agora.data.SkillsManager
+        get() = generationManager.skillsManagerPublic
     private val modelsDevRepository = com.newoether.agora.data.repository.ModelsDevRepository(appContext)
     val modelsDevCapabilities = modelsDevRepository.capabilities
+
+
+
 
     fun modelCapabilitiesFor(modelId: String) = modelsDevRepository.capabilitiesFor(
         modelId = modelId,
         providerFast = settings.modelFastSupport.value[modelId],
     )
+
+
+
 
     /**
      * Conversation/message persistence behind the repository layer. CRUD, cascade-delete,
@@ -108,7 +169,13 @@ class ChatViewModel(
      */
     private val convRepo: ConversationRepository = conversationRepository
 
+
+
+
     private val localProvider = LocalProvider(appContext, settings)
+
+
+
 
     /** Embedding subsystem: model CRUD + RAG cache + single-message indexing + key resolution. */
     val ragManager = RagManager(
@@ -118,6 +185,9 @@ class ChatViewModel(
         appContext = appContext,
         scope = viewModelScope,
     ) { _snackbarMessage.emit(it) }
+
+
+
 
     /**
      * Data export/import orchestration (native backup + Claude + GPT formats).
@@ -135,11 +205,20 @@ class ChatViewModel(
         onDataChanged = { refreshDataCounts() },
     )
 
+
+
+
     /** Local (on-device) chat-model configuration CRUD. */
     val modelManager = ModelManager(settings, viewModelScope)
 
+
+
+
     /** Built-in + custom provider instances, resolution, and model discovery (see [ProviderRegistry]). */
     private val providerRegistry = ProviderRegistry(settings, localProvider, viewModelScope)
+
+
+
 
     /**
      * Startup jobs deferred until all StateFlow/property backing fields are
@@ -164,8 +243,12 @@ class ChatViewModel(
         com.newoether.agora.api.HttpClient.setProxy(cfg)
     }
 
+
+
+
     private fun startInitJobs() {
-        // Apply the network proxy at startup and whenever its settings change.
+            loadPersistedQueuesAndDrafts()
+            // Apply the network proxy at startup and whenever its settings change.
         viewModelScope.launch {
             val proxyFlows = listOf(
                 settings.proxyEnabled.map { it.toString() },
@@ -250,9 +333,15 @@ class ChatViewModel(
         providerRegistry.launchSyncJobs()
     }
 
+
+
+
     // Generation lifecycle (IO scope, current job, send gate, race-free stop/persist
     // ownership tokens) lives in [GenerationSession]; declared below once the
     // generation StateFlows it shares are initialized.
+
+
+
 
     private val generationManagerDelegate = lazy {
         GenerationManager(
@@ -271,14 +360,22 @@ class ChatViewModel(
             }
             gm.onConfirmShellCommand = { server, summary -> shellConfirmation.confirm(server, summary) }
             gm.onConfirmMcpTool = { server, summary -> shellConfirmation.confirm(server, summary, enabled = true) }
+            gm.onProbeProviderBalance = { provider -> providerRegistry.fetchBalances(provider) }
+            gm.onAskUser = { question, header, mode, options -> askController.ask(question, header, mode, options) }
         }
     }
     private val generationManager by generationManagerDelegate
+
+
+
 
     val sandboxManager: SandboxManager? by lazy {
         sandboxFactory?.create()
     }
     val isSandboxFlavor: Boolean = sandboxFactory?.isAvailable() == true
+
+
+
 
     override fun onCleared() {
         super.onCleared()
@@ -289,17 +386,39 @@ class ChatViewModel(
         if (generationManagerDelegate.isInitialized()) generationManager.close()
     }
 
+
+
+
     fun getProviderInstance(name: String): LlmProvider = providerRegistry.getInstance(name)
+
+    /** Runs the provider's balance probe once per stored key; empty when not runnable. */
+    suspend fun fetchProviderBalances(name: String): List<ProviderKeyBalance> =
+        providerRegistry.fetchBalances(name)
+
+
+
 
     suspend fun testMcpServer(server: com.newoether.agora.data.McpServerConfig) =
         generationManager.testMcpServer(server)
 
+
+
+
     val mcpStatuses get() = generationManager.mcpStatuses
+
+
+
 
     fun startMcpAuthorization(server: com.newoether.agora.data.McpServerConfig) =
         generationManager.startMcpAuthorization(server)
 
+
+
+
     fun cancelMcpAuthorization(serverId: String) = generationManager.cancelMcpAuthorization(serverId)
+
+
+
 
     fun clearMcpAuthorization(server: com.newoether.agora.data.McpServerConfig) = viewModelScope.launch {
         generationManager.clearMcpAuthorization(server)
@@ -307,8 +426,20 @@ class ChatViewModel(
 
 
 
+
+
+
+
+
+
+
+
+
     private val _scrollToMessage = MutableSharedFlow<String?>(replay = 0)
     val scrollToMessage = _scrollToMessage.asSharedFlow()
+
+
+
 
     /** One-shot: set when sendMessage creates a new conversation so the conversation-open
      *  auto-scroll skips once (the send's scroll-to-message already handles it), preventing
@@ -316,19 +447,31 @@ class ChatViewModel(
     @Volatile
     var suppressNextOpenScroll: Boolean = false
 
+
+
+
     fun triggerScrollToMessage(messageId: String? = null) {
         viewModelScope.launch {
             _scrollToMessage.emit(messageId)
         }
     }
 
+
+
+
     private val _currentActiveModel = MutableStateFlow<String?>(null)
     val currentActiveModel = kotlinx.coroutines.flow.combine(_currentActiveModel, settings.selectedModel) { active, default ->
         active ?: default
     }.stateIn(viewModelScope, SharingStarted.Eagerly, Constants.EXAMPLE_MODEL_ID)
 
+
+
+
     fun getProviderForModel(modelId: String): String = providerRegistry.providerForModel(modelId)
     
+
+
+
 
         
     // Embedding subsystem state lives in [ragManager]; exposed here for the UI.
@@ -337,30 +480,65 @@ class ChatViewModel(
     val cacheCounts get() = ragManager.cacheCounts
     fun loadCacheCounts() = ragManager.loadCacheCounts()
 
+
+
+
     // ── Remote shell command confirmation gate ───────────────────────────
     /** Shell-command confirmation policy + pending-prompt handshake (see [ShellConfirmationController]). */
     private val shellConfirmation = ShellConfirmationController(settings)
     val pendingShellCommand: StateFlow<ShellConfirmationController.PendingShellCommand?>
         get() = shellConfirmation.pendingShellCommand
 
+
+
+
     /** Called by the UI to resolve a pending confirmation. */
     fun resolveShellConfirmation(allow: Boolean, alwaysAllowServer: Boolean = false) =
         shellConfirmation.resolve(allow, alwaysAllowServer)
 
+    // ── ask_user question sheet ──────────────────────────────────────────
+    /** Question/answer handshake for the `ask_user` tool (see [AskController]). */
+    private val askController = AskController()
+    val pendingAsk: StateFlow<AskController.PendingAsk?> get() = askController.pending
+
+    /** Called by the sheet with the user's picks (in order, for rank mode). */
+    fun resolveAsk(values: List<String>, custom: Boolean) = askController.resolve(values, custom)
+
+    /** Called when the sheet is dismissed without an answer. */
+    fun dismissAsk() = askController.dismiss()
+
+
+
+
     fun setShellConfirmEnabled(enabled: Boolean) = shellConfirmation.setEnabled(enabled)
 
+
+
+
     // ── Auto Backup ───────────────────────────────────────────
+
+
+
 
         val conversations: StateFlow<List<ChatConversation>> = convRepo.getAllConversations()
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     private val _currentConversationId = MutableStateFlow<String?>(null)
     val currentConversationId: StateFlow<String?> = _currentConversationId.asStateFlow()
 
+
+
+
     private val _allMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val allMessages: StateFlow<List<ChatMessage>> = _allMessages.asStateFlow()
 
+
+
+
     private val _isSyncingModels = MutableStateFlow(false)
     val isSyncingModels: StateFlow<Boolean> = _isSyncingModels.asStateFlow()
+
+
+
 
     private val _snackbarMessage = MutableSharedFlow<SnackbarEvent>(replay = 1)
     val snackbarMessage = _snackbarMessage.asSharedFlow()
@@ -368,10 +546,16 @@ class ChatViewModel(
         viewModelScope.launch { _snackbarMessage.emit(SnackbarEvent(message, actionLabel, onAction)) }
     }
 
+
+
+
     private val _updateDialogData = MutableStateFlow<UpdateInfo?>(null)
     val updateDialogData: StateFlow<UpdateInfo?> = _updateDialogData.asStateFlow()
     fun dismissUpdateDialog() { _updateDialogData.value = null }
     fun showUpdateDialog(info: UpdateInfo) { _updateDialogData.value = info }
+
+
+
 
     /** PDF / text-file preview state (see [MediaPreviewState]). */
     private val mediaPreview = MediaPreviewState()
@@ -380,12 +564,21 @@ class ChatViewModel(
     val previewFileContent: StateFlow<String?> get() = mediaPreview.fileContent
     val previewFileName: StateFlow<String?> get() = mediaPreview.fileName
 
+
+
+
     fun showPdfPreview(pages: List<String>, startIndex: Int) = mediaPreview.showPdf(pages, startIndex)
     fun showFilePreview(fileName: String, content: String) = mediaPreview.showFile(fileName, content)
     fun clearPreviews() = mediaPreview.clear()
 
+
+
+
     private val _streamingMessage = MutableStateFlow<ChatMessage?>(null)
     private val _selectedChildren = MutableStateFlow<Map<String?, String>>(emptyMap())
+
+
+
 
     val messages: StateFlow<List<ChatMessage>> = combine(
         _allMessages,
@@ -399,14 +592,38 @@ class ChatViewModel(
     .flowOn(Dispatchers.Default)
     .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+
+
+
     val totalTokens: StateFlow<Int> = _allMessages.map { list ->
         list.sumOf { it.tokenCount }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+
+
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
     private val _generatingInConversationId = MutableStateFlow<String?>(null)
     val generatingInConversationId: StateFlow<String?> = _generatingInConversationId.asStateFlow()
+    private val _generatingConversationIds = MutableStateFlow<Set<String>>(emptySet())
+    val generatingConversationIds: StateFlow<Set<String>> = _generatingConversationIds.asStateFlow()
+
+    private val messageQueueStore = MessageQueueStore()
+    private val _messageQueues = MutableStateFlow<Map<String, List<QueuedMessage>>>(emptyMap())
+    val messageQueues: StateFlow<Map<String, List<QueuedMessage>>> = _messageQueues.asStateFlow()
+    /** Per-conversation composer text drafts ("new" for empty new-chat). */
+    private val _composerDrafts = MutableStateFlow<Map<String, String>>(emptyMap())
+    val composerDrafts: StateFlow<Map<String, String>> = _composerDrafts.asStateFlow()
+
+    /** When non-null, composer is editing this queued item; send updates it in place. */
+    private val _editingQueueItemId = MutableStateFlow<String?>(null)
+    val editingQueueItemId: StateFlow<String?> = _editingQueueItemId.asStateFlow()
+    private val _editingQueueConversationId = MutableStateFlow<String?>(null)
+    val editingQueueConversationId: StateFlow<String?> = _editingQueueConversationId.asStateFlow()
+
+
+
 
     /** Race-free generation lifecycle: IO scope, current job, send gate, stop/persist tokens. */
     private val session = GenerationSession(
@@ -415,6 +632,7 @@ class ChatViewModel(
         settings = settings,
         isLoading = _isLoading,
         streamingMessage = _streamingMessage,
+        generatingConversationIds = _generatingConversationIds,
         generatingInConversationId = _generatingInConversationId,
         allMessages = _allMessages,
         currentConversationId = _currentConversationId,
@@ -422,34 +640,64 @@ class ChatViewModel(
         onCacheMessages = { cacheMessagesForModel(it, silent = true) },
     )
 
+
+
+
     private val _isSwitching = MutableStateFlow(false)
     val isSwitching: StateFlow<Boolean> = _isSwitching.asStateFlow()
 
+
+
+
     private var switchingJob: Job? = null
+
+
+
 
     fun setSwitching(switching: Boolean) {
         _isSwitching.value = switching
     }
 
+
+
+
     private val _isNewChatMode = MutableStateFlow(true)
     val isNewChatMode: StateFlow<Boolean> = _isNewChatMode.asStateFlow()
+
+
+
 
     private val _isTransitioningToNewChat = MutableStateFlow(false)
     val isTransitioningToNewChat: StateFlow<Boolean> = _isTransitioningToNewChat.asStateFlow()
 
+
+
+
     private val _pendingSystemPromptId = MutableStateFlow<String?>(null)
     val pendingSystemPromptId: StateFlow<String?> = _pendingSystemPromptId.asStateFlow()
+
+
+
 
     fun setPendingSystemPrompt(promptId: String?) {
         _pendingSystemPromptId.value = promptId
     }
 
+
+
+
     private val _pendingConversationSettings = MutableStateFlow<ConversationSettings?>(null)
     val pendingConversationSettings: StateFlow<ConversationSettings?> = _pendingConversationSettings.asStateFlow()
+
+
+
 
     fun setPendingConversationSettings(settings: ConversationSettings?) {
         _pendingConversationSettings.value = settings
     }
+
+
+
 
     private val payloadBuilder by lazy {
         MessagePayloadBuilder(
@@ -457,6 +705,9 @@ class ChatViewModel(
             onSnackbar = { msg -> _snackbarMessage.emit(SnackbarEvent(msg)) },
         )
     }
+
+
+
 
     private val requestBuilder = GenerationRequestBuilder(
         settings = settings,
@@ -469,7 +720,14 @@ class ChatViewModel(
         currentActiveModel = currentActiveModel,
         pendingConversationSettings = _pendingConversationSettings,
         onSnackbar = { msg -> emitSnackbar(msg) },
+        forceWebSearch = { _forceWebSearch.value },
+        forceImageGen = { _forceImageGen.value },
+        forceGithub = { _forceGithub.value },
+        forceTodoist = { _forceTodoist.value },
+        forceNotion = { _forceNotion.value },
     )
+
+
 
     private val generationController by lazy {
         MessageGenerationController(
@@ -500,8 +758,12 @@ class ChatViewModel(
             onSnackbarSuspend = { msg -> _snackbarMessage.emit(SnackbarEvent(msg)) },
             onPersistSelectedChildren = { convId, map -> persistSelectedChildren(convId, map) },
             onConversationCreatedBySend = { suppressNextOpenScroll = true },
+            onGenerationFinished = { convId -> drainMessageQueue(convId) },
         )
     }
+
+
+
 
     fun updateConversationSetting(convId: String?, update: (ConversationSettings) -> ConversationSettings) {
         if (convId != null) {
@@ -513,12 +775,21 @@ class ChatViewModel(
         }
     }
 
+
+
+
     private val _branchSwitchTrigger = MutableStateFlow<String?>(null)
     val branchSwitchTrigger: StateFlow<String?> = _branchSwitchTrigger.asStateFlow()
+
+
+
 
     fun clearBranchSwitchTrigger() {
         _branchSwitchTrigger.value = null
     }
+
+
+
 
     // Export/Import state lives in [importExport]; exposed here for the UI.
     val exportProgress get() = importExport.exportProgress
@@ -533,29 +804,60 @@ class ChatViewModel(
     val gptImportResult get() = importExport.gptImportResult
 
 
+
+
+
+
+
+
     private val _conversationCount = MutableStateFlow(0)
     val conversationCount: StateFlow<Int> = _conversationCount.asStateFlow()
+
+
+
 
     private val _memoryCount = MutableStateFlow(0)
     val memoryCount: StateFlow<Int> = _memoryCount.asStateFlow()
 
+
+
+
     private val _systemPromptCount = MutableStateFlow(0)
     val systemPromptCount: StateFlow<Int> = _systemPromptCount.asStateFlow()
+
+
+
 
     init {
         startInitJobs()
         viewModelScope.launch {
             _currentConversationId.collectLatest { id ->
                 if (id != null) {
-                    // Fix stuck sending states when loading conversation — skip if currently generating
-                    if (!_isLoading.value) {
-                        val stuckMessages = convRepo.getMessagesForConversation(id).first()
-                            .filter { it.status == MessageStatus.SENDING || it.status == MessageStatus.THINKING || it.status == MessageStatus.TOOL_CALLING || it.status == MessageStatus.TRANSCRIBING }
+                    // Fix stuck sending states when loading conversation — skip if currently generating.
+                                        // Also skip very recent SENDING rows: sendMessage marks generating slightly
+                                        // AFTER creating a new conversation id, and this collector would otherwise
+                                        // race and stamp the brand-new assistant placeholder as STOPPED.
+                                        if (!session.isGenerating(id)) {
+                                            val now = System.currentTimeMillis()
+                                            val stuckMessages = convRepo.getMessagesForConversation(id).first()
+                                                .filter {
+                                                    (it.status == MessageStatus.SENDING ||
+                                                        it.status == MessageStatus.THINKING ||
+                                                        it.status == MessageStatus.TOOL_CALLING ||
+                                                        it.status == MessageStatus.TRANSCRIBING) &&
+                                                        now - it.timestamp > 15_000L
+                                                }
 
-                        stuckMessages.forEach { msg ->
-                            convRepo.upsertMessage(msg.copy(status = MessageStatus.STOPPED))
-                        }
-                    }
+                                            stuckMessages.forEach { msg ->
+                                                // Re-check generating before each write — a send may have started.
+                                                if (!session.isGenerating(id)) {
+                                                    convRepo.upsertMessage(msg.copy(status = MessageStatus.STOPPED))
+                                                }
+                                            }
+                                        }
+
+
+
 
                     // Restore selected branches
                     val conversation = convRepo.getConversation(id)
@@ -570,6 +872,9 @@ class ChatViewModel(
                     } else {
                         _selectedChildren.value = emptyMap()
                     }
+
+
+
 
                     convRepo.getMessagesForConversation(id).collect { entities ->
                         val mapped = entities.map {
@@ -591,14 +896,20 @@ class ChatViewModel(
                                     try { Json.decodeFromString<List<MessageSegment>>(json) } catch (_: Exception) { null }
                                 } ?: it.thoughts?.takeIf { t -> t.isNotBlank() }?.let { listOf(MessageSegment(type = "thought", content = it)) },
                                 toolCall = it.toolCallJson?.let { json ->
-                                    try {
-                                        val segs = Json.decodeFromString<List<MessageSegment>>(json)
-                                        segs.lastOrNull { s -> s.type == "tool" }?.let { s ->
-                                            val rawResult = s.toolResult ?: ""
-                                            ToolCallData(s.toolName ?: "", s.toolArgs ?: "{}", SearchResultFormatter.format(rawResult, appContext))
-                                        }
-                                    } catch (_: Exception) { null }
-                                },
+                                                                    try {
+                                                                        val segs = Json.decodeFromString<List<MessageSegment>>(json)
+                                                                        segs.lastOrNull { s -> s.type == "tool" }?.let { s ->
+                                                                            val rawResult = s.toolResult ?: ""
+                                                                            ToolCallData(
+                                                                                toolName = s.toolName ?: "",
+                                                                                arguments = s.toolArgs ?: "{}",
+                                                                                result = SearchResultFormatter.format(rawResult, appContext),
+                                                                                signature = s.signature,
+                                                                                toolCallId = s.toolCallId,
+                                                                            )
+                                                                        }
+                                                                    } catch (_: Exception) { null }
+                                                                },
                                 attachmentMeta = it.attachmentMeta?.let { json ->
                                     try { Json.decodeFromString<AttachmentMeta>(json) } catch (_: Exception) { null }
                                 }
@@ -633,9 +944,15 @@ class ChatViewModel(
         }
     }
 
+
+
+
     private suspend fun persistSelectedChildren(conversationId: String, childrenMap: Map<String?, String>) {
         convRepo.saveBranchSelections(conversationId, childrenMap)
     }
+
+
+
 
     // ── Custom providers ──────────────────────────────────────
     // Settings persistence lives in SettingsRepository; ChatViewModel only maintains
@@ -644,6 +961,9 @@ class ChatViewModel(
     fun renameCustomProvider(oldName: String, newName: String) = providerRegistry.renameCustom(oldName, newName)
     fun deleteCustomProvider(name: String) = providerRegistry.deleteCustom(name)
 
+
+
+
     fun getCurrentVersion(): String {
         return try { appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "?" } catch (_: Exception) { "?" }
     }
@@ -651,6 +971,18 @@ class ChatViewModel(
         val current = getCurrentVersion()
         return UpdateChecker.check(current)
     }
+
+
+
+
+    suspend fun fetchAllReleaseNotes(): List<com.newoether.agora.util.ReleaseNotes> =
+        withContext(Dispatchers.IO) {
+            UpdateChecker.fetchAllReleaseNotes(getCurrentVersion())
+        }
+
+
+
+
     fun addEmbeddingModel(config: EmbeddingModelConfig) = ragManager.addEmbeddingModel(config)
     fun deleteEmbeddingModel(id: String) = ragManager.deleteEmbeddingModel(id)
     fun renameEmbeddingModel(id: String, newName: String, batchSize: Int? = null) =
@@ -658,6 +990,9 @@ class ChatViewModel(
     fun setActiveEmbeddingModel(id: String) = ragManager.setActiveEmbeddingModel(id)
     fun cacheMessagesForModel(modelId: String, recache: Boolean = false, silent: Boolean = false) =
         ragManager.cacheMessagesForModel(modelId, recache, silent)
+
+
+
 
     fun isLocalModelIdTaken(modelId: String, excludeId: String? = null) =
         modelManager.isLocalModelIdTaken(modelId, excludeId)
@@ -667,6 +1002,9 @@ class ChatViewModel(
         uuid: String, newModelId: String, newAlias: String, nCtx: Int, temperature: Float, topP: Float, maxTokens: Int,
         mmprojPath: String = ""
     ) = modelManager.updateLocalChatModel(uuid, newModelId, newAlias, nCtx, temperature, topP, maxTokens, mmprojPath)
+
+
+
 
     suspend fun semanticSearch(query: String, limit: Int = 20): List<Pair<MessageEntity, Float>> {
         val ctx = GenerationContext(
@@ -688,8 +1026,14 @@ class ChatViewModel(
         return generationManager.semanticSearch(query, limit, ctx)
     }
 
+
+
+
     fun resolveEmbeddingKeyForProviderExact(targetProvider: String) =
         ragManager.resolveEmbeddingKeyForProviderExact(targetProvider)
+
+
+
 
     fun indexMessageForRag(messageId: String, text: String) = ragManager.indexMessageForRag(messageId, text)
     suspend fun searchMessages(query: String, limit: Int = 20) = convRepo.searchMessages(query, limit)
@@ -741,6 +1085,9 @@ class ChatViewModel(
         settings.updateShellDevice(device)
     }
 
+
+
+
     /**
      * Connects to an SSH host in capture mode and returns the server host key
      * (base64) together with its SHA-256 fingerprint, for the user to review and
@@ -779,6 +1126,9 @@ class ChatViewModel(
         }
     }
 
+
+
+
     fun createNewChat() {
         switchingJob?.cancel()
         if (!_isNewChatMode.value) {
@@ -790,6 +1140,7 @@ class ChatViewModel(
         switchingJob = viewModelScope.launch {
             kotlinx.coroutines.delay(SWITCH_OVERLAY_FADE_MS) // Allow overlay to fade in
             _currentConversationId.value = null
+            session.onConversationFocused(null)
             _currentActiveModel.value = null
             _pendingConversationSettings.value = null
             _allMessages.value = emptyList()
@@ -800,22 +1151,30 @@ class ChatViewModel(
         }
     }
 
-    fun selectConversation(id: String) {
-        if (_currentConversationId.value == id && !_isNewChatMode.value) return
 
-        switchingJob?.cancel()
-        _isTransitioningToNewChat.value = false
-        _isSwitching.value = true
-        switchingJob = viewModelScope.launch {
-            kotlinx.coroutines.delay(SWITCH_OVERLAY_FADE_MS) // Allow overlay to fade in
-            _isNewChatMode.value = false
-            _branchSwitchTrigger.value = null
-            _currentConversationId.value = id
-            val conversation = convRepo.getConversation(id)
-            _currentActiveModel.value = conversation?.modelId
-            triggerScrollToMessage()
+
+
+    fun selectConversation(id: String) {
+            if (_currentConversationId.value == id && !_isNewChatMode.value) return
+
+            switchingJob?.cancel()
+            _isTransitioningToNewChat.value = false
+            _isSwitching.value = true
+            switchingJob = viewModelScope.launch {
+                kotlinx.coroutines.delay(SWITCH_OVERLAY_FADE_MS) // Allow overlay to fade in
+                _isNewChatMode.value = false
+                _branchSwitchTrigger.value = null
+                _currentConversationId.value = id
+                // Stop/send + streaming overlay follow the focused conversation only.
+                session.onConversationFocused(id)
+                val conversation = convRepo.getConversation(id)
+                _currentActiveModel.value = conversation?.modelId
+                triggerScrollToMessage()
+            }
         }
-    }
+
+
+
 
     fun renameConversation(id: String, newTitle: String) {
         viewModelScope.launch {
@@ -826,7 +1185,111 @@ class ChatViewModel(
         }
     }
 
+
+
+
+
+
+
+
+    /**
+     * One-shot generation that rewrites the holistic active memory from a user instruction.
+     * Uses [modelIdWithPrefix] when provided, otherwise the currently selected model.
+     * Returns generated text or null on failure.
+     */
+    suspend fun generateHolisticMemory(
+        userInstruction: String,
+        modelIdWithPrefix: String? = null,
+        thinkingEnabled: Boolean = false,
+        thinkingLevel: String = "medium",
+        fastEnabled: Boolean = false,
+    ): String? = withContext(Dispatchers.IO) {
+        val resolvedModel = modelIdWithPrefix?.takeIf { it.isNotBlank() } ?: settings.selectedModel.value
+        if (resolvedModel.isBlank()) return@withContext null
+        val modelId = ModelId.parse(resolvedModel).modelName
+        val providerName = providerRegistry.providerForModel(resolvedModel)
+        val activeKey = settings.awaitApiKeyForModel(resolvedModel, providerName)
+            ?: settings.resolveApiKeyForModel(resolvedModel, providerName)
+            ?: settings.awaitActiveKey(providerName)
+            ?: settings.resolveActiveKey(providerName)
+            ?: ""
+        if (!providerRegistry.isConfigured(providerName, activeKey)) return@withContext null
+        val caps = modelCapabilitiesFor(resolvedModel)
+        val current = memoryManager.getActiveMemory()
+        val nl = 10.toChar()
+        val system = listOf(
+            "You are a memory compiler for a personal AI assistant.",
+            "Rewrite the user's OVERALL memory as a single cohesive document.",
+            "Keep durable facts, preferences, identity, ongoing projects, and constraints.",
+            "Prefer concise bullet sections. Do not invent facts not implied by input.",
+            "Output ONLY the final memory document, no preamble."
+        ).joinToString(nl.toString())
+        val user = buildString {
+            append("User request:")
+            append(nl)
+            append(userInstruction.trim())
+            append(nl)
+            append(nl)
+            if (current.isNotBlank()) {
+                append("Current memory (may be empty/outdated):")
+                append(nl)
+                append(current)
+                append(nl)
+                append(nl)
+            }
+            append("Produce the updated overall memory document.")
+        }
+        val provider = providerRegistry.getInstance(providerName)
+        val config = ProviderConfig(
+            apiKey = activeKey,
+            modelId = modelId,
+            systemPrompt = system,
+            maxContextWindow = 4,
+            thinkingEnabled = thinkingEnabled && caps.reasoning,
+            thinkingLevel = thinkingLevel,
+            fastEnabled = fastEnabled && caps.fast,
+            baseUrl = providerRegistry.getEffectiveBaseUrl(providerName),
+            alternateApiKeys = emptyList(),
+        )
+        val msgs = listOf(
+            ChatMessage(
+                text = user,
+                participant = Participant.USER,
+                status = MessageStatus.SUCCESS
+            )
+        )
+        var out = ""
+        try {
+            if (providerName == Constants.PROVIDER_LOCAL) {
+                LlamaEngine.modelMutex.withLock {
+                    provider.generateResponse(msgs, config).collect { event ->
+                        if (event is StreamEvent.TextChunk) out += event.text
+                    }
+                    localProvider.releaseEngine()
+                }
+            } else {
+                provider.generateResponse(msgs, config).collect { event ->
+                    if (event is StreamEvent.TextChunk) out += event.text
+                }
+            }
+        } catch (e: Exception) {
+            DebugLog.e("AgoraVM", "Holistic memory generation failed", e)
+            return@withContext null
+        }
+        out.trim().ifBlank { null }
+    }
+
+
+
+
     fun generateTitle(conversationId: String) = generationController.generateTitle(conversationId)
+
+
+
+
+
+
+
 
     fun setConversationSystemPrompt(id: String, promptId: String?) {
         viewModelScope.launch {
@@ -836,6 +1299,9 @@ class ChatViewModel(
             }
         }
     }
+
+
+
 
     fun setActiveModel(model: String) {
         _currentActiveModel.value = model
@@ -849,6 +1315,9 @@ class ChatViewModel(
         }
     }
 
+
+
+
     fun deleteConversation(id: String) {
         if (_currentConversationId.value == id) {
             stopGeneration()
@@ -858,6 +1327,9 @@ class ChatViewModel(
             if (_currentConversationId.value == id) createNewChat()
         }
     }
+
+
+
 
     /**
      * Delete every conversation and related message data.
@@ -887,6 +1359,9 @@ class ChatViewModel(
         }
     }
 
+
+
+
     /**
      * Deletes a message and all its descendants (BFS cascade).
      * Hidden tool_/result_ children are included in the cascade.
@@ -895,12 +1370,184 @@ class ChatViewModel(
      */
     fun deleteMessage(messageId: String): Int = generationController.deleteMessage(messageId)
 
-    fun stopGeneration() = session.stop()
+
+
+
+    // Also drain when user manually stops generation for this conversation.
+    fun stopGeneration() {
+        val convId = _currentConversationId.value
+        session.stop()
+        // After user stops the current reply, immediately send the next queued message.
+        if (convId != null) {
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(50)
+                drainMessageQueue(convId)
+            }
+        }
+    }
+
+    fun queueForConversation(conversationId: String?): List<QueuedMessage> {
+        if (conversationId == null) return emptyList()
+        return _messageQueues.value[conversationId].orEmpty()
+    }
+
+    fun isConversationGenerating(conversationId: String): Boolean =
+        conversationId in _generatingConversationIds.value
+
+    /**
+     * Send immediately, or enqueue if this conversation is already generating.
+     * When [editingQueueItemId] is set, updates that queue item instead of sending/enqueuing new.
+     */
+    fun sendOrEnqueueMessage(
+        text: String,
+        attachments: List<SelectedAttachment> = emptyList(),
+    ): Boolean {
+        val trimmed = text
+        val convId = _currentConversationId.value
+        val editingSentId = _editingSentMessageId.value
+        if (editingSentId != null) {
+            clearSentMessageEdit()
+            generationController.editMessage(editingSentId, trimmed)
+            return true
+        }
+        val editingId = _editingQueueItemId.value
+        val editingConv = _editingQueueConversationId.value
+        if (editingId != null && editingConv != null) {
+            // Finish queue edit: replace item in place, leave queue order unchanged.
+            _messageQueues.value = messageQueueStore.update(editingConv, editingId, trimmed, attachments).also { persistMessageQueues(it) }
+            clearQueueEdit()
+            return true
+        }
+        // Only queue when THIS conversation is already generating. Other conversations may generate in parallel.
+        val busyHere = convId != null && session.isGenerating(convId)
+        if (busyHere && convId != null) {
+            if (trimmed.isBlank() && attachments.isEmpty()) return false
+            val item = QueuedMessage(conversationId = convId, text = trimmed, attachments = attachments)
+            _messageQueues.value = messageQueueStore.enqueue(item).also { persistMessageQueues(it) }
+            return true
+        }
+        return generationController.sendMessage(trimmed, attachments = attachments)
+    }
+
+    fun removeQueuedMessage(conversationId: String, itemId: String) {
+        if (_editingQueueItemId.value == itemId) clearQueueEdit()
+        _messageQueues.value = messageQueueStore.remove(conversationId, itemId).also { persistMessageQueues(it) }
+    }
+
+    fun beginEditQueuedMessage(conversationId: String, itemId: String): QueuedMessage? {
+        val item = _messageQueues.value[conversationId].orEmpty().find { it.id == itemId } ?: return null
+        _editingQueueItemId.value = itemId
+        _editingQueueConversationId.value = conversationId
+        return item
+    }
+
+    fun clearQueueEdit() {
+        _editingQueueItemId.value = null
+        _editingQueueConversationId.value = null
+    }
+
+    fun setComposerDraft(conversationKey: String, text: String) {
+        val key = conversationKey.ifBlank { "new" }
+        val next = _composerDrafts.value.toMutableMap()
+        if (text.isEmpty()) next.remove(key) else next[key] = text
+        _composerDrafts.value = next
+        persistComposerDrafts(next)
+    }
+
+    fun composerDraftFor(conversationKey: String?): String {
+        val key = conversationKey?.takeIf { it.isNotBlank() } ?: "new"
+        return _composerDrafts.value[key].orEmpty()
+    }
+
+    private fun persistComposerDrafts(map: Map<String, String>) {
+        viewModelScope.launch {
+            try {
+                settings.setComposerDraftsJson(Json.encodeToString(map))
+            } catch (_: Exception) { }
+        }
+    }
+
+    private fun persistMessageQueues(map: Map<String, List<QueuedMessage>>) {
+        viewModelScope.launch {
+            try {
+                // Persist text-only queue items (attachments re-picked if needed after process death).
+                val slim = map.mapValues { (_, list) ->
+                    list.map { mapOf("id" to it.id, "conversationId" to it.conversationId, "text" to it.text) }
+                }
+                settings.setMessageQueuesJson(Json.encodeToString(slim))
+            } catch (_: Exception) { }
+        }
+    }
+
+    private fun loadPersistedQueuesAndDrafts() {
+        viewModelScope.launch {
+            try {
+                val draftJson = settings.composerDraftsJson.value
+                if (draftJson.isNotBlank() && draftJson != "{}") {
+                    _composerDrafts.value = Json.decodeFromString(draftJson)
+                }
+            } catch (_: Exception) { }
+            try {
+                val qJson = settings.messageQueuesJson.value
+                if (qJson.isNotBlank() && qJson != "{}") {
+                    val raw: Map<String, List<Map<String, String>>> = Json.decodeFromString(qJson)
+                    val restored = raw.mapValues { (convId, items) ->
+                        items.map {
+                            QueuedMessage(
+                                id = it["id"] ?: UUID.randomUUID().toString(),
+                                conversationId = it["conversationId"] ?: convId,
+                                text = it["text"].orEmpty(),
+                                attachments = emptyList(),
+                            )
+                        }
+                    }
+                    _messageQueues.value = messageQueueStore.replaceAll(restored)
+                }
+            } catch (_: Exception) { }
+        }
+    }
+
+
+    private fun drainMessageQueue(conversationId: String) {
+        // Per-conversation: only skip if THIS conversation is still generating.
+        if (session.isGenerating(conversationId)) return
+        val (next, snap) = messageQueueStore.popFirst(conversationId)
+        _messageQueues.value = snap
+        persistMessageQueues(snap)
+        if (next == null) return
+        if (_editingQueueItemId.value == next.id) clearQueueEdit()
+        // Send against the queue's conversation without forcing a UI switch if user is elsewhere.
+        // MessageGenerationController.sendMessage uses currentConversationId for new rows, so
+        // temporarily pin the id for the send if needed, then restore focus for drain-only.
+        val previousId = _currentConversationId.value
+        val previousNewChat = _isNewChatMode.value
+        val needPin = previousId != conversationId
+        if (needPin) {
+            _isNewChatMode.value = false
+            _currentConversationId.value = conversationId
+        }
+        try {
+            generationController.sendMessage(next.text, attachments = next.attachments)
+        } finally {
+            // If user stayed on another chat, keep them there; only restore if we pinned for drain
+            // and the send did not create a different conversation.
+            if (needPin && _currentConversationId.value == conversationId) {
+                // leave on the drained conversation only if it was empty before — otherwise restore.
+                // Safer: restore previous focus so parallel background drain doesn't steal UI.
+                _currentConversationId.value = previousId
+                _isNewChatMode.value = previousNewChat
+                session.onConversationFocused(previousId)
+            }
+        }
+    }
 
     fun regenerate(messageId: String) = generationController.regenerate(messageId)
 
+
+
+
     fun switchBranch(parentId: String?, currentMessageId: String, direction: Int) {
-        if (_isLoading.value && _generatingInConversationId.value == _currentConversationId.value) return
+        if (_currentConversationId.value != null && session.isGenerating(_currentConversationId.value)) return
         val siblings = _allMessages.value.filter { it.parentId == parentId && !it.id.startsWith(Constants.TOOL_MSG_PREFIX) && !it.id.startsWith(Constants.RESULT_MSG_PREFIX) }.sortedBy { it.timestamp }
         if (siblings.size < 2) return
         var currentIndex = siblings.indexOfFirst { it.id == currentMessageId }
@@ -926,7 +1573,13 @@ class ChatViewModel(
         }
     }
 
+
+
+
     fun editMessage(messageId: String, newText: String) = generationController.editMessage(messageId, newText)
+
+
+
 
     private fun getFileName(context: android.content.Context, uri: android.net.Uri): String {
         return try {
@@ -943,8 +1596,14 @@ class ChatViewModel(
         }
     }
 
+
+
+
     fun sendMessage(text: String, images: List<String> = emptyList(), attachments: List<SelectedAttachment> = emptyList()): Boolean =
-        generationController.sendMessage(text, images, attachments)
+        sendOrEnqueueMessage(text, attachments)
+
+
+
 
     /**
      * Onboarding-focused model fetch for a single provider.
@@ -961,7 +1620,13 @@ class ChatViewModel(
      */
     suspend fun fetchModelsForProvider(name: String): List<String> = providerRegistry.fetchModelsForProvider(name)
 
+
+
+
     fun computeProviderFingerprint(): String = providerRegistry.computeFingerprint()
+
+
+
 
     fun fetchAvailableModels() {
         viewModelScope.launch {
@@ -971,8 +1636,14 @@ class ChatViewModel(
             val failedProviders = mutableListOf<String>()
             var skippedCount = 0
 
+
+
+
             // Ensure custom providers are loaded into the providers map before iterating
             providerRegistry.ensureCustomProvidersRegistered()
+
+
+
 
             val message = try {
                 providerRegistry.all.forEach { (name, _) ->
@@ -982,12 +1653,18 @@ class ChatViewModel(
                         return@forEach
                     }
 
+
+
+
                     try {
                         if (!providerRegistry.isConfigured(name, settings.resolveActiveKey(name) ?: "")) {
                             skippedCount++
                             settings.saveAvailableModels(name, emptyList())
                             return@forEach
                         }
+
+
+
 
                         val models = providerRegistry.fetchModelsForProvider(name)
                         if (models.isNotEmpty()) {
@@ -1000,12 +1677,21 @@ class ChatViewModel(
                     }
                 }
 
+
+
+
                 val allFetchedModels = settings.getAvailableModels().values.flatten().toSet()
                 val newEnabled = settings.enabledModels.value.intersect(allFetchedModels)
                 settings.setEnabledModels(newEnabled)
 
+
+
+
                 // Save fingerprint on any successful fetch so we don't re-fetch on next visit
                 settings.saveLastModelsFetchFingerprint(computeProviderFingerprint())
+
+
+
 
                 when {
                     successProviders.isNotEmpty() && failedProviders.isEmpty() ->
@@ -1022,11 +1708,20 @@ class ChatViewModel(
                 _isSyncingModels.value = false
             }
 
+
+
+
             _snackbarMessage.tryEmit(SnackbarEvent(message))
         }
     }
 
+
+
+
     // ---- Data Control: Export / Import ----
+
+
+
 
     fun refreshDataCounts() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -1036,6 +1731,9 @@ class ChatViewModel(
             _systemPromptCount.value = settings.getSystemPrompts().size
         }
     }
+
+
+
 
     fun exportData(uri: Uri, categories: Set<DataExporter.ExportCategory>, includeApiKeys: Boolean) =
         importExport.exportData(uri, categories, includeApiKeys)

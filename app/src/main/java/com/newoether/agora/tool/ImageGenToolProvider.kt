@@ -80,14 +80,35 @@ class ImageGenToolProvider(private val app: Application) : ToolProvider {
                     put("size", size)
                     put("n", 1)
                 }.toString()
+                val endpoint = "$baseUrl/images/generations"
                 val response = HttpClient.post(
-                    "$baseUrl/images/generations",
+                    endpoint,
                     body,
                     mapOf("Authorization" to "Bearer $apiKey")
-                ) ?: return@withContext err("no_response", null)
+                )
+                if (response == null) {
+                    return@withContext err(
+                        "no_response",
+                        "Image API request failed (check model, key, base URL: $endpoint)."
+                    )
+                }
 
-                val json = Json.decodeFromString<Map<String, kotlinx.serialization.json.JsonElement>>(response)
-                val first = json["data"]?.jsonArray?.firstOrNull()?.jsonObject
+                val parsed = Json { ignoreUnknownKeys = true }
+                    .decodeFromString<Map<String, kotlinx.serialization.json.JsonElement>>(response)
+                // Some providers return {"error":{...}} even on non-2xx-handled paths.
+                val apiError = parsed["error"]
+                if (apiError != null) {
+                    val msg = try {
+                        val obj = apiError.jsonObject
+                        (obj["message"] as? JsonPrimitive)?.content
+                            ?: (obj["code"] as? JsonPrimitive)?.content
+                            ?: apiError.toString()
+                    } catch (_: Exception) {
+                        apiError.toString()
+                    }
+                    return@withContext err("api_error", msg)
+                }
+                val first = parsed["data"]?.jsonArray?.firstOrNull()?.jsonObject
                     ?: return@withContext err("no_image", "The endpoint returned no image data.")
 
                 val bytes: ByteArray = run {
@@ -97,18 +118,28 @@ class ImageGenToolProvider(private val app: Application) : ToolProvider {
                     } else {
                         val url = (first["url"] as? JsonPrimitive)?.content
                             ?: return@withContext err("no_image", "No b64_json or url in the response.")
-                        HttpClient.getBytes(url) ?: return@withContext err("download_failed", null)
+                        HttpClient.getBytes(url)
+                            ?: return@withContext err("download_failed", "Failed to download image URL.")
                     }
+                }
+                if (bytes.isEmpty()) {
+                    return@withContext err("empty_image", "Decoded image was empty.")
                 }
 
                 val file = File(app.filesDir, "img_${UUID.randomUUID()}.jpg")
                 file.outputStream().use { it.write(bytes) }
+                if (!file.exists() || file.length() == 0L) {
+                    return@withContext err("write_failed", "Failed to write image file.")
+                }
                 pending.add(file.absolutePath)
 
+                // Keep result small for the model, but explicit so UI can detect success.
                 buildJsonObject {
                     put("type", "image_generation")
                     put("status", "ok")
                     put("size", size)
+                    put("path", file.absolutePath)
+                    put("bytes", bytes.size)
                 }.toString()
             } catch (e: Exception) {
                 DebugLog.e("ImageGenTool", "generate_image failed", e)

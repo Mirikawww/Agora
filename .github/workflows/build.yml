@@ -2,14 +2,19 @@ name: Build APK
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # `secrets` is NOT an available context in a step-level `if` (referencing it there
+    # fails workflow validation outright). Job-level `env` *can* read secrets, so the
+    # "is a keystore configured?" test is hoisted here and the step tests `env`.
+    env:
+      HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,7 +30,7 @@ jobs:
           packages: "ndk;28.2.13676358"
 
       - name: Restore signing key
-        if: ${{ env.KEYSTORE_BASE64 != '' }}
+        if: env.HAS_KEYSTORE == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -41,6 +46,22 @@ jobs:
           EOF
 
       - uses: gradle/actions/setup-gradle@v4
+
+      # proot/talloc are built by a GNUmakefile outside CMake and dropped into
+      # jniLibs (gitignored). Without this step the release APK ships without
+      # libproot_exec.so and the Linux sandbox cannot start.
+      # proot/talloc are built by a GNUmakefile outside CMake and dropped into jniLibs
+      # (gitignored); without this the release APK ships no libproot_exec.so and the
+      # Linux sandbox cannot start.
+      #
+      # ANDROID_NDK_HOME must be pinned explicitly: GitHub runners preset it to their
+      # own bundled NDK, which is NOT the version setup-android installed above, and
+      # build-proot.sh checks that variable first.
+      - name: Build proot native binaries
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+          test -d "$ANDROID_NDK_HOME" || { echo "pinned NDK missing: $ANDROID_NDK_HOME"; exit 1; }
+          chmod +x ./build-proot.sh && ./build-proot.sh
 
       - name: Build F-Droid Release APK
         run: chmod +x ./gradlew && ./gradlew assembleFdroidRelease

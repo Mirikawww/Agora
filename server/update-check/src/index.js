@@ -7,10 +7,12 @@
  * Endpoints:
  *   GET /           -> 200 + latest release JSON (or 204 if no releases)
  *   GET /latest     -> same as /
+ *   GET /releases   -> 200 + array of historical releases (newest first)
  *   GET /health     -> 200 {"ok":true}
- *   GET /download   -> stream the first .apk asset from the latest release
+ *   GET /download?abi=arm64-v8a  -> stream preferred .apk for device ABI
+ *                                   (fallback: universal, then any release apk)
  *
- * Response JSON (stable, app-facing):
+ * Response JSON (stable, app-facing) for /latest:
  * {
  *   "tag_name": "v1.3.8",
  *   "version": "1.3.8",
@@ -71,8 +73,12 @@ export default {
         return await handleLatest(env, ctx, url.origin);
       }
 
+      if (path === "/releases") {
+        return await handleReleases(env, ctx);
+      }
+
       if (path === "/download") {
-        return await handleDownload(env, ctx, request);
+        return await handleDownload(env, ctx, request, url);
       }
 
       return json({ error: "not_found" }, 404);
@@ -107,13 +113,34 @@ async function handleLatest(env, ctx, origin) {
   });
 }
 
-async function handleDownload(env, ctx, request) {
+/** Historical release notes (newest first). App Settings → About → Changelog. */
+async function handleReleases(env, ctx) {
+  const releases = await fetchAllReleases(env, ctx);
+  const payload = releases.map((r) => {
+    const tag = String(r.tag_name || "");
+    const version = tag.replace(/^v/i, "");
+    return {
+      tag_name: tag,
+      version,
+      html_url: r.html_url || "",
+      body: r.body || "",
+      published_at: r.published_at || null,
+    };
+  });
+  return json(payload, 200, {
+    "Cache-Control": "public, max-age=120, s-maxage=300",
+  });
+}
+
+async function handleDownload(env, ctx, request, url) {
   const release = await fetchLatestRelease(env, ctx);
   if (!release) {
     return json({ error: "no_release" }, 404);
   }
 
-  const asset = pickApkAsset(release.assets || []);
+  // Prefer device ABI APK (e.g. arm64-v8a), then universal, then any release apk.
+  const abi = (url.searchParams.get("abi") || "").trim().toLowerCase();
+  const asset = pickApkAsset(release.assets || [], abi);
   if (!asset) {
     return json(
       { error: "no_apk_asset", message: "Latest release has no .apk asset" },
@@ -151,6 +178,7 @@ async function handleDownload(env, ctx, request) {
     headers.set("Content-Length", upstream.headers.get("content-length"));
   }
   headers.set("Cache-Control", "private, max-age=60");
+  headers.set("X-Agora-Apk-Name", asset.name || "");
 
   if (request.method === "HEAD") {
     return new Response(null, { status: 200, headers });
@@ -198,10 +226,45 @@ async function fetchLatestRelease(env, ctx) {
   return data;
 }
 
+async function fetchAllReleases(env, ctx) {
+  const apiUrl =
+    `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/releases?per_page=50`;
+
+  const cache = caches.default;
+  const cacheKey = new Request(
+    `https://update-check.internal/releases/${env.GITHUB_OWNER}/${env.GITHUB_REPO}`,
+    { method: "GET" },
+  );
+  const cached = await cache.match(cacheKey);
+  if (cached && cached.ok) {
+    return cached.json();
+  }
+
+  const res = await fetch(apiUrl, {
+    headers: githubHeaders(env, "application/vnd.github+json"),
+  });
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub API ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const list = Array.isArray(data) ? data : [];
+  const toCache = new Response(JSON.stringify(list), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "public, max-age=120",
+    },
+  });
+  ctx.waitUntil(cache.put(cacheKey, toCache));
+  return list;
+}
+
 function shapeRelease(release, env, origin) {
   const tag = String(release.tag_name || "");
   const version = tag.replace(/^v/i, "");
-  const hasApk = !!pickApkAsset(release.assets || []);
+  const hasApk = !!pickApkAsset(release.assets || [], "");
 
   return {
     // GitHub-compatible fields (UpdateChecker already understands these)
@@ -215,12 +278,20 @@ function shapeRelease(release, env, origin) {
     published_at: release.published_at || null,
     has_apk: hasApk,
     // Absolute Worker URL so private APK assets can be downloaded without a token in the app.
+    // App appends ?abi=… so the Worker can pick the matching split APK.
     download_url: hasApk ? `${origin}/download` : null,
   };
 }
 
-function pickApkAsset(assets) {
+/**
+ * Prefer ABI-specific APK when [preferredAbi] is set (e.g. "arm64-v8a"),
+ * then universal, then any non-debug release APK.
+ */
+function pickApkAsset(assets, preferredAbi = "") {
   const list = Array.isArray(assets) ? assets : [];
+  const abi = String(preferredAbi || "").toLowerCase();
+  const abiAliases = abiAliasesFor(abi);
+
   const scored = list
     .filter(
       (a) =>
@@ -232,14 +303,44 @@ function pickApkAsset(assets) {
     .map((a) => {
       const n = a.name.toLowerCase();
       let score = 0;
+      if (n.includes("debug")) score -= 50;
       if (n.includes("release")) score += 3;
       if (n.includes("fdroid")) score += 2;
-      if (n.includes("universal") || n.includes("arm64")) score += 1;
-      if (n.includes("debug")) score -= 5;
+
+      // Exact / alias ABI match beats universal.
+      if (abiAliases.some((alias) => n.includes(alias))) {
+        score += 20;
+      } else if (n.includes("universal") || n.includes("all") || n.includes("fat")) {
+        score += 10;
+      }
+
+      // Mild preference for arm64 names when no ABI requested.
+      if (!abi && (n.includes("arm64") || n.includes("aarch64"))) score += 1;
       return { a, score };
     })
     .sort((x, y) => y.score - x.score);
   return scored[0]?.a || null;
+}
+
+function abiAliasesFor(abi) {
+  if (!abi) return [];
+  const out = new Set([abi]);
+  // Normalize common Android ABI spellings used in Gradle/split APK names.
+  if (abi === "arm64-v8a" || abi === "arm64" || abi === "aarch64") {
+    out.add("arm64-v8a");
+    out.add("arm64");
+    out.add("aarch64");
+  } else if (abi === "armeabi-v7a" || abi === "armeabi" || abi === "armv7") {
+    out.add("armeabi-v7a");
+    out.add("armeabi");
+    out.add("armv7");
+  } else if (abi === "x86_64" || abi === "x86-64" || abi === "amd64") {
+    out.add("x86_64");
+    out.add("x86-64");
+  } else if (abi === "x86") {
+    out.add("x86");
+  }
+  return [...out];
 }
 
 function githubHeaders(env, accept) {

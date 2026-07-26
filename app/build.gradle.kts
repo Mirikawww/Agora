@@ -9,10 +9,39 @@ plugins {
 
 import java.util.Properties
 
+// Prefer signing.properties; fall back to local.properties (both gitignored).
 val keystoreProperties = Properties()
-val keystorePropertiesFile = rootProject.file("local.properties")
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(keystorePropertiesFile.reader())
+val signingPropertiesFile = rootProject.file("signing.properties")
+val localPropertiesFile = rootProject.file("local.properties")
+when {
+    signingPropertiesFile.exists() -> keystoreProperties.load(signingPropertiesFile.reader())
+    localPropertiesFile.exists() -> keystoreProperties.load(localPropertiesFile.reader())
+}
+
+fun resolveStoreFile(raw: String?): java.io.File? {
+    if (raw.isNullOrBlank() || raw == ".") return null
+    val asIs = rootProject.file(raw)
+    return when {
+        asIs.isFile -> asIs
+        else -> rootProject.file(raw.trimStart('/', '\\')).takeIf { it.isFile }
+    }
+}
+
+val agoraStoreFile = resolveStoreFile(keystoreProperties.getProperty("storeFile"))
+val agoraStorePassword = keystoreProperties.getProperty("storePassword").orEmpty()
+val agoraKeyAlias = keystoreProperties.getProperty("keyAlias").orEmpty()
+val agoraKeyPassword = keystoreProperties.getProperty("keyPassword").orEmpty()
+val hasAgoraKeystore = agoraStoreFile != null &&
+    agoraStorePassword.isNotBlank() &&
+    agoraKeyAlias.isNotBlank() &&
+    agoraKeyPassword.isNotBlank()
+
+if (!hasAgoraKeystore) {
+    logger.warn(
+        "Agora: no custom keystore configured (signing.properties / local.properties). " +
+            "debug+release will fall back to the Android debug keystore — install will not match a " +
+            "previous custom-signed build."
+    )
 }
 
 android {
@@ -24,45 +53,79 @@ android {
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
-        applicationId = "com.newoether.agora"
-        minSdk = 24
-        targetSdk = 36
-        versionCode = 27
-        versionName = "1.3.9"
+            applicationId = "com.newoether.agora"
+            minSdk = 24
+            targetSdk = 36
+            versionCode = 30
+                                    versionName = "1.4.2"
 
+            // Native code (llama/proot) is currently arm64-only; non-arm64 APKs ship
+            // without those .so files (cloud chat still works; local/sandbox needs arm64).
+            ndk {
+                // Restrict CMake/NDK compile targets; packaging splits still emit 5 APKs.
+                abiFilters += listOf("arm64-v8a")
+            }
 
-        ndk {
-            abiFilters += listOf("arm64-v8a")
+            externalNativeBuild {
+                cmake {
+                    cppFlags += "-std=c++17"
+                    arguments += listOf("-DANDROID_STL=c++_shared")
+                    targets += listOf("agora_llama", "agora_proot")
+                }
+            }
         }
 
-        externalNativeBuild {
-            cmake {
-                cppFlags += "-std=c++17"
-                arguments += listOf("-DANDROID_STL=c++_shared")
-                targets += listOf("agora_llama", "agora_proot")
+        // universal APK + per-ABI APKs (arm64-v8a / armeabi-v7a / x86 / x86_64) = 5 outputs.
+        // Note: only arm64-v8a currently includes agora native libs (see ndk.abiFilters).
+        splits {
+            abi {
+                isEnable = true
+                reset()
+                include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+                isUniversalApk = true
+            }
+        }
+
+        ksp {
+            arg("room.schemaLocation", "$projectDir/schemas")
+        }
+
+    signingConfigs {
+        // Shared custom keystore for debug + release so installFdroidDebug can overwrite
+        // a previously installed release (and vice versa) without SIGNATURE_MISMATCH.
+        if (hasAgoraKeystore) {
+            getByName("debug") {
+                storeFile = agoraStoreFile
+                storePassword = agoraStorePassword
+                keyAlias = agoraKeyAlias
+                keyPassword = agoraKeyPassword
+            }
+            create("release") {
+                storeFile = agoraStoreFile
+                storePassword = agoraStorePassword
+                keyAlias = agoraKeyAlias
+                keyPassword = agoraKeyPassword
+            }
+        } else {
+            create("release") {
+                // Keep a named config so buildTypes can reference it; falls through to debug.
+                initWith(getByName("debug"))
             }
         }
     }
 
-    ksp {
-        arg("room.schemaLocation", "$projectDir/schemas")
+    val agoraSigning = if (hasAgoraKeystore) {
+        signingConfigs.getByName("release")
+    } else {
+        signingConfigs.getByName("debug")
     }
-
-    signingConfigs {
-        create("release") {
-            storeFile = file(keystoreProperties.getProperty("storeFile", "."))
-            storePassword = keystoreProperties.getProperty("storePassword", "")
-            keyAlias = keystoreProperties.getProperty("keyAlias", "")
-            keyPassword = keystoreProperties.getProperty("keyPassword", "")
-        }
-    }
-
-    val hasKeystore = keystoreProperties.getProperty("storeFile", ".").let { it != "." }
-    val releaseSigning = if (hasKeystore) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
 
     buildTypes {
+        debug {
+            signingConfig = agoraSigning
+        }
         release {
-            signingConfig = releaseSigning
+            signingConfig = agoraSigning
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

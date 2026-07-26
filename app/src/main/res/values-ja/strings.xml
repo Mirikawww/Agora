@@ -364,7 +364,7 @@
     <string name="web_search_tavily_key">Tavily API キー</string>
     <string name="web_search_tavily_key_hint">tavily.com の API キー</string>
     <string name="web_search_num_results">最大結果数</string>
-    <string name="web_search_num_results_desc">取得する結果数: %1$d（1-10）</string>
+    <string name="web_search_num_results_desc">取得する結果数: %1$d（0-100）</string>
     <string name="web_search_searxng_fallback_desc">公開インスタンスはレート制限されることが多いです。安定した利用にはセルフホストを推奨します。</string>
     <string name="web_search_advanced">詳細</string>
     <string name="web_search_searxng_url">SearXNG ベース URL</string>
@@ -534,13 +534,6 @@
     <string name="scheme_style_expressive">エクスプレッシブ</string>
     <string name="scheme_style_vibrant">ビビッド</string>
     <string name="scheme_style_neutral">ニュートラル</string>
-    <string name="font_title">フォント</string>
-    <string name="font_app_default">アプリ既定</string>
-    <string name="font_system_default">システム既定</string>
-    <string name="font_custom">カスタム</string>
-    <string name="font_custom_pick">フォントファイルを選択</string>
-    <string name="font_no_file_selected">未選択</string>
-    <string name="font_invalid_file">無効なフォントファイル</string>
     <string name="dynamic_color">ダイナミックカラー</string>
     <string name="dynamic_color_desc">壁紙に基づいてシステムが生成した色を使用（Android 12 以上）</string>
     <string name="visual_effects">視覚効果</string>
@@ -677,6 +670,24 @@
     <string name="provider_no_local_models_desc">GGUF モデルをインポートして開始してください</string>
     <string name="provider_keys_summary">%1$d 個の API キー</string>
     <string name="provider_connection">接続</string>
+
+    <!-- 設定 - プロバイダーの残高照会 -->
+    <string name="provider_balance_title">アカウント残高</string>
+    <string name="provider_balance_fetch">アカウント残高を取得</string>
+    <string name="provider_balance_path">残高 API パス</string>
+    <string name="provider_balance_json_key">結果の JSON キー</string>
+    <string name="provider_balance_hint">パスは Base URL に追加されます（例：/credits）。キーはレスポンス内のドットパスです（例：data.total_usage）。</string>
+    <string name="provider_balance_refresh">更新</string>
+    <string name="provider_balance_querying">照会中…</string>
+    <string name="provider_balance_value">残高：%1$s</string>
+    <string name="provider_balance_incomplete">パスと JSON キーを入力してください</string>
+    <string name="provider_balance_error_no_base_url">先に Base URL を設定してください</string>
+    <string name="provider_balance_error_network">ネットワークエラー：%1$s</string>
+    <string name="provider_balance_error_http">リクエストに失敗しました：%1$s</string>
+    <string name="provider_balance_error_key">レスポンスにキー \"%1$s\" が見つかりません</string>
+    <string name="provider_balance_error_json">レスポンスが有効な JSON ではありません</string>
+    <string name="provider_balance_error_empty">レスポンスが空です</string>
+    <string name="provider_balance_error_generic">残高の取得に失敗しました</string>
     <string name="import_model_chat">GGUF モデルをインポート</string>
     <string name="add_local_chat_model">ローカルモデルを追加</string>
     <string name="local_ctx_size">コンテキストサイズ</string>
@@ -825,9 +836,6 @@
     <string name="could_not_read_file">ファイルを読み込めませんでした</string>
 
     <!-- Documentation -->
-    <string name="documentation">ドキュメント</string>
-    <string name="show_documentation_links">ドキュメントリンクを表示</string>
-    <string name="show_documentation_links_desc">設定ページにドキュメントボタンを表示</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">Agora へようこそ</string>
@@ -916,10 +924,10 @@
 
     <!-- Crash reporting -->
     <string name="crash_title">Agora が予期せず終了しました</string>
-    <string name="crash_message">申し訳ありません。匿名のクラッシュレポートを送信して修正にご協力いただけます。</string>
+    <string name="crash_message">申し訳ありません。以下の詳細は端末内に残ります。修正に協力いただける場合はコピーして issue に貼り付けてください。</string>
     <string name="crash_submit">レポートを送信</string>
-    <string name="crash_dismiss">送信しない</string>
-    <string name="crash_privacy_note">クラッシュログのみが newoether.space に送信されます。それ以外の情報は収集されません。</string>
+    <string name="crash_dismiss">閉じる</string>
+    <string name="crash_privacy_note">クラッシュログは端末内に保存されるだけで、送信されません。報告したい場合はコピーして issue に貼り付けてください。</string>
     <string name="crash_submitted">クラッシュレポートを送信しました。ありがとうございます!</string>
     <string name="settings_group_network">ネットワーク</string>
     <string name="settings_proxy">プロキシ</string>

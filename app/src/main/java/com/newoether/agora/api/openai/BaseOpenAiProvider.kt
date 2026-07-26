@@ -4,6 +4,7 @@ import com.newoether.agora.api.*
 
 import com.newoether.agora.util.DebugLog
 import com.newoether.agora.api.util.StreamingThinkTagParser
+import com.newoether.agora.api.util.buildToolCallId
 import com.newoether.agora.api.util.convertToOpenAiMessages
 import com.newoether.agora.api.util.prepareMessages
 import com.newoether.agora.model.ChatMessage
@@ -18,6 +19,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.net.ConnectException
@@ -67,7 +69,7 @@ abstract class BaseOpenAiProvider : LlmProvider {
                 emit(StreamEvent.ThoughtChunk(reasoning))
             }
         }
-        delta.content?.let { content ->
+        extractTextContent(delta.content)?.let { content ->
             if (content.isNotEmpty()) emit(StreamEvent.TextChunk(content))
         }
     }
@@ -117,7 +119,13 @@ abstract class BaseOpenAiProvider : LlmProvider {
             DebugLog.d("AgoraAPI", "[$name] REQ -> ${endpointUrls.first()} | model=${config.modelId} | msgs=${apiMessages.size} | tools=${config.tools?.size ?: 0}")
 
             val headers = mutableMapOf("Content-Type" to "application/json")
-            if (config.apiKey.isNotBlank()) headers["Authorization"] = "Bearer ${config.apiKey}"
+            // Single bound key only — auth failures are not rotated across sibling keys.
+            val apiKey = config.apiKey.trim()
+            fun applyAuthHeader() {
+                headers.remove("Authorization")
+                if (apiKey.isNotBlank()) headers["Authorization"] = "Bearer $apiKey"
+            }
+            applyAuthHeader()
             for ((key, value) in getExtraHeaders(config)) headers[key] = value
 
             val maxAttempts = 3
@@ -131,6 +139,7 @@ abstract class BaseOpenAiProvider : LlmProvider {
 
                 while (endpointIndex < endpointUrls.size && !finished && !retryScheduled) {
                     val endpointUrl = endpointUrls[endpointIndex]
+                    applyAuthHeader()
                     val handle = HttpClient.streamPost(endpointUrl, requestBodyJson, headers)
                     try {
                         if (handle.code == 200) {
@@ -147,6 +156,7 @@ abstract class BaseOpenAiProvider : LlmProvider {
 
                             DebugLog.e("AgoraAPI", "[$name] ERR ${handle.code} at $endpointUrl: $errorRaw")
 
+                            // Auth/key errors: fail immediately (user/config issue, not software failover).
                             if (handle.code in retryableStatusCodes && attempt < maxAttempts) {
                                 val retryDelayMs = retryDelayMillis(handle.code, attempt)
                                 DebugLog.w("AgoraAPI", "[$name] Transient error ${handle.code} on attempt $attempt/$maxAttempts, retrying in ${retryDelayMs}ms...")
@@ -185,6 +195,24 @@ abstract class BaseOpenAiProvider : LlmProvider {
         emit: suspend (StreamEvent) -> Unit
     ) {
         val pendingToolCalls = mutableMapOf<Int, PendingToolCall>()
+        var sawToolFinishReason = false
+
+        suspend fun emitPendingToolCalls() {
+            if (pendingToolCalls.isEmpty()) return
+            val calls = pendingToolCalls.values
+                .filter { it.name.isNotBlank() }
+                .map { pending ->
+                    val args = pending.args.toString()
+                    val id = pending.id.takeIf { it.isNotBlank() }
+                        ?: buildToolCallId(pending.name, args)
+                    StreamEvent.ToolCallRequest(id, pending.name, args)
+                }
+            pendingToolCalls.clear()
+            when {
+                calls.size == 1 -> emit(calls.first())
+                calls.size > 1 -> emit(StreamEvent.ToolCallsRequest(calls))
+            }
+        }
 
         while (currentCoroutineContext().isActive) {
             val line = try {
@@ -206,26 +234,41 @@ abstract class BaseOpenAiProvider : LlmProvider {
                     parseDeltaContent(delta, config, thinkParser) { emit(it) }
 
                     delta.toolCalls?.forEach { tc ->
-                        val existing = if (tc.id != null) pendingToolCalls.values.firstOrNull { it.id == tc.id } else null
-                        val pending = if (existing != null) existing else {
-                            val idx = tc.index ?: pendingToolCalls.size
-                            pendingToolCalls.getOrPut(idx) { PendingToolCall() }
-                        }
-                        if (tc.id != null) pending.id = tc.id
-                        tc.function?.name?.let { if (it.isNotEmpty()) pending.name = it }
-                        tc.function?.arguments?.let {
-                            pending.args.append(if (it is JsonPrimitive) it.content else it.toString())
-                        }
+                        accumulateToolCall(pendingToolCalls, tc)
                     }
                 }
 
-                if (choice?.finishReason == "tool_calls" && pendingToolCalls.isNotEmpty()) {
-                    val calls = pendingToolCalls.values.filter { it.name.isNotEmpty() }.map {
-                        StreamEvent.ToolCallRequest(it.id, it.name, it.args.toString())
+                // Proxies that put the full assistant payload under choice.message (stream mode).
+                choice?.message?.let { msg ->
+                    msg.reasoningContent?.let { reasoning ->
+                        if (reasoning.isNotEmpty() && config.thinkingEnabled) {
+                            emit(StreamEvent.ThoughtChunk(reasoning))
+                        }
                     }
-                    pendingToolCalls.clear()
-                    if (calls.size == 1) emit(calls.first())
-                    else if (calls.size > 1) emit(StreamEvent.ToolCallsRequest(calls))
+                    extractTextContent(msg.content)?.let { content ->
+                        if (content.isNotEmpty()) emit(StreamEvent.TextChunk(content))
+                    }
+                    msg.toolCalls?.forEach { tc ->
+                        // Prefer complete message payload over partial deltas of the same call.
+                        replaceOrAccumulateToolCall(pendingToolCalls, tc)
+                    }
+                }
+
+                // Some OpenAI-compatible proxies emit "function_call", "tool-calls", or even
+                // "stop" while still carrying complete tool_calls. Emit as soon as the stream
+                // signals completion with pending tools — don't require exact "tool_calls".
+                val finish = choice?.finishReason?.trim()?.lowercase().orEmpty()
+                if (finish.isNotEmpty() && pendingToolCalls.isNotEmpty()) {
+                    val looksLikeToolFinish = finish == "tool_calls" ||
+                        finish == "function_call" ||
+                        finish == "tool-calls" ||
+                        finish == "tool_call" ||
+                        // Proxies that finish with stop/null-ish after streaming tool args.
+                        (finish == "stop" && pendingToolCalls.values.any { it.name.isNotBlank() })
+                    if (looksLikeToolFinish) {
+                        sawToolFinishReason = true
+                        emitPendingToolCalls()
+                    }
                 }
 
                 response.usage?.let { usage ->
@@ -246,8 +289,83 @@ abstract class BaseOpenAiProvider : LlmProvider {
             onThought = { emit(StreamEvent.ThoughtChunk(it)) }
         )
 
+        // Stream ended without a recognized tool finish_reason (common with some proxies
+        // that only send tool_calls deltas then [DONE]). Flush any accumulated tool calls so
+        // GenerationManager can still run the multi-tool loop and continue the reply.
+        if (pendingToolCalls.isNotEmpty()) {
+            if (!sawToolFinishReason) {
+                DebugLog.w(
+                    "AgoraAPI",
+                    "[$name] Stream ended with ${pendingToolCalls.size} pending tool call(s) and no tool finish_reason; flushing"
+                )
+            }
+            emitPendingToolCalls()
+        }
+
         if (!currentCoroutineContext().isActive) {
             throw CancellationException("Stream cancelled")
+        }
+    }
+
+    private fun accumulateToolCall(
+        pendingToolCalls: MutableMap<Int, PendingToolCall>,
+        tc: OpenAiToolCall,
+    ) {
+        val existing = if (tc.id != null) pendingToolCalls.values.firstOrNull { it.id == tc.id } else null
+        val pending = if (existing != null) existing else {
+            val idx = tc.index ?: pendingToolCalls.size
+            pendingToolCalls.getOrPut(idx) { PendingToolCall() }
+        }
+        if (tc.id != null) pending.id = tc.id
+        tc.function?.name?.let { if (it.isNotEmpty()) pending.name = it }
+        tc.function?.arguments?.let {
+            pending.args.append(if (it is JsonPrimitive) it.content else it.toString())
+        }
+    }
+
+    /**
+     * For complete `choice.message.tool_calls` payloads: overwrite args for that id/index
+     * instead of appending on top of partial deltas (avoids duplicated JSON args).
+     */
+    private fun replaceOrAccumulateToolCall(
+        pendingToolCalls: MutableMap<Int, PendingToolCall>,
+        tc: OpenAiToolCall,
+    ) {
+        val existing = if (tc.id != null) pendingToolCalls.values.firstOrNull { it.id == tc.id } else null
+        val pending = if (existing != null) existing else {
+            val idx = tc.index ?: pendingToolCalls.size
+            pendingToolCalls.getOrPut(idx) { PendingToolCall() }
+        }
+        if (tc.id != null) pending.id = tc.id
+        tc.function?.name?.let { if (it.isNotEmpty()) pending.name = it }
+        tc.function?.arguments?.let {
+            val raw = if (it is JsonPrimitive) it.content else it.toString()
+            if (raw.isNotEmpty()) {
+                pending.args.clear()
+                pending.args.append(raw)
+            }
+        }
+    }
+
+    /**
+     * Normalize OpenAI-compatible stream content fields.
+     * Accepts plain strings and multi-part content arrays; returns null for non-text.
+     */
+    protected fun extractTextContent(content: JsonElement?): String? {
+        if (content == null) return null
+        return when (content) {
+            is JsonPrimitive -> content.content
+            is JsonArray -> content.mapNotNull { part ->
+                when (part) {
+                    is JsonPrimitive -> part.content
+                    is JsonObject -> (part["text"] as? JsonPrimitive)?.content
+                        ?: (part["content"] as? JsonPrimitive)?.content
+                    else -> null
+                }
+            }.joinToString("").ifEmpty { null }
+            is JsonObject -> (content["text"] as? JsonPrimitive)?.content
+                ?: (content["content"] as? JsonPrimitive)?.content
+            else -> null
         }
     }
 

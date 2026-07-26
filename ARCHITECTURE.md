@@ -973,7 +973,7 @@ ORPHAN: deleteOrphanedEmbeddings() →
 | `util/ShellCrypto.kt` | 116 | Conch encryption |
 | `util/ShellClient.kt` | 277 | Conch HTTP client |
 | `util/SshClient.kt` | 95 | SSH client with TOFU host key verification |
-| `util/CrashReporter.kt` | 70 | Crash report capture + upload to newoether.space |
+| `util/CrashReporter.kt` | 70 | Crash capture, stored locally only (upload endpoint intentionally unset in this fork) |
 | `util/FileValidator.kt` | 83 | File import validation |
 | `util/UpdateChecker.kt` | 71 | GitHub releases update checker |
 | `util/DebugLog.kt` | 18 | Debug logging utility |

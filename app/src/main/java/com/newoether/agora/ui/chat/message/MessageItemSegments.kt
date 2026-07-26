@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.newoether.agora.model.ChatMessage
 import com.newoether.agora.model.MessageSegment
+import com.newoether.agora.model.ToolCallDisplayModes
 
 internal fun mergeAdjacentSegments(segs: List<MessageSegment>): List<MessageSegment> {
     val merged = mutableListOf<MessageSegment>()
@@ -57,6 +58,15 @@ internal fun MessageSegment.isVisibleAnswerSegment(): Boolean =
 internal fun MessageSegment.isInfoSegment(): Boolean =
     type == "thought" || type == "tool" || type == "transcription"
 
+internal fun shouldUseTimelineSegments(
+    displayMode: String,
+    segments: List<MessageSegment>,
+): Boolean {
+    val normalized = ToolCallDisplayModes.normalize(displayMode)
+    return normalized != ToolCallDisplayModes.COMPACT &&
+        segments.any { it.isVisibleAnswerSegment() || it.isInfoSegment() }
+}
+
 internal fun ChatMessage.hasActiveAnswerSegment(): Boolean {
     val lastVisibleSegment = segments?.lastOrNull { !it.isBlankAnswerSegment() }
     return if (lastVisibleSegment != null) {
@@ -64,6 +74,14 @@ internal fun ChatMessage.hasActiveAnswerSegment(): Boolean {
     } else {
         text.isNotBlank()
     }
+}
+
+internal fun timelineInfoBlockEnd(segments: List<MessageSegment>, startIndex: Int): Int {
+    var blockEnd = startIndex
+    while (blockEnd < segments.size && !segments[blockEnd].isVisibleAnswerSegment()) {
+        blockEnd++
+    }
+    return blockEnd
 }
 
 internal fun buildTimelineBlockKeys(

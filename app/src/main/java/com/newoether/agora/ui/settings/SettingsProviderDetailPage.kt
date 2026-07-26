@@ -3,45 +3,137 @@ package com.newoether.agora.ui.settings
 import com.newoether.agora.util.DebugLog
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.newoether.agora.R
+import com.newoether.agora.api.ProviderBalanceClient
 import com.newoether.agora.data.ApiKeyEntry
 import com.newoether.agora.data.LocalChatModelConfig
+import com.newoether.agora.data.ProviderBalanceConfig
 import com.newoether.agora.ui.components.clearFocusOnTap
 import com.newoether.agora.util.Constants
 import com.newoether.agora.util.noOpBringIntoView
 import com.newoether.agora.viewmodel.ChatViewModel
+import com.newoether.agora.viewmodel.ProviderKeyBalance
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/** Maps a failed balance probe onto localized text; [ProviderBalanceClient.Result.Failure.detail]
+ *  carries the specifics (status line, missing field name). */
+// Fixed traffic-light colours: the monochrome ColorScheme maps error/tertiary to gray,
+// which would erase the very distinction the badge exists to make.
+private val BalanceHighColor = Color(0xFF2E7D32)
+private val BalanceMidColor = Color(0xFFF9A825)
+private val BalanceLowColor = Color(0xFFD32F2F)
+
+/** Leading numeric part of a raw balance field, ignoring currency symbols/units
+ *  ("$12.50", "12.50 CNY", "1,234" → 12.5 / 12.5 / 1234). Null when unparseable. */
+private fun balanceAmount(raw: String): Double? =
+    Regex("-?\\d+(?:\\.\\d+)?").find(raw.replace(",", ""))?.value?.toDoubleOrNull()
+
+/** Trims trailing zeros so 12.50 shows as "12.5" and 120.0 as "120". */
+private fun formatBalanceAmount(amount: Double): String {
+    val rounded = Math.round(amount * 100.0) / 100.0
+    return if (rounded == Math.floor(rounded) && !rounded.isInfinite()) {
+        rounded.toLong().toString()
+    } else {
+        rounded.toString()
+    }
+}
+
+/**
+ * Per-key balance chip shown after an API key's name. Green above 100, amber from
+ * 30 to 100, red below 30 — thresholds are on the bare number, unit-agnostic.
+ * A failed or unparseable reading falls back to a neutral chip.
+ */
+@Composable
+private fun BalanceBadge(reading: ProviderKeyBalance, modifier: Modifier = Modifier) {
+    val success = reading.result as? ProviderBalanceClient.Result.Success
+    val amount = success?.let { balanceAmount(it.value) }
+    val container = when {
+        amount == null -> MaterialTheme.colorScheme.surfaceContainerHighest
+        amount > 100 -> BalanceHighColor
+        amount >= 30 -> BalanceMidColor
+        else -> BalanceLowColor
+    }
+    val content = when {
+        amount == null -> MaterialTheme.colorScheme.onSurfaceVariant
+        amount >= 30 && amount <= 100 -> Color(0xFF1B1B1B)   // amber needs dark text
+        else -> Color.White
+    }
+    Badge(containerColor = container, contentColor = content, modifier = modifier) {
+        Text(
+            text = when {
+                amount != null -> formatBalanceAmount(amount)
+                success != null -> success.value.take(12)
+                else -> "—"
+            },
+            // Badge pins its height to 16.dp while labelSmall carries a 16.sp line height:
+            // the leftover leading lands below the glyphs and reads as "not centered".
+            // Trimming the line box makes the text height match the glyphs, so the
+            // Badge's own center alignment lands where the eye expects it.
+            style = MaterialTheme.typography.labelSmall.copy(
+                platformStyle = PlatformTextStyle(includeFontPadding = false),
+                lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.Both
+                )
+            ),
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun balanceFailureText(failure: ProviderBalanceClient.Result.Failure): String = when (failure.code) {
+    "no_base_url" -> stringResource(R.string.provider_balance_error_no_base_url)
+    "network_error" -> stringResource(R.string.provider_balance_error_network, failure.detail)
+    "http_error" -> stringResource(R.string.provider_balance_error_http, failure.detail)
+    "key_not_found" -> stringResource(R.string.provider_balance_error_key, failure.detail)
+    "invalid_json" -> stringResource(R.string.provider_balance_error_json)
+    "empty_response" -> stringResource(R.string.provider_balance_error_empty)
+    else -> stringResource(R.string.provider_balance_error_generic)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +148,7 @@ fun SettingsProviderDetailPage(
     val customProviders by viewModel.settings.customProviders.collectAsState()
     val localChatModels by viewModel.settings.localChatModels.collectAsState()
     val disabledProviders by viewModel.settings.disabledProviders.collectAsState()
+    val providerBalanceConfigs by viewModel.settings.providerBalanceConfigs.collectAsState()
 
     val isLocal = providerName == Constants.PROVIDER_LOCAL
     val isCustom = customProviders.any { it.name == providerName }
@@ -76,6 +169,72 @@ fun SettingsProviderDetailPage(
     var showRenameProvider by remember { mutableStateOf(false) }
     var showDeleteProvider by remember { mutableStateOf(false) }
     var providerMenuExpanded by remember { mutableStateOf(false) }
+
+    // ── Account balance ──────────────────────────────────────────────────────
+    // Declared here (not inside the group) because the readings are rendered twice:
+    // as a badge on each API key row, and as the status line under the switch.
+    val balanceConfig = providerBalanceConfigs[providerName] ?: ProviderBalanceConfig()
+    var balanceExpanded by rememberSaveable { mutableStateOf(false) }
+    var balanceReadings by remember { mutableStateOf<List<ProviderKeyBalance>>(emptyList()) }
+    var balanceLoading by remember { mutableStateOf(false) }
+    var balanceRefreshTick by remember { mutableIntStateOf(0) }
+    val balanceByKeyId = remember(balanceReadings) { balanceReadings.associateBy { it.keyId } }
+
+    // Same pattern as the Base URL field: never key remember on the saved value,
+    // or the debounced write-back would recreate the state mid-typing.
+    val balancePathState = remember { TextFieldState(balanceConfig.path) }
+    val balanceKeyState = remember { TextFieldState(balanceConfig.jsonKey) }
+    LaunchedEffect(balanceConfig.path) {
+        val ext = balanceConfig.path
+        if (ext.isNotEmpty() && ext != balancePathState.text.toString()) {
+            balancePathState.edit { replace(0, length, ext) }
+        }
+    }
+    LaunchedEffect(balanceConfig.jsonKey) {
+        val ext = balanceConfig.jsonKey
+        if (ext.isNotEmpty() && ext != balanceKeyState.text.toString()) {
+            balanceKeyState.edit { replace(0, length, ext) }
+        }
+    }
+    // Both writers re-read the persisted config so editing one field never
+    // clobbers the other with a stale snapshot.
+    LaunchedEffect(balancePathState.text) {
+        delay(500)
+        val text = balancePathState.text.toString()
+        val current = viewModel.settings.providerBalanceConfigs.value[providerName] ?: ProviderBalanceConfig()
+        if (current.path != text) {
+            viewModel.settings.setProviderBalanceConfig(providerName, current.copy(path = text))
+        }
+    }
+    LaunchedEffect(balanceKeyState.text) {
+        delay(500)
+        val text = balanceKeyState.text.toString()
+        val current = viewModel.settings.providerBalanceConfigs.value[providerName] ?: ProviderBalanceConfig()
+        if (current.jsonKey != text) {
+            viewModel.settings.setProviderBalanceConfig(providerName, current.copy(jsonKey = text))
+        }
+    }
+    // Re-query on open, on probe changes, and whenever the key set changes (added,
+    // renamed or deleted keys must not leave stale badges behind).
+    val providerKeySignature = apiKeys.filter { it.provider == providerName }
+        .joinToString(",") { it.id }
+    LaunchedEffect(
+        providerName,
+        balanceConfig.isRunnable,
+        balanceConfig.path,
+        balanceConfig.jsonKey,
+        providerKeySignature,
+        balanceRefreshTick
+    ) {
+        if (!balanceConfig.isRunnable) {
+            balanceReadings = emptyList()
+            balanceLoading = false
+            return@LaunchedEffect
+        }
+        balanceLoading = true
+        balanceReadings = viewModel.fetchProviderBalances(providerName)
+        balanceLoading = false
+    }
 
     val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -125,29 +284,47 @@ fun SettingsProviderDetailPage(
         }
     ) {
             SettingsGroupColumn {
-                // Enable/disable switch sits under the provider title (non-Local only).
-                if (!isLocal) {
-                    val providerOn = providerName !in disabledProviders
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 32.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Switch(
-                            checked = providerOn,
-                            onCheckedChange = { viewModel.settings.setProviderEnabled(providerName, it) }
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = stringResource(
-                                if (providerOn) R.string.provider_enabled else R.string.provider_disabled
-                            ),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (providerOn) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                            // Enable/disable switch sits under the provider title (non-Local only).
+                            // Align with SettingsGroup section labels (start = 32.dp under scaffold 16.dp padding).
+                            if (!isLocal) {
+                                val configured = when {
+                                    isCustom || providerName == Constants.PROVIDER_OLLAMA ->
+                                        !providerBaseUrls[providerName].isNullOrBlank()
+                                    else -> apiKeys.any { it.provider == providerName }
+                                }
+                                val providerOn = providerName !in disabledProviders
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 32.dp, end = 16.dp, top = 4.dp, bottom = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Start
+                                ) {
+                                    Switch(
+                                        checked = providerOn && configured,
+                                        enabled = configured,
+                                        onCheckedChange = { enabled ->
+                                            if (configured) viewModel.settings.setProviderEnabled(providerName, enabled)
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        text = stringResource(
+                                            when {
+                                                !configured -> R.string.not_configured
+                                                providerOn -> R.string.provider_enabled
+                                                else -> R.string.provider_disabled
+                                            }
+                                        ),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (providerOn && configured) {
+                                            MaterialTheme.colorScheme.onSurface
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                }
+                            }
 
                 // Base URL (non-Local only)
                 if (!isLocal) {
@@ -186,6 +363,128 @@ fun SettingsProviderDetailPage(
                                             modifier = Modifier.fillMaxWidth(),
                                             textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+
+            // Account balance probe (non-Local only). Balance endpoints are provider-specific
+            // and undocumented in any spec, so the path + response field are user-supplied.
+            if (!isLocal) {
+                // With stored keys the readings live on the key rows as badges, so this line
+                // only carries global state: progress, or the reason every key failed.
+                val anonymousReading = balanceReadings.singleOrNull()?.takeIf { it.keyId.isEmpty() }
+                val allKeysFailed = balanceReadings.isNotEmpty() &&
+                    balanceReadings.all { it.result is ProviderBalanceClient.Result.Failure }
+                val firstFailure = balanceReadings
+                    .firstNotNullOfOrNull { it.result as? ProviderBalanceClient.Result.Failure }
+
+                val balanceStatus: String? = when {
+                    !balanceConfig.enabled -> null
+                    balanceLoading -> stringResource(R.string.provider_balance_querying)
+                    !balanceConfig.isRunnable -> stringResource(R.string.provider_balance_incomplete)
+                    anonymousReading != null -> when (val result = anonymousReading.result) {
+                        is ProviderBalanceClient.Result.Success ->
+                            stringResource(R.string.provider_balance_value, result.value)
+                        is ProviderBalanceClient.Result.Failure -> balanceFailureText(result)
+                    }
+                    allKeysFailed && firstFailure != null -> balanceFailureText(firstFailure)
+                    else -> null
+                }
+                val balanceIsError = !balanceLoading && allKeysFailed
+
+                SettingsGroup(
+                    title = stringResource(R.string.provider_balance_title),
+                    items = listOf {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            SettingsItem(
+                                headlineContent = { Text(stringResource(R.string.provider_balance_fetch), fontWeight = FontWeight.Medium) },
+                                supportingContent = balanceStatus?.let {
+                                    {
+                                        Text(
+                                            it,
+                                            color = if (balanceIsError) Color(0xFFD32F2F) else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                leadingContent = {
+                                    Icon(
+                                        Icons.Default.AccountBalanceWallet,
+                                        null,
+                                        tint = if (balanceConfig.enabled) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                    )
+                                },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            if (balanceExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                            null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Switch(
+                                            checked = balanceConfig.enabled,
+                                            onCheckedChange = { enabled ->
+                                                viewModel.settings.setProviderBalanceConfig(providerName, balanceConfig.copy(enabled = enabled))
+                                                if (enabled) balanceExpanded = true
+                                            }
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.clickable { balanceExpanded = !balanceExpanded }
+                            )
+                            AnimatedVisibility(
+                                visible = balanceExpanded,
+                                enter = expandVertically(),
+                                exit = shrinkVertically()
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
+                                    Box(modifier = Modifier.noOpBringIntoView()) {
+                                        OutlinedTextField(
+                                            state = balancePathState,
+                                            label = { Text(stringResource(R.string.provider_balance_path)) },
+                                            placeholder = { Text(ProviderBalanceConfig.DEFAULT_PATH, style = MaterialTheme.typography.bodyMedium) },
+                                            lineLimits = TextFieldLineLimits.SingleLine,
+                                            shape = RoundedCornerShape(16.dp),
+                                            modifier = Modifier.fillMaxWidth(),
+                                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Box(modifier = Modifier.noOpBringIntoView()) {
+                                        OutlinedTextField(
+                                            state = balanceKeyState,
+                                            label = { Text(stringResource(R.string.provider_balance_json_key)) },
+                                            placeholder = { Text(ProviderBalanceConfig.DEFAULT_JSON_KEY, style = MaterialTheme.typography.bodyMedium) },
+                                            lineLimits = TextFieldLineLimits.SingleLine,
+                                            shape = RoundedCornerShape(16.dp),
+                                            modifier = Modifier.fillMaxWidth(),
+                                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface)
+                                        )
+                                    }
+                                    Text(
+                                        text = stringResource(R.string.provider_balance_hint),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                        modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp)
+                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        TextButton(
+                                            onClick = { balanceRefreshTick++ },
+                                            enabled = balanceConfig.isRunnable && !balanceLoading
+                                        ) {
+                                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(stringResource(R.string.provider_balance_refresh))
+                                        }
+                                        if (balanceLoading) {
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        }
                                     }
                                 }
                             }
@@ -279,100 +578,153 @@ fun SettingsProviderDetailPage(
                             }
                         }
                         add {
-                            Box(modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = !importingModel) { filePickerLauncher.launch(arrayOf("*/*")) }.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
-                                if (importingModel) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(stringResource(R.string.importing_model), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-                                    }
-                                } else {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(stringResource(R.string.import_model_chat), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-                                    }
-                                }
-                            }
-                        }
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .heightIn(min = 56.dp)
+                                                            .clickable(enabled = !importingModel) { filePickerLauncher.launch(arrayOf("*/*")) }
+                                                            .padding(horizontal = 16.dp),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        if (importingModel) {
+                                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                Text(stringResource(R.string.importing_model), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                                                            }
+                                                        } else {
+                                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                Text(stringResource(R.string.import_model_chat), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                                                            }
+                                                        }
+                                                    }
+                                                }
                     }
                 )
             }
 
             // API Keys (non-Local)
-            if (!isLocal) {
-                val providerKeys = apiKeys.filter { it.provider == providerName }
-                if (providerKeys.isEmpty()) {
-                    SettingsGroup(
-                        title = stringResource(R.string.provider_api_keys),
-                        items = buildList {
-                            add {
-                                SettingsItem(
-                                    headlineContent = { Text(stringResource(R.string.provider_no_keys, providerName), color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                    leadingContent = { Icon(Icons.Default.Key, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)) },
-                                    modifier = Modifier.heightIn(min = 64.dp)
-                                )
-                            }
-                            add {
-                                Box(modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { showKeyDialog = ApiKeyEntry(name = "", key = "", provider = providerName) }.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(stringResource(R.string.provider_add_key), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-                                    }
-                                }
-                            }
-                        }
-                    )
-                } else {
-                    SettingsGroup(
-                        title = stringResource(R.string.provider_api_keys),
-                        items = buildList {
-                            providerKeys.forEach { entry ->
-                                var showMenu by remember { mutableStateOf(false) }
-                                val isEnabled = entry.id in activeApiKeyIds[providerName].orEmpty()
-                                add {
-                                    SettingsItem(
-                                        headlineContent = { Text(entry.name, fontWeight = FontWeight.Medium) },
-                                        supportingContent = { Text(entry.key.take(4) + "••••••••" + entry.key.takeLast(4)) },
-                                        leadingContent = {
-                                            Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-                                                Checkbox(
-                                                    checked = isEnabled,
-                                                    onCheckedChange = { viewModel.settings.setApiKeyEnabled(providerName, entry.id, it) },
-                                                    modifier = Modifier.size(20.dp)
-                                                )
-                                            }
-                                        },
-                                        trailingContent = {
-                                            Box {
-                                                IconButton(onClick = { showMenu = true }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.MoreVert, stringResource(R.string.options), modifier = Modifier.size(18.dp)) }
-                                                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 16.dp, shape = RoundedCornerShape(12.dp)) {
-                                                    DropdownMenuItem(text = { Text(stringResource(R.string.provider_edit)) }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = { showMenu = false; showKeyDialog = entry })
-                                                    DropdownMenuItem(text = { Text(stringResource(R.string.provider_delete), color = MaterialTheme.colorScheme.error) }, leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }, onClick = { showMenu = false; showDeleteKeyConfirm = entry })
+                        if (!isLocal) {
+                            val providerKeys = apiKeys.filter { it.provider == providerName }
+                            if (providerKeys.isEmpty()) {
+                                SettingsGroup(
+                                    title = stringResource(R.string.provider_api_keys),
+                                    items = buildList {
+                                        add {
+                                            SettingsItem(
+                                                headlineContent = { Text(stringResource(R.string.provider_no_keys, providerName), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                                leadingContent = { Icon(Icons.Default.Key, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)) },
+                                                modifier = Modifier.heightIn(min = 64.dp)
+                                            )
+                                        }
+                                        add {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(min = 56.dp)
+                                                    .clickable { showKeyDialog = ApiKeyEntry(name = "", key = "", provider = providerName) }
+                                                    .padding(horizontal = 16.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text(stringResource(R.string.provider_add_key), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
                                                 }
                                             }
-                                        },
-                                        modifier = Modifier
-                                            .clickable { viewModel.settings.setApiKeyEnabled(providerName, entry.id, !isEnabled) }
-                                    )
-                                }
-                            }
-                            add {
-                                Box(modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { showKeyDialog = ApiKeyEntry(name = "", key = "", provider = providerName) }.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(stringResource(R.string.provider_add_key), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                                        }
                                     }
-                                }
+                                )
+                            } else {
+                                SettingsGroup(
+                                    title = stringResource(R.string.provider_api_keys),
+                                    items = buildList {
+                                        providerKeys.forEach { entry ->
+                                            var showMenu by remember { mutableStateOf(false) }
+                                            val isEnabled = entry.id in activeApiKeyIds[providerName].orEmpty()
+                                            val keyBalance = balanceByKeyId[entry.id]
+                                            add {
+                                                SettingsItem(
+                                                    headlineContent = {
+                                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                                            Text(
+                                                                entry.name,
+                                                                fontWeight = FontWeight.Medium,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis,
+                                                                modifier = Modifier.weight(1f, fill = false)
+                                                            )
+                                                            // Balance is billed per key, so each key carries its own chip.
+                                                            if (balanceConfig.isRunnable && keyBalance != null) {
+                                                                BalanceBadge(keyBalance, modifier = Modifier.padding(start = 8.dp))
+                                                            }
+                                                        }
+                                                    },
+                                                    supportingContent = { Text(entry.key.take(4) + "••••••••" + entry.key.takeLast(4)) },
+                                                    leadingContent = {
+                                                        Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                                                            Checkbox(
+                                                                checked = isEnabled,
+                                                                onCheckedChange = { viewModel.settings.setApiKeyEnabled(providerName, entry.id, it) },
+                                                                modifier = Modifier.size(20.dp)
+                                                            )
+                                                        }
+                                                    },
+                                                    trailingContent = {
+                                                        Box {
+                                                            IconButton(onClick = { showMenu = true }, modifier = Modifier.size(24.dp)) {
+                                                                Icon(Icons.Default.MoreVert, stringResource(R.string.options), modifier = Modifier.size(18.dp))
+                                                            }
+                                                            DropdownMenu(
+                                                                expanded = showMenu,
+                                                                onDismissRequest = { showMenu = false },
+                                                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                                                tonalElevation = 16.dp,
+                                                                shape = RoundedCornerShape(12.dp)
+                                                            ) {
+                                                                DropdownMenuItem(
+                                                                    text = { Text(stringResource(R.string.provider_edit)) },
+                                                                    leadingIcon = { Icon(Icons.Default.Edit, null) },
+                                                                    onClick = { showMenu = false; showKeyDialog = entry }
+                                                                )
+                                                                DropdownMenuItem(
+                                                                    text = { Text(stringResource(R.string.provider_delete), color = MaterialTheme.colorScheme.error) },
+                                                                    leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                                                                    onClick = { showMenu = false; showDeleteKeyConfirm = entry }
+                                                                )
+                                                            }
+                                                        }
+                                                    },
+                                                    modifier = Modifier.clickable {
+                                                        viewModel.settings.setApiKeyEnabled(providerName, entry.id, !isEnabled)
+                                                    }
+                                                )
+                                            }
+                                        }
+                                        add {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(min = 56.dp)
+                                                    .clickable { showKeyDialog = ApiKeyEntry(name = "", key = "", provider = providerName) }
+                                                    .padding(horizontal = 16.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text(stringResource(R.string.provider_add_key), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
                             }
                         }
-                    )
+                        }
                 }
-            }
-            }
-    }
 
     // --- Dialogs ---
     if (showGgufError) {
@@ -511,15 +863,70 @@ fun SettingsProviderDetailPage(
     // API Key dialog
     showKeyDialog?.let { entry ->
         var name by remember { mutableStateOf(entry.name) }; var key by remember { mutableStateOf(entry.key) }
+        var keyNameError by remember { mutableStateOf(false) }
         val isEdit = apiKeys.any { it.id == entry.id }
-        AlertDialog(modifier = Modifier.clearFocusOnTap(), containerColor = MaterialTheme.colorScheme.surfaceContainer, onDismissRequest = { showKeyDialog = null }, title = { Text(if (isEdit) stringResource(R.string.provider_edit_key) else stringResource(R.string.provider_add_key_title), fontWeight = FontWeight.Bold) }, text = {
-            Column(Modifier.fillMaxWidth()) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text(stringResource(R.string.provider_key_name_hint)) }, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().noOpBringIntoView())
-                Spacer(modifier = Modifier.height(8.dp))
-                Box(modifier = Modifier.noOpBringIntoView()) { OutlinedTextField(value = key, onValueChange = { key = it }, label = { Text("${providerName} API Key") }, visualTransformation = PasswordVisualTransformation(), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) }
+        AlertDialog(
+                    modifier = Modifier.clearFocusOnTap(),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    onDismissRequest = { showKeyDialog = null },
+                    title = {
+                        Text(
+                            if (isEdit) stringResource(R.string.provider_edit_key) else stringResource(R.string.provider_add_key_title),
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    text = {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                                                    OutlinedTextField(
+                                                        value = name,
+                                                        onValueChange = { name = it; keyNameError = false },
+                                                        label = { Text(stringResource(R.string.provider_key_name_hint)) },
+                                                        isError = keyNameError,
+                                                        supportingText = if (keyNameError) {
+                                                            {
+                                                                // Hard red: monochrome ColorScheme maps error → gray.
+                                                                Text(
+                                                                    text = stringResource(R.string.provider_key_name_duplicate),
+                                                                    style = MaterialTheme.typography.bodySmall,
+                                                                    color = Color(0xFFD32F2F)
+                                                                )
+                                                            }
+                                                        } else null,
+                                                        shape = RoundedCornerShape(16.dp),
+                                                        modifier = Modifier.fillMaxWidth().noOpBringIntoView()
+                                                    )
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    Box(modifier = Modifier.noOpBringIntoView()) {
+                                                        OutlinedTextField(
+                                                            value = key,
+                                                            onValueChange = { key = it },
+                                                            label = { Text("${providerName} API Key") },
+                                                            visualTransformation = PasswordVisualTransformation(),
+                                                            shape = RoundedCornerShape(16.dp),
+                                                            modifier = Modifier.fillMaxWidth()
+                                                        )
+                                                    }
+                                                }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            if (name.isNotBlank() && key.isNotBlank()) {
+                                val ok = if (isEdit) {
+                                    viewModel.settings.updateApiKey(entry.id, name, key)
+                                } else {
+                                    viewModel.settings.addApiKey(name, key, providerName)
+                                }
+                                if (ok) showKeyDialog = null else keyNameError = true
+                            }
+                        }) {
+                            Text(if (isEdit) stringResource(R.string.provider_save) else stringResource(R.string.provider_add))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showKeyDialog = null }) { Text(stringResource(R.string.cancel)) }
+                    }
+                )
             }
-        }, confirmButton = { TextButton(onClick = { if (name.isNotBlank() && key.isNotBlank()) { if (isEdit) viewModel.settings.updateApiKey(entry.id, name, key) else viewModel.settings.addApiKey(name, key, providerName); showKeyDialog = null } }) { Text(if (isEdit) stringResource(R.string.provider_save) else stringResource(R.string.provider_add)) } }, dismissButton = { TextButton(onClick = { showKeyDialog = null }) { Text(stringResource(R.string.cancel)) } })
-    }
 
     // Delete key confirm
     showDeleteKeyConfirm?.let { entry ->

@@ -45,6 +45,7 @@ fun MessageList(
     viewportHeight: Int = 0,
     messageHeights: SnapshotStateMap<String, Int> = remember { mutableStateMapOf() },
     onEditMessage: (String, String) -> Unit = { _, _ -> },
+    onBeginComposerEdit: (String) -> Unit = {},
     onSwitchBranch: (String?, String, Int) -> Unit = { _, _, _ -> },
     onRegenerate: (String) -> Unit = {},
     onDelete: (String) -> Unit = {},
@@ -118,13 +119,16 @@ fun MessageList(
                         && message.status in setOf(MessageStatus.SENDING, MessageStatus.THINKING, MessageStatus.TOOL_CALLING, MessageStatus.TRANSCRIBING),
                     isLoading = isLoading,
                     isEditingAllowed = (editingMessageId == null || editingMessageId == message.id) && !isLoading,
-                    isEditing = editingMessageId == message.id,
+                    isEditing = false,
                     isSwitching = isSwitching,
                     isInContext = isInContext,
                     modelAliases = modelAliases,
                     visualizeContextRollout = visualizeContextRollout,
                     toolCallDisplayMode = toolCallDisplayMode,
-                    onStartEdit = { editingMessageId = message.id },
+                    onStartEdit = {
+                        // Queue-style edit: load text into composer, not in-bubble editor.
+                        onBeginComposerEdit(message.id)
+                    },
                     onCancelEdit = { editingMessageId = null },
                     branchIndex = branchIndex,
                     totalBranches = totalBranches,

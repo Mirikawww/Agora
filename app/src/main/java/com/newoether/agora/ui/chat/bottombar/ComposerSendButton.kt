@@ -27,9 +27,8 @@ import com.newoether.agora.model.SelectedAttachment
 import com.newoether.agora.ui.common.LocalAgoraHaptics
 
 /**
- * The composer's send / stop / pending-send FAB. Owns the "wait for attachment
- * processing then auto-send" handshake and the icon cross-fade between the three
- * states. Extracted from [ChatBottomBar].
+ * The composer's send / stop / pending-send FAB.
+ * While generating, empty composer = Stop; with text/attachments = enqueue.
  */
 @Composable
 internal fun ComposerSendButton(
@@ -43,8 +42,11 @@ internal fun ComposerSendButton(
     onCollapse: () -> Unit,
 ) {
     val haptics = LocalAgoraHaptics.current
-    // Pending send: wait for processing to finish, then auto-send
     val anyProcessing = composer.processingStates.isNotEmpty()
+    val hasContent = textFieldState.text.isNotBlank() || composer.selectedAttachments.isNotEmpty()
+    // Queue-aware: may send while loading (enqueues). Stop only when loading with empty composer.
+    val canSend = hasContent && isModelValid && !isSwitching
+    val showStop = isLoading && !hasContent && !composer.pendingSend
     LaunchedEffect(composer.pendingSend, anyProcessing) {
         if (composer.pendingSend && !anyProcessing) {
             if (onSendMessage(textFieldState.text.toString(), composer.selectedAttachments)) {
@@ -55,12 +57,11 @@ internal fun ComposerSendButton(
             composer.pendingSend = false
         }
     }
-    val canSend = (textFieldState.text.isNotBlank() || composer.selectedAttachments.isNotEmpty()) && !isLoading && isModelValid && !isSwitching
-    val isActionable = (isLoading || canSend || composer.pendingSend) && !isSwitching
+    val isActionable = (showStop || canSend || composer.pendingSend) && !isSwitching
     FloatingActionButton(
         onClick = {
             if (isSwitching) return@FloatingActionButton
-            if (isLoading) onStopGeneration()
+            if (showStop) onStopGeneration()
             else if (composer.pendingSend) {
                 haptics.selection()
                 composer.pendingSend = false
@@ -86,7 +87,7 @@ internal fun ComposerSendButton(
     ) {
         val fabIcon = when {
             composer.pendingSend -> "pending"
-            isLoading -> "stop"
+            showStop -> "stop"
             else -> "send"
         }
         AnimatedContent(

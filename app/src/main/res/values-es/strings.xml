@@ -364,7 +364,7 @@
     <string name="web_search_tavily_key">Clave de API de Tavily</string>
     <string name="web_search_tavily_key_hint">Clave de API de tavily.com</string>
     <string name="web_search_num_results">Máx. resultados</string>
-    <string name="web_search_num_results_desc">Número de resultados a obtener: %1$d (1-10)</string>
+    <string name="web_search_num_results_desc">Número de resultados a obtener: %1$d (0-100)</string>
     <string name="web_search_searxng_fallback_desc">Las instancias públicas suelen tener límites de uso. Se recomienda el autoalojamiento para un uso fiable.</string>
     <string name="web_search_advanced">Avanzado</string>
     <string name="web_search_searxng_url">URL base de SearXNG</string>
@@ -534,13 +534,6 @@
     <string name="scheme_style_expressive">Expresivo</string>
     <string name="scheme_style_vibrant">Vibrante</string>
     <string name="scheme_style_neutral">Neutro</string>
-    <string name="font_title">Fuente</string>
-    <string name="font_app_default">Predeterminada</string>
-    <string name="font_system_default">Sistema</string>
-    <string name="font_custom">Personalizada</string>
-    <string name="font_custom_pick">Elegir archivo</string>
-    <string name="font_no_file_selected">Sin seleccionar</string>
-    <string name="font_invalid_file">Archivo de fuente no válido</string>
     <string name="dynamic_color">Color dinámico</string>
     <string name="dynamic_color_desc">Usa colores generados por el sistema según el fondo de pantalla (Android 12+)</string>
     <string name="visual_effects">Efectos visuales</string>
@@ -677,6 +670,24 @@
     <string name="provider_no_local_models_desc">Importa un modelo GGUF para empezar</string>
     <string name="provider_keys_summary">%1$d clave(s) de API</string>
     <string name="provider_connection">Conexión</string>
+
+    <!-- Ajustes - Saldo de la cuenta del proveedor -->
+    <string name="provider_balance_title">Saldo de la cuenta</string>
+    <string name="provider_balance_fetch">Consultar el saldo de la cuenta</string>
+    <string name="provider_balance_path">Ruta de la API de saldo</string>
+    <string name="provider_balance_json_key">Clave JSON del resultado</string>
+    <string name="provider_balance_hint">La ruta se añade a la URL base (p. ej. /credits). La clave es una ruta con puntos dentro de la respuesta (p. ej. data.total_usage).</string>
+    <string name="provider_balance_refresh">Actualizar</string>
+    <string name="provider_balance_querying">Consultando…</string>
+    <string name="provider_balance_value">Saldo: %1$s</string>
+    <string name="provider_balance_incomplete">Completa la ruta y la clave JSON</string>
+    <string name="provider_balance_error_no_base_url">Configura primero una URL base</string>
+    <string name="provider_balance_error_network">Error de red: %1$s</string>
+    <string name="provider_balance_error_http">Error en la solicitud: %1$s</string>
+    <string name="provider_balance_error_key">No se encontró la clave \"%1$s\" en la respuesta</string>
+    <string name="provider_balance_error_json">La respuesta no es un JSON válido</string>
+    <string name="provider_balance_error_empty">Respuesta vacía</string>
+    <string name="provider_balance_error_generic">Error al consultar el saldo</string>
     <string name="import_model_chat">Importar modelo GGUF</string>
     <string name="add_local_chat_model">Añadir modelo local</string>
     <string name="local_ctx_size">Tamaño del contexto</string>
@@ -825,9 +836,6 @@
     <string name="could_not_read_file">No se pudo leer el archivo</string>
 
     <!-- Documentation -->
-    <string name="documentation">Documentación</string>
-    <string name="show_documentation_links">Mostrar enlaces de documentación</string>
-    <string name="show_documentation_links_desc">Mostrar el botón de documentación en las páginas de ajustes</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">Bienvenido a Agora</string>
@@ -916,10 +924,10 @@
 
     <!-- Crash reporting -->
     <string name="crash_title">Agora se cerró inesperadamente</string>
-    <string name="crash_message">Lo sentimos. Puedes ayudar a solucionarlo enviando un informe de fallos anónimo.</string>
+    <string name="crash_message">Lo sentimos. Los detalles siguientes permanecen en tu dispositivo; cópialos en un issue si quieres ayudar a corregirlo.</string>
     <string name="crash_submit">Enviar informe</string>
-    <string name="crash_dismiss">No enviar</string>
-    <string name="crash_privacy_note">Solo se envía el registro del fallo a newoether.space. No se recopila ninguna otra información.</string>
+    <string name="crash_dismiss">Cerrar</string>
+    <string name="crash_privacy_note">El registro del fallo permanece en tu dispositivo; no se envía nada. Cópialo en un issue si quieres informarlo.</string>
     <string name="crash_submitted">Informe de fallos enviado. ¡Gracias!</string>
     <string name="settings_group_network">Red</string>
     <string name="settings_proxy">Proxy</string>

@@ -36,6 +36,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -200,26 +201,27 @@ internal fun AssistantMessageContent(
                             } else {
                                 when (message.status) {
                                     MessageStatus.SUCCESS -> {
+                                        // Hard green — monochrome schemes gray out scheme.tertiary/error.
                                         Icon(
                                             Icons.Default.CheckCircle,
                                             null,
                                             modifier = Modifier.size(14.dp),
-                                            tint = MaterialTheme.colorScheme.tertiary
+                                            tint = Color(0xFF2E7D32)
                                         )
                                     }
                                     MessageStatus.STOPPED, MessageStatus.ERROR -> {
-                                        // Red circle + X for incomplete finishes (stop / error).
+                                        // Hard red circle + X for incomplete finishes (stop / error).
                                         Box(
                                             modifier = Modifier
                                                 .size(14.dp)
-                                                .background(MaterialTheme.colorScheme.error, CircleShape),
+                                                .background(Color(0xFFD32F2F), CircleShape),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Icon(
                                                 Icons.Default.Close,
                                                 null,
                                                 modifier = Modifier.size(10.dp),
-                                                tint = MaterialTheme.colorScheme.onError
+                                                tint = Color.White
                                             )
                                         }
                                     }
@@ -228,7 +230,7 @@ internal fun AssistantMessageContent(
                                             Icons.Default.Info,
                                             null,
                                             modifier = Modifier.size(14.dp),
-                                            tint = MaterialTheme.colorScheme.error
+                                            tint = Color(0xFFD32F2F)
                                         )
                                     }
                                 }
@@ -290,8 +292,10 @@ internal fun AssistantMessageContent(
                     mergeAdjacentSegments(segmentsOrNull.orEmpty())
                 }
                 val normalizedToolCallDisplayMode = ToolCallDisplayModes.normalize(toolCallDisplayMode)
-                val useTimelineSegments = normalizedToolCallDisplayMode != ToolCallDisplayModes.COMPACT &&
-                    mergedSegments.any { it.type == "answer" }
+                val useTimelineSegments = shouldUseTimelineSegments(
+                    normalizedToolCallDisplayMode,
+                    mergedSegments,
+                )
                 val groupAdjacentTimelineTools = normalizedToolCallDisplayMode == ToolCallDisplayModes.GROUPED_TIMELINE
                 val timelineBlockKeys = remember(message.id, mergedSegments, groupAdjacentTimelineTools) {
                     buildTimelineBlockKeys(message.id, mergedSegments, groupAdjacentTimelineTools)
@@ -401,11 +405,10 @@ internal fun AssistantMessageContent(
                                 .clickable { thoughtExpandedStates[message.id] = !isThoughtExpanded }
                                 .padding(10.dp)
                         ) {
-                            if (isToolCalling || isToolInProgress) {
-                                Icon(Icons.Default.Build, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
-                            } else if (!isThinking && !hasThought && toolCount > 0) {
-                                Icon(Icons.Default.Build, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
-                            } else if (isTranscribing || collapsedTitle == "Image Transcription") {
+                            if (isToolCalling || isToolInProgress || (!isThinking && !hasThought && toolCount > 0)) {
+                    val headerTool = lastSeg.takeIf { it.type == "tool" }?.toolName
+                    ToolTypeIcon(headerTool)
+                } else if (isTranscribing || collapsedTitle == "Image Transcription") {
                                 Icon(Icons.Filled.Image, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
                             } else {
                                 Icon(androidx.compose.ui.res.painterResource(id = com.newoether.agora.R.drawable.neurology_24), null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))

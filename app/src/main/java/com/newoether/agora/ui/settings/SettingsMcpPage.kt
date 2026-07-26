@@ -61,7 +61,6 @@ fun SettingsMcpPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val enabled by viewModel.settings.mcpEnabled.collectAsState()
     val servers by viewModel.settings.mcpServers.collectAsState()
     val statuses by viewModel.mcpStatuses.collectAsState()
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
     var editingId by remember { mutableStateOf<String?>(null) }
     var deleteId by remember { mutableStateOf<String?>(null) }
     var showImport by remember { mutableStateOf(false) }
@@ -71,20 +70,19 @@ fun SettingsMcpPage(viewModel: ChatViewModel, onBack: () -> Unit) {
         title = stringResource(R.string.mcp_title),
         onBack = onBack,
         scrollState = scrollState,
-        floatingActionButton = { if (showDocFab) DocumentationFab("mcp.md") },
     ) {
         SettingsGroupColumn {
-            SettingsGroup(title = stringResource(R.string.mcp_title), items = listOf {
-                SettingsItem(
-                    headlineContent = { Text(stringResource(R.string.mcp_enable)) },
-                    supportingContent = { Text(stringResource(R.string.mcp_enable_desc)) },
-                    leadingContent = { Icon(McpServerIcon, null, tint = MaterialTheme.colorScheme.primary) },
-                    trailingContent = {
-                        Switch(checked = enabled, onCheckedChange = viewModel.settings::setMcpEnabled)
-                    },
-                    modifier = Modifier.clickable { viewModel.settings.setMcpEnabled(!enabled) },
-                )
-            })
+            SettingsGroup(title = "", items = listOf {
+                            SettingsItem(
+                                headlineContent = { Text(stringResource(R.string.mcp_enable)) },
+                                supportingContent = { Text(stringResource(R.string.mcp_enable_desc)) },
+                                leadingContent = { Icon(McpServerIcon, null, tint = MaterialTheme.colorScheme.primary) },
+                                trailingContent = {
+                                    Switch(checked = enabled, onCheckedChange = viewModel.settings::setMcpEnabled)
+                                },
+                                modifier = Modifier.clickable { viewModel.settings.setMcpEnabled(!enabled) },
+                            )
+                        })
 
             if (enabled) {
                 SettingsGroup(title = stringResource(R.string.mcp_servers), items = buildList {
@@ -186,6 +184,7 @@ fun SettingsMcpPage(viewModel: ChatViewModel, onBack: () -> Unit) {
 
     deleteId?.let { id ->
         AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
             onDismissRequest = { deleteId = null },
             title = { Text(stringResource(R.string.mcp_delete_title)) },
             text = { Text(stringResource(R.string.mcp_delete_message)) },
@@ -263,6 +262,7 @@ private fun McpServerDialog(
     )
 
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.mcp_server_editor)) },
         text = {
@@ -275,7 +275,11 @@ private fun McpServerDialog(
                 TextButton(onClick = { transportMenu = true }) {
                     Text(stringResource(R.string.mcp_transport_value, transportLabel(transport)))
                 }
-                DropdownMenu(expanded = transportMenu, onDismissRequest = { transportMenu = false }) {
+                DropdownMenu(
+                    expanded = transportMenu,
+                    onDismissRequest = { transportMenu = false },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                ) {
                     listOf("auto", "streamable_http", "sse").forEach { value ->
                         DropdownMenuItem(
                             text = { Text(transportLabel(value)) },
@@ -448,6 +452,7 @@ private fun McpImportDialog(
     var text by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.mcp_import)) },
         text = {

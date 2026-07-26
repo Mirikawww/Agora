@@ -15,6 +15,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.newoether.agora.ui.theme.ChatType
+import com.newoether.agora.ui.theme.LocalIsMonochrome
 
 fun Modifier.verticalScrollbar(
     scrollState: ScrollState,
@@ -33,16 +34,21 @@ fun Modifier.verticalScrollbar(
 
 @Composable
 internal fun ProviderBadge(provider: String) {
-    val badgeColor = when (provider.lowercase()) {
-        "google", "gemini" -> MaterialTheme.colorScheme.onPrimaryContainer
-        "anthropic" -> Color(0xFFD97757)
-        "openai" -> Color(0xFF74AA9C)
+    val isMono = LocalIsMonochrome.current
+    val badgeColor = when {
+        isMono -> MaterialTheme.colorScheme.onSurface
+        provider.lowercase() in setOf("google", "gemini") -> MaterialTheme.colorScheme.onPrimaryContainer
+        provider.lowercase() == "anthropic" -> Color(0xFFD97757)
+        provider.lowercase() == "openai" -> Color(0xFF74AA9C)
         else -> MaterialTheme.colorScheme.primary
     }
-    val badgeBackground = when (provider.lowercase()) {
-        "google", "gemini" -> MaterialTheme.colorScheme.primaryContainer
+    val badgeBackground = when {
+        // Mono: solid black/white chip, not translucent brand tint.
+        isMono -> MaterialTheme.colorScheme.onSurface
+        provider.lowercase() in setOf("google", "gemini") -> MaterialTheme.colorScheme.primaryContainer
         else -> badgeColor.copy(alpha = 0.15f)
     }
+    val textColor = if (isMono) MaterialTheme.colorScheme.surface else badgeColor
     Surface(
         shape = RoundedCornerShape(4.dp),
         color = badgeBackground
@@ -50,7 +56,7 @@ internal fun ProviderBadge(provider: String) {
         Text(
             provider,
             style = ChatType.micro,
-            color = badgeColor,
+            color = textColor,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
         )
     }

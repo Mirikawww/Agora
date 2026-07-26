@@ -12,6 +12,18 @@ package com.newoether.agora.api
  */
 sealed class GenerationError {
 
+    enum class Origin { API, NETWORK, TOOL, CONFIGURATION, APP }
+
+    val origin: Origin
+        get() = when (this) {
+            is Api, is SseParse -> Origin.API
+            is Network -> if (statusCode == 0) Origin.NETWORK else Origin.API
+            Timeout -> Origin.NETWORK
+            is ToolExecution, is Transcription, is Embedding -> Origin.TOOL
+            is Configuration -> Origin.CONFIGURATION
+            is LocalModel, is Unknown, Cancelled -> Origin.APP
+        }
+
     /** HTTP-level error (connection refused, timeout, DNS failure, etc.). */
     data class Network(
         val statusCode: Int,

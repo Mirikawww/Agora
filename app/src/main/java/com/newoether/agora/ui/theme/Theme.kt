@@ -7,6 +7,8 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -18,59 +20,8 @@ import java.io.File
 
 enum class ThemeMode { LIGHT, DARK, FOLLOW_DEVICE }
 
-/**
- * Returns the effective [FontFamily] for non-mono typography based on the font preference.
- */
-@Composable
-private fun effectiveFontFamily(
-    fontPreference: String,
-    customFontPath: String
-): FontFamily = remember(fontPreference, customFontPath) {
-    when (fontPreference) {
-        "system" -> FontFamily.Default
-        "custom" -> {
-            val file = File(customFontPath)
-            if (file.exists()) {
-                try {
-                    FontFamily(
-                        Font(file, FontWeight.ExtraLight),
-                        Font(file, FontWeight.Light),
-                        Font(file, FontWeight.Normal),
-                        Font(file, FontWeight.Medium),
-                        Font(file, FontWeight.Bold),
-                    )
-                } catch (_: Exception) {
-                    OutfitFamily
-                }
-            } else OutfitFamily
-        }
-        else -> OutfitFamily
-    }
-}
-
-/**
- * Builds the [Typography] with the given [FontFamily] replacing all non-mono styles.
- */
-private fun typographyWithFont(family: FontFamily): Typography {
-    fun TextStyle.withFamily(f: FontFamily) = copy(fontFamily = f)
-    return Typography.copy(
-        displayLarge = Typography.displayLarge.withFamily(family),
-        displayMedium = Typography.displayMedium.withFamily(family),
-        displaySmall = Typography.displaySmall.withFamily(family),
-        headlineLarge = Typography.headlineLarge.withFamily(family),
-        headlineMedium = Typography.headlineMedium.withFamily(family),
-        headlineSmall = Typography.headlineSmall.withFamily(family),
-        titleLarge = Typography.titleLarge.withFamily(family),
-        titleMedium = Typography.titleMedium.withFamily(family),
-        titleSmall = Typography.titleSmall.withFamily(family),
-        bodyLarge = Typography.bodyLarge.withFamily(family),
-        bodyMedium = Typography.bodyMedium.withFamily(family),
-        bodySmall = Typography.bodySmall.withFamily(family),
-        labelLarge = Typography.labelLarge.withFamily(family),
-        labelMedium = Typography.labelMedium.withFamily(family),
-        labelSmall = Typography.labelSmall.withFamily(family),
-    )
-}
+/** True when the active color scheme is the hand-built monochrome palette. */
+val LocalIsMonochrome = compositionLocalOf { false }
 
 @Composable
 fun AgoraTheme(
@@ -78,8 +29,6 @@ fun AgoraTheme(
     colorSchemePreset: ColorSchemePreset = ColorSchemePreset.MIDNIGHT,
     schemeStyle: SchemeStyle = SchemeStyle.TONAL_SPOT,
     dynamicColor: Boolean = true,
-    fontPreference: String = "app_default",
-    customFontPath: String = "",
     content: @Composable () -> Unit
 ) {
     val systemDark = isSystemInDarkTheme()
@@ -90,27 +39,33 @@ fun AgoraTheme(
     }
 
     val colorScheme = when {
-        // Monochrome always wins over wallpaper dynamic color — otherwise the UI
-        // would pick up system accent hues and stop being black/white/gray only.
-        colorSchemePreset == ColorSchemePreset.MONOCHROME -> {
-            remember(darkTheme) { monochromeColorScheme(darkTheme) }
-        }
+        // Dynamic wallpaper colors take priority when enabled. Monochrome is just another
+        // static preset — it must not trap the dynamic-color switch (user can leave Mono
+        // selected and still toggle dynamic on/off).
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+        colorSchemePreset == ColorSchemePreset.MONOCHROME -> {
+            remember(darkTheme) { monochromeColorScheme(darkTheme) }
         }
         else -> remember(colorSchemePreset, schemeStyle, darkTheme) {
             colorSchemeForPreset(colorSchemePreset, schemeStyle, darkTheme)
         }
     }
 
-    val fontFamily = effectiveFontFamily(fontPreference, customFontPath)
-    chatFontFamily = fontFamily
-    val typography = remember(fontFamily) { typographyWithFont(fontFamily) }
+    // UI text uses the platform font; only code/terminal surfaces keep the bundled
+    // monospace family (see MonoFamily in Type.kt).
+    val typography = Typography
+    // Only true when the hand-built mono palette is actually applied (not when dynamic is on).
+    val isMonochrome = colorSchemePreset == ColorSchemePreset.MONOCHROME &&
+        !(dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = typography,
-        content = content
-    )
+    CompositionLocalProvider(LocalIsMonochrome provides isMonochrome) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = typography,
+            content = content
+        )
+    }
 }

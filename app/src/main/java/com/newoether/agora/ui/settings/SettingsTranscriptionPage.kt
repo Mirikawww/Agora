@@ -40,7 +40,6 @@ fun SettingsTranscriptionPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     var showAddDialog by remember { mutableStateOf(false) }
     var showPromptDialog by remember { mutableStateOf(false) }
     var showMenuForModel by remember { mutableStateOf<String?>(null) }
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
 
     val availableToAdd = remember(enabledModels, transcriptionEnabledModels) {
         enabledModels.filter { it !in transcriptionEnabledModels }.sortedBy { it }
@@ -49,7 +48,6 @@ fun SettingsTranscriptionPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     CollapsingSettingsScaffold(
         title = stringResource(R.string.settings_transcription),
         onBack = onBack,
-        floatingActionButton = { if (showDocFab) DocumentationFab("transcription.md") }
     ) {
             SettingsGroupColumn {
                 SettingsGroup(
@@ -227,7 +225,6 @@ fun SettingsTranscriptionPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 }
             )
             }
-            if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
     }
 
     if (showModelDialog) {

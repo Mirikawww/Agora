@@ -87,31 +87,7 @@ internal fun UserMessageBubble(
                 .then(contextAlpha)
                 .then(if (shouldAnimate) Modifier.animateContentSize(animationSpec = tween(500)) else Modifier)
         ) {
-            if (isEditing) {
-                val editState = rememberTextFieldState(message.text)
-                val editScrollState = rememberScrollState()
-                Column(modifier = Modifier.padding(8.dp)) {
-                    Box(modifier = Modifier.noOpBringIntoView()) {
-                        TextField(
-                            state = editState,
-                            scrollState = editScrollState,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent
-                            )
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        TextButton(onClick = { onCancelEdit() }) { Text(stringResource(R.string.cancel)) }
-                        TextButton(onClick = { onEdit(message.id, editState.text.toString()) }, enabled = !isLoading) { Text(stringResource(R.string.send)) }
-                    }
-                }
-            } else {
-                Column(
+            Column(
                     modifier = Modifier.padding(16.dp).noOpBringIntoView(),
                     horizontalAlignment = Alignment.Start
                 ) {
@@ -221,7 +197,6 @@ internal fun UserMessageBubble(
                         }
                     }
                 }
-            }
         }
 
         if (totalBranches > 1 && !isEditing) {

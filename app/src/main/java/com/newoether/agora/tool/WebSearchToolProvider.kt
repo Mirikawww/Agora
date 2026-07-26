@@ -10,6 +10,8 @@ import com.newoether.agora.api.ToolProperty
 import com.newoether.agora.util.Constants
 import com.newoether.agora.viewmodel.GenerationContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -18,6 +20,45 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.encodeToString
 
+private val WEB_SEARCH_QUERY_KEYS = listOf("query", "q", "search_query", "searchQuery", "keyword", "keywords", "input")
+
+/** Upper bound of the user-facing "Max Results" setting. */
+private const val MAX_RESULTS = 100
+
+// Per-provider API ceilings. Asking for more than the API allows does NOT get clamped
+// server-side — the provider rejects the value and silently falls back to its own
+// default (5 for Tavily), which is exactly how a "100 results" setting produced five.
+private const val TAVILY_MAX_RESULTS = 20
+private const val BRAVE_MAX_RESULTS = 20
+private const val SERPER_MAX_RESULTS = 100
+
+internal fun extractWebSearchQuery(arguments: String): String? {
+    val raw = arguments.trim()
+    if (raw.isEmpty() || raw == "{}") return null
+
+    val root = runCatching { Json.parseToJsonElement(raw) }.getOrNull()
+    if (root == null) {
+        // Some providers send the single string argument without a JSON wrapper.
+        return raw.trim().trim('"').takeIf { it.isNotBlank() }
+    }
+
+    fun findIn(element: JsonElement): String? {
+        return when (element) {
+            is JsonPrimitive -> element.content.trim().takeIf { element.isString && it.isNotBlank() }
+            is JsonObject -> {
+                WEB_SEARCH_QUERY_KEYS.firstNotNullOfOrNull { key ->
+                    (element[key] as? JsonPrimitive)?.content?.trim()?.takeIf { it.isNotBlank() }
+                } ?: listOf("arguments", "params", "parameters", "input").firstNotNullOfOrNull { key ->
+                    element[key]?.let(::findIn)
+                }
+            }
+            else -> null
+        }
+    }
+
+    return findIn(root)
+}
+
 class WebSearchToolProvider : ToolProvider {
 
     override fun definitions(ctx: GenerationContext): List<ToolDefinition> {
@@ -25,11 +66,12 @@ class WebSearchToolProvider : ToolProvider {
         return listOf(
             ToolDefinition(function = ToolFunction(
                 name = "web_search",
-                description = "Search the web for current information. Use this to find facts, news, or data not in your training set.",
+                description = "Search the web for current information. Use this to find facts, news, or data " +
+                    "not in your training set. The number of results is controlled by the user's settings — " +
+                    "you cannot request fewer or more.",
                 parameters = ToolParameters(
                     properties = mapOf(
-                        "query" to ToolProperty("string", "The search query to execute."),
-                        "num_results" to ToolProperty("integer", "Number of results to return (1-10, default 5).")
+                        "query" to ToolProperty("string", "The search query to execute.")
                     ),
                     required = listOf("query")
                 )
@@ -59,11 +101,15 @@ class WebSearchToolProvider : ToolProvider {
     override fun handles(name: String): Boolean = name in setOf("web_search", "web_fetch")
 
     private fun executeWebSearch(arguments: String, ctx: GenerationContext): String {
-        val argsStr = arguments.ifBlank { "{}" }
-        val args = Json.decodeFromString<Map<String, kotlinx.serialization.json.JsonElement>>(argsStr)
-        val query = (args["query"] as? JsonPrimitive)?.content
+        // Some upstreams/stream merges emit concatenated JSON objects (`{...}{...}`).
+        // Parse only the first complete object, then accept common single-query aliases.
+        val argsStr = firstJsonObject(arguments.ifBlank { "{}" })
+        val query = extractWebSearchQuery(argsStr)
             ?: return buildJsonObject { put("type", "web_search"); put("error", "no_query") }.toString()
-        val numResults = ((args["num_results"] as? JsonPrimitive)?.content?.toIntOrNull() ?: ctx.webSearchNumResults).coerceIn(1, 10)
+        // The user's "Max Results" setting is the only authority. Models habitually passed
+        // num_results=5 or 10 (echoing the old tool description), which silently capped every
+        // search far below what the user configured — so the argument is no longer accepted.
+        val numResults = ctx.webSearchNumResults.coerceIn(1, MAX_RESULTS)
 
         return try {
             // DuckDuckGo is a scraper, not an API — handle it separately.
@@ -72,7 +118,7 @@ class WebSearchToolProvider : ToolProvider {
                 return when (val r = scraper.search(query, numResults)) {
                     is DuckDuckGoScraper.SearchResponse.Success -> {
                         val rawResults = buildJsonArray {
-                            r.results.forEach { result ->
+                            r.results.take(numResults).forEach { result ->
                                 add(buildJsonObject {
                                     put("title", result.title)
                                     put("url", result.url)
@@ -104,7 +150,10 @@ class WebSearchToolProvider : ToolProvider {
             val body = when (ctx.webSearchProvider) {
                 "serper" -> HttpClient.post(
                     "https://google.serper.dev/search",
-                    Json.encodeToString(buildJsonObject { put("q", query); put("num", numResults) }),
+                    Json.encodeToString(buildJsonObject {
+                        put("q", query)
+                        put("num", numResults.coerceAtMost(SERPER_MAX_RESULTS))
+                    }),
                     mapOf("X-API-KEY" to apiKey)
                 )
                 "tavily" -> HttpClient.post(
@@ -112,20 +161,23 @@ class WebSearchToolProvider : ToolProvider {
                     Json.encodeToString(buildJsonObject {
                         put("api_key", apiKey)
                         put("query", query)
-                        put("max_results", numResults)
+                        put("max_results", numResults.coerceAtMost(TAVILY_MAX_RESULTS))
                         put("search_depth", "advanced")
                         put("include_answer", true)
                     }),
-                    emptyMap()
+                    mapOf("Authorization" to "Bearer $apiKey")
                 )
                 "searxng" -> {
                     val baseUrl = ctx.webSearchBaseUrl.ifBlank { "https://searx.be" }
+                    // SearXNG has no result-count parameter; one page is whatever the
+                    // instance returns (typically ~10) and the list is trimmed below.
                     HttpClient.fetchModels(
                         "$baseUrl/search?q=${java.net.URLEncoder.encode(query, "UTF-8")}&format=json&engines=google,brave"
                     )
                 }
                 else -> HttpClient.fetchModels(
-                    "https://api.search.brave.com/res/v1/web/search?q=${java.net.URLEncoder.encode(query, "UTF-8")}&count=$numResults",
+                    "https://api.search.brave.com/res/v1/web/search?q=${java.net.URLEncoder.encode(query, "UTF-8")}" +
+                        "&count=${numResults.coerceAtMost(BRAVE_MAX_RESULTS)}",
                     mapOf("Accept" to "application/json", "X-Subscription-Token" to apiKey)
                 )
             } ?: return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_response") }.toString()
@@ -139,7 +191,7 @@ class WebSearchToolProvider : ToolProvider {
                     return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_results") }.toString()
                 val answer = (json["answer"] as? JsonPrimitive)?.content
                 val rawResults = buildJsonArray {
-                    for (element in resultsArray) {
+                    for (element in resultsArray.take(numResults)) {
                         val obj = element.jsonObject
                         add(buildJsonObject {
                             put("title", (obj["title"] as? JsonPrimitive)?.content ?: "")
@@ -172,7 +224,7 @@ class WebSearchToolProvider : ToolProvider {
                 return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_results") }.toString()
 
             val rawResults = buildJsonArray {
-                for (element in resultsArray) {
+                for (element in resultsArray.take(numResults)) {
                     val obj = element.jsonObject
                     add(buildJsonObject {
                         put("title", (obj["title"] as? JsonPrimitive)?.content ?: "")
@@ -197,7 +249,7 @@ class WebSearchToolProvider : ToolProvider {
     }
 
     private suspend fun executeWebFetch(arguments: String, ctx: GenerationContext): String {
-        val argsStr = arguments.ifBlank { "{}" }
+        val argsStr = firstJsonObject(arguments.ifBlank { "{}" })
         val args = Json.decodeFromString<Map<String, kotlinx.serialization.json.JsonElement>>(argsStr)
         val url = (args["url"] as? JsonPrimitive)?.content
             ?: return buildJsonObject { put("type", "web_fetch"); put("error", "no_url") }.toString()
@@ -259,5 +311,40 @@ class WebSearchToolProvider : ToolProvider {
             .replace(Regex(" *\\n *"), "\n")               // trim around line breaks
             .replace(Regex("\\n{3,}"), "\n\n")             // collapse blank-line runs
             .trim()
+    }
+
+    /**
+     * Some model streams / proxies emit concatenated JSON objects for tool args
+     * (`{"a":1}{"a":1}`). [Json.decodeFromString] then fails with "Expected EOF".
+     * Keep the first complete top-level object (or array).
+     */
+    private fun firstJsonObject(raw: String): String {
+        val s = raw.trim()
+        if (s.isEmpty()) return "{}"
+        val start = s.indexOfFirst { it == '{' || it == '[' }
+        if (start < 0) return s
+        var depth = 0
+        var inString = false
+        var escape = false
+        for (i in start until s.length) {
+            val c = s[i]
+            if (inString) {
+                when {
+                    escape -> escape = false
+                    c.code == 92 -> escape = true
+                    c == '"' -> inString = false
+                }
+                continue
+            }
+            when (c) {
+                '"' -> inString = true
+                '{', '[' -> depth++
+                '}', ']' -> {
+                    depth--
+                    if (depth == 0) return s.substring(start, i + 1)
+                }
+            }
+        }
+        return s.substring(start)
     }
 }

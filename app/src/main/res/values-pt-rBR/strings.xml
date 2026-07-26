@@ -364,7 +364,7 @@
     <string name="web_search_tavily_key">Chave de API do Tavily</string>
     <string name="web_search_tavily_key_hint">Chave de API de tavily.com</string>
     <string name="web_search_num_results">Máx. de resultados</string>
-    <string name="web_search_num_results_desc">Número de resultados a buscar: %1$d (1-10)</string>
+    <string name="web_search_num_results_desc">Número de resultados a buscar: %1$d (0-100)</string>
     <string name="web_search_searxng_fallback_desc">Instâncias públicas costumam ter limite de taxa. Recomenda-se a auto-hospedagem para uso confiável.</string>
     <string name="web_search_advanced">Avançado</string>
     <string name="web_search_searxng_url">URL base do SearXNG</string>
@@ -534,13 +534,6 @@
     <string name="scheme_style_expressive">Expressivo</string>
     <string name="scheme_style_vibrant">Vibrante</string>
     <string name="scheme_style_neutral">Neutro</string>
-    <string name="font_title">Fonte</string>
-    <string name="font_app_default">Padrão do app</string>
-    <string name="font_system_default">Sistema</string>
-    <string name="font_custom">Personalizada</string>
-    <string name="font_custom_pick">Escolher arquivo</string>
-    <string name="font_no_file_selected">Nenhum selecionado</string>
-    <string name="font_invalid_file">Arquivo de fonte inválido</string>
     <string name="dynamic_color">Cor dinâmica</string>
     <string name="dynamic_color_desc">Usar cores geradas pelo sistema com base no papel de parede (Android 12+)</string>
     <string name="visual_effects">Efeitos visuais</string>
@@ -677,6 +670,24 @@
     <string name="provider_no_local_models_desc">Importe um modelo GGUF para começar</string>
     <string name="provider_keys_summary">%1$d chave(s) de API</string>
     <string name="provider_connection">Conexão</string>
+
+    <!-- Configurações - Saldo da conta do provedor -->
+    <string name="provider_balance_title">Saldo da conta</string>
+    <string name="provider_balance_fetch">Obter saldo da conta</string>
+    <string name="provider_balance_path">Caminho da API de saldo</string>
+    <string name="provider_balance_json_key">Chave JSON do resultado</string>
+    <string name="provider_balance_hint">O caminho é anexado à URL base (ex.: /credits). A chave é um caminho com pontos dentro da resposta (ex.: data.total_usage).</string>
+    <string name="provider_balance_refresh">Atualizar</string>
+    <string name="provider_balance_querying">Consultando…</string>
+    <string name="provider_balance_value">Saldo: %1$s</string>
+    <string name="provider_balance_incomplete">Preencha o caminho e a chave JSON</string>
+    <string name="provider_balance_error_no_base_url">Defina primeiro uma URL base</string>
+    <string name="provider_balance_error_network">Erro de rede: %1$s</string>
+    <string name="provider_balance_error_http">Falha na solicitação: %1$s</string>
+    <string name="provider_balance_error_key">Chave \"%1$s\" não encontrada na resposta</string>
+    <string name="provider_balance_error_json">A resposta não é um JSON válido</string>
+    <string name="provider_balance_error_empty">Resposta vazia</string>
+    <string name="provider_balance_error_generic">Falha na consulta de saldo</string>
     <string name="import_model_chat">Importar modelo GGUF</string>
     <string name="add_local_chat_model">Adicionar modelo local</string>
     <string name="local_ctx_size">Tamanho do contexto</string>
@@ -825,9 +836,6 @@
     <string name="could_not_read_file">Não foi possível ler o arquivo</string>
 
     <!-- Documentation -->
-    <string name="documentation">Documentação</string>
-    <string name="show_documentation_links">Mostrar links de documentação</string>
-    <string name="show_documentation_links_desc">Exibir o botão de documentação nas páginas de configurações</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">Bem-vindo ao Agora</string>
@@ -916,10 +924,10 @@
 
     <!-- Crash reporting -->
     <string name="crash_title">O Agora fechou inesperadamente</string>
-    <string name="crash_message">Sentimos muito. Você pode ajudar a corrigir isso enviando um relatório de falha anônimo.</string>
+    <string name="crash_message">Desculpe. Os detalhes abaixo permanecem no seu dispositivo — copie-os para um issue se quiser ajudar a corrigir.</string>
     <string name="crash_submit">Enviar relatório</string>
-    <string name="crash_dismiss">Não enviar</string>
-    <string name="crash_privacy_note">Apenas o registro da falha é enviado para newoether.space. Nenhuma outra informação é coletada.</string>
+    <string name="crash_dismiss">Fechar</string>
+    <string name="crash_privacy_note">O registro da falha permanece no seu dispositivo; nada é enviado. Copie-o para um issue se quiser relatar.</string>
     <string name="crash_submitted">Relatório de falha enviado. Obrigado!</string>
     <string name="settings_group_network">Rede</string>
     <string name="settings_proxy">Proxy</string>

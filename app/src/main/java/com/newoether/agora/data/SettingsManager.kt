@@ -37,6 +37,31 @@ data class CustomProviderConfig(
     val name: String
 )
 
+/**
+ * Optional "account balance" probe for one provider.
+ *
+ * Balance/credit endpoints are not part of any provider spec — every vendor
+ * invents its own path and response shape — so both the path and the field to
+ * read out of the JSON are editable. They are pre-filled with the shape most
+ * OpenAI-compatible gateways use, so flipping the switch on is usually enough.
+ */
+@Serializable
+data class ProviderBalanceConfig(
+    val enabled: Boolean = false,
+    /** Appended to the provider's Base URL (e.g. `/credits`). An absolute http(s) URL is used verbatim. */
+    val path: String = DEFAULT_PATH,
+    /** Dot path into the JSON response (e.g. `data.total_usage`); numeric segments index arrays. */
+    val jsonKey: String = DEFAULT_JSON_KEY
+) {
+    /** True once the probe can actually run — enabled with both fields filled in. */
+    val isRunnable: Boolean get() = enabled && path.isNotBlank() && jsonKey.isNotBlank()
+
+    companion object {
+        const val DEFAULT_PATH = "/credits"
+        const val DEFAULT_JSON_KEY = "data.total_usage"
+    }
+}
+
 @Serializable
 data class ShellDeviceConfig(
     val id: String = UUID.randomUUID().toString(),
@@ -167,6 +192,9 @@ class SettingsManager(private val context: Context) {
         val SELECTED_MODEL = stringPreferencesKey("selected_model")
         val AVAILABLE_MODELS_JSON = stringPreferencesKey("available_models_json")
         val MODEL_FAST_SUPPORT_JSON = stringPreferencesKey("model_fast_support_json")
+        val MODEL_KEY_NICKNAMES_JSON = stringPreferencesKey("model_key_nicknames_json")
+        /** Prefixed model id → owning API key entry id (no multi-key failover). */
+        val MODEL_KEY_IDS_JSON = stringPreferencesKey("model_key_ids_json")
         val ENABLED_MODELS = stringSetPreferencesKey("enabled_models")
         val DISABLED_PROVIDERS = stringSetPreferencesKey("disabled_providers")
         
@@ -184,7 +212,9 @@ class SettingsManager(private val context: Context) {
         val THINKING_LEVEL = stringPreferencesKey("thinking_level")
         val THINKING_BUDGET_ENABLED = booleanPreferencesKey("thinking_budget_enabled")
         val THINKING_BUDGET_TOKENS = intPreferencesKey("thinking_budget_tokens")
+        val FAST_ENABLED = booleanPreferencesKey("fast_enabled")
         val PROVIDER_BASE_URLS = stringPreferencesKey("provider_base_urls")
+        val PROVIDER_BALANCE_CONFIGS = stringPreferencesKey("provider_balance_configs")
         val TITLE_GENERATION_ENABLED = booleanPreferencesKey("title_generation_enabled")
         val TITLE_GENERATION_MODEL = stringPreferencesKey("title_generation_model")
         val TITLE_GENERATION_PROMPT = stringPreferencesKey("title_generation_prompt")
@@ -241,14 +271,14 @@ class SettingsManager(private val context: Context) {
         val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
         val TOOL_CALL_DISPLAY_MODE = stringPreferencesKey("tool_call_display_mode")
         val SCHEME_STYLE = stringPreferencesKey("scheme_style")
-        val FONT_PREFERENCE = stringPreferencesKey("font_preference")
-        val CUSTOM_FONT_PATH = stringPreferencesKey("custom_font_path")
-        val CUSTOM_FONT_NAME = stringPreferencesKey("custom_font_name")
         val FIRST_LAUNCH_TIME = longPreferencesKey("first_launch_time")
         val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
-        val SHOW_DOCUMENTATION_FAB = booleanPreferencesKey("show_documentation_fab")
+        val SHOW_COMPOSER_EXPAND_BUTTON = booleanPreferencesKey("show_composer_expand_button")
         val WELCOME_MESSAGES = stringPreferencesKey("welcome_messages")
         val WELCOME_DISPLAY_MODE = stringPreferencesKey("welcome_display_mode") // sequential | random
+        val WELCOME_ENABLED = booleanPreferencesKey("welcome_enabled")
+        val COMPOSER_DRAFTS_JSON = stringPreferencesKey("composer_drafts_json")
+        val MESSAGE_QUEUES_JSON = stringPreferencesKey("message_queues_json")
         // User personalization profile — injected into the effective system prompt.
         val USER_PROFILE_NICKNAME = stringPreferencesKey("user_profile_nickname")
         val USER_PROFILE_GENDER = stringPreferencesKey("user_profile_gender")
@@ -256,6 +286,14 @@ class SettingsManager(private val context: Context) {
         val USER_PROFILE_HEIGHT = stringPreferencesKey("user_profile_height")
         val USER_PROFILE_OCCUPATION = stringPreferencesKey("user_profile_occupation")
         val USER_PROFILE_OTHER = stringPreferencesKey("user_profile_other")
+        val GITHUB_CONNECTOR_ENABLED = booleanPreferencesKey("github_connector_enabled")
+        val GITHUB_TOKEN = stringPreferencesKey("github_token")
+        val TODOIST_CONNECTOR_ENABLED = booleanPreferencesKey("todoist_connector_enabled")
+        val TODOIST_OAUTH_JSON = stringPreferencesKey("todoist_oauth_json")
+        val NOTION_CONNECTOR_ENABLED = booleanPreferencesKey("notion_connector_enabled")
+        val NOTION_OAUTH_JSON = stringPreferencesKey("notion_oauth_json")
+        val SKILLS_ENABLED = booleanPreferencesKey("skills_enabled")
+        val SKILLS_API_TOKEN = stringPreferencesKey("skills_api_token")
         val DEFAULT_TEMPERATURE = stringPreferencesKey("default_temperature")
         val DEFAULT_MAX_TOKENS = intPreferencesKey("default_max_tokens")
         val DEFAULT_TOP_P = stringPreferencesKey("default_top_p")
@@ -280,6 +318,17 @@ class SettingsManager(private val context: Context) {
         try { json.decodeFromString<Map<String, String>>(jsonStr) } catch (e: Exception) { DebugLog.e("SettingsManager", "Failed to decode providerBaseUrls", e); emptyMap() }
     }
 
+    /** Provider name → its account-balance probe. Absent = never configured. */
+    val providerBalanceConfigs: Flow<Map<String, ProviderBalanceConfig>> = context.dataStore.data.map { pref ->
+        val jsonStr = pref[PROVIDER_BALANCE_CONFIGS] ?: "{}"
+        try {
+            json.decodeFromString<Map<String, ProviderBalanceConfig>>(jsonStr)
+        } catch (e: Exception) {
+            DebugLog.e("SettingsManager", "Failed to decode providerBalanceConfigs", e)
+            emptyMap()
+        }
+    }
+
     val availableModels: Flow<Map<String, List<String>>> = context.dataStore.data.map { pref ->
         val jsonStr = pref[AVAILABLE_MODELS_JSON] ?: "{}"
         try { json.decodeFromString<Map<String, List<String>>>(jsonStr) } catch (e: Exception) { DebugLog.e("SettingsManager", "Failed to decode availableModels", e); emptyMap() }
@@ -292,6 +341,26 @@ class SettingsManager(private val context: Context) {
             json.decodeFromString<Map<String, Boolean>>(jsonStr)
         } catch (e: Exception) {
             DebugLog.e("SettingsManager", "Failed to decode modelFastSupport", e)
+            emptyMap()
+        }
+    }
+
+    val modelKeyNicknames: Flow<Map<String, List<String>>> = context.dataStore.data.map { pref ->
+        val jsonStr = pref[MODEL_KEY_NICKNAMES_JSON] ?: "{}"
+        try {
+            json.decodeFromString<Map<String, List<String>>>(jsonStr)
+        } catch (e: Exception) {
+            DebugLog.e("SettingsManager", "Failed to decode modelKeyNicknames", e)
+            emptyMap()
+        }
+    }
+
+    val modelKeyIds: Flow<Map<String, String>> = context.dataStore.data.map { pref ->
+        val jsonStr = pref[MODEL_KEY_IDS_JSON] ?: "{}"
+        try {
+            json.decodeFromString<Map<String, String>>(jsonStr)
+        } catch (e: Exception) {
+            DebugLog.e("SettingsManager", "Failed to decode modelKeyIds", e)
             emptyMap()
         }
     }
@@ -336,6 +405,7 @@ class SettingsManager(private val context: Context) {
             ?: ThinkingLevels.legacyBudgetTokens(pref[THINKING_LEVEL])
             ?: ThinkingLevels.DefaultBudgetTokens
     }
+    val fastEnabled: Flow<Boolean> = context.dataStore.data.map { it[FAST_ENABLED] ?: false }
 
     val titleGenerationEnabled: Flow<Boolean> = context.dataStore.data.map { it[TITLE_GENERATION_ENABLED] ?: true }
     val titleGenerationModel: Flow<String?> = context.dataStore.data.map { it[TITLE_GENERATION_MODEL] }
@@ -400,7 +470,7 @@ class SettingsManager(private val context: Context) {
         try { json.decodeFromString<List<CustomProviderConfig>>(jsonStr) } catch (e: Exception) { emptyList() }
     }
 
-    val showDocumentationFab: Flow<Boolean> = context.dataStore.data.map { it[SHOW_DOCUMENTATION_FAB] ?: true }
+    val showComposerExpandButton: Flow<Boolean> = context.dataStore.data.map { it[SHOW_COMPOSER_EXPAND_BUTTON] ?: true }
 
     val shellEnabled: Flow<Boolean> = context.dataStore.data.map { it[SHELL_ENABLED] ?: true }
     val proxyEnabled: Flow<Boolean> = context.dataStore.data.map { it[PROXY_ENABLED] ?: false }
@@ -433,9 +503,6 @@ class SettingsManager(private val context: Context) {
     val hapticsEnabled: Flow<Boolean> = context.dataStore.data.map { it[HAPTICS_ENABLED] ?: true }
     val toolCallDisplayMode: Flow<String> = context.dataStore.data.map { ToolCallDisplayModes.normalize(it[TOOL_CALL_DISPLAY_MODE]) }
     val schemeStyle: Flow<String> = context.dataStore.data.map { it[SCHEME_STYLE] ?: "TONAL_SPOT" }
-    val fontPreference: Flow<String> = context.dataStore.data.map { it[FONT_PREFERENCE] ?: "app_default" }
-    val customFontPath: Flow<String> = context.dataStore.data.map { it[CUSTOM_FONT_PATH] ?: "" }
-    val customFontName: Flow<String> = context.dataStore.data.map { it[CUSTOM_FONT_NAME] ?: "" }
     val firstLaunchTime: Flow<Long?> = context.dataStore.data.map { it[FIRST_LAUNCH_TIME] }
     val onboardingCompleted: Flow<Boolean> = context.dataStore.data.map { it[ONBOARDING_COMPLETED] ?: false }
     val welcomeMessages: Flow<String> = context.dataStore.data.map { it[WELCOME_MESSAGES] ?: "" }
@@ -443,12 +510,31 @@ class SettingsManager(private val context: Context) {
         val mode = it[WELCOME_DISPLAY_MODE] ?: "random"
         if (mode == "sequential") "sequential" else "random"
     }
+    val welcomeEnabled: Flow<Boolean> = context.dataStore.data.map { it[WELCOME_ENABLED] ?: true }
+    val composerDraftsJson: Flow<String> = context.dataStore.data.map { it[COMPOSER_DRAFTS_JSON] ?: "{}" }
+    val messageQueuesJson: Flow<String> = context.dataStore.data.map { it[MESSAGE_QUEUES_JSON] ?: "{}" }
     val userProfileNickname: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_NICKNAME] ?: "" }
     val userProfileGender: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_GENDER] ?: "" }
     val userProfileAge: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_AGE] ?: "" }
     val userProfileHeight: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_HEIGHT] ?: "" }
     val userProfileOccupation: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_OCCUPATION] ?: "" }
     val userProfileOther: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_OTHER] ?: "" }
+    val githubConnectorEnabled: Flow<Boolean> = context.dataStore.data.map { it[GITHUB_CONNECTOR_ENABLED] ?: false }
+    val githubToken: Flow<String> = context.dataStore.data.map { it[GITHUB_TOKEN] ?: "" }
+    val todoistConnectorEnabled: Flow<Boolean> = context.dataStore.data.map { it[TODOIST_CONNECTOR_ENABLED] ?: false }
+    val todoistOAuth: Flow<McpOAuthState?> = context.dataStore.data.map { pref ->
+        val raw = pref[TODOIST_OAUTH_JSON].orEmpty()
+        if (raw.isBlank()) null
+        else runCatching { json.decodeFromString(McpOAuthState.serializer(), raw) }.getOrNull()
+    }
+    val notionConnectorEnabled: Flow<Boolean> = context.dataStore.data.map { it[NOTION_CONNECTOR_ENABLED] ?: false }
+    val notionOAuth: Flow<McpOAuthState?> = context.dataStore.data.map { pref ->
+        val raw = pref[NOTION_OAUTH_JSON].orEmpty()
+        if (raw.isBlank()) null
+        else runCatching { json.decodeFromString(McpOAuthState.serializer(), raw) }.getOrNull()
+    }
+    val skillsEnabled: Flow<Boolean> = context.dataStore.data.map { it[SKILLS_ENABLED] ?: true }
+    val skillsApiToken: Flow<String> = context.dataStore.data.map { it[SKILLS_API_TOKEN] ?: "" }
 
     // ── Auto Backup ───────────────────────────────────────────
     val autoBackupEnabled: Flow<Boolean> = context.dataStore.data.map { it[AUTO_BACKUP_ENABLED] ?: true }
@@ -466,6 +552,20 @@ class SettingsManager(private val context: Context) {
             val map = try { json.decodeFromString<MutableMap<String, String>>(current) } catch (e: Exception) { mutableMapOf() }
             map[provider] = url
             prefs[PROVIDER_BASE_URLS] = json.encodeToString(map)
+        }
+    }
+
+    /** Persists (or, for an all-default [config], drops) the balance probe of [provider]. */
+    suspend fun saveProviderBalanceConfig(provider: String, config: ProviderBalanceConfig) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[PROVIDER_BALANCE_CONFIGS] ?: "{}"
+            val map = try {
+                json.decodeFromString<MutableMap<String, ProviderBalanceConfig>>(current)
+            } catch (e: Exception) {
+                mutableMapOf()
+            }
+            if (config == ProviderBalanceConfig()) map.remove(provider) else map[provider] = config
+            prefs[PROVIDER_BALANCE_CONFIGS] = json.encodeToString(map)
         }
     }
 
@@ -488,6 +588,14 @@ class SettingsManager(private val context: Context) {
                 }
                 fastMap.keys.removeAll { it.startsWith("$provider:") }
                 prefs[MODEL_FAST_SUPPORT_JSON] = json.encodeToString(fastMap)
+                val currentKeys = prefs[MODEL_KEY_NICKNAMES_JSON] ?: "{}"
+                val keyMap = try {
+                    json.decodeFromString<MutableMap<String, List<String>>>(currentKeys)
+                } catch (e: Exception) {
+                    mutableMapOf()
+                }
+                keyMap.keys.removeAll { it.startsWith("$provider:") }
+                prefs[MODEL_KEY_NICKNAMES_JSON] = json.encodeToString(keyMap)
             }
         }
     }
@@ -503,6 +611,34 @@ class SettingsManager(private val context: Context) {
             map.keys.removeAll { it.startsWith("$provider:") }
             map.putAll(support)
             prefs[MODEL_FAST_SUPPORT_JSON] = json.encodeToString(map)
+        }
+    }
+
+    suspend fun saveModelKeyNicknames(provider: String, nicknames: Map<String, List<String>>) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[MODEL_KEY_NICKNAMES_JSON] ?: "{}"
+            val map = try {
+                json.decodeFromString<MutableMap<String, List<String>>>(current)
+            } catch (e: Exception) {
+                mutableMapOf()
+            }
+            map.keys.removeAll { it.startsWith("$provider:") }
+            map.putAll(nicknames)
+            prefs[MODEL_KEY_NICKNAMES_JSON] = json.encodeToString(map)
+        }
+    }
+
+    suspend fun saveModelKeyIds(provider: String, keyIds: Map<String, String>) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[MODEL_KEY_IDS_JSON] ?: "{}"
+            val map = try {
+                json.decodeFromString<MutableMap<String, String>>(current)
+            } catch (e: Exception) {
+                mutableMapOf()
+            }
+            map.keys.removeAll { it.startsWith("$provider:") }
+            map.putAll(keyIds)
+            prefs[MODEL_KEY_IDS_JSON] = json.encodeToString(map)
         }
     }
 
@@ -639,6 +775,10 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[THINKING_BUDGET_TOKENS] = tokens.coerceAtLeast(1) }
     }
 
+    suspend fun saveFastEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[FAST_ENABLED] = enabled }
+    }
+
     suspend fun saveTitleGenerationEnabled(enabled: Boolean) {
         context.dataStore.edit { it[TITLE_GENERATION_ENABLED] = enabled }
     }
@@ -699,7 +839,7 @@ class SettingsManager(private val context: Context) {
     }
 
     suspend fun saveWebSearchNumResults(n: Int) {
-        context.dataStore.edit { it[WEB_SEARCH_NUM_RESULTS] = n.coerceIn(1, 10) }
+        context.dataStore.edit { it[WEB_SEARCH_NUM_RESULTS] = n.coerceIn(0, 100) }
     }
     suspend fun saveWebSearchBaseUrl(url: String) {
         context.dataStore.edit { it[WEB_SEARCH_BASE_URL] = url }
@@ -803,12 +943,22 @@ class SettingsManager(private val context: Context) {
         }
     }
 
-    suspend fun saveShowDocumentationFab(enabled: Boolean) {
-        context.dataStore.edit { it[SHOW_DOCUMENTATION_FAB] = enabled }
+
+    suspend fun saveShowComposerExpandButton(enabled: Boolean) {
+        context.dataStore.edit { it[SHOW_COMPOSER_EXPAND_BUTTON] = enabled }
     }
 
     suspend fun saveWelcomeMessages(value: String) {
         context.dataStore.edit { it[WELCOME_MESSAGES] = value }
+    }
+    suspend fun saveWelcomeEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[WELCOME_ENABLED] = enabled }
+    }
+    suspend fun saveComposerDraftsJson(value: String) {
+        context.dataStore.edit { it[COMPOSER_DRAFTS_JSON] = value }
+    }
+    suspend fun saveMessageQueuesJson(value: String) {
+        context.dataStore.edit { it[MESSAGE_QUEUES_JSON] = value }
     }
 
     suspend fun saveWelcomeDisplayMode(mode: String) {
@@ -886,15 +1036,6 @@ class SettingsManager(private val context: Context) {
         context.dataStore.edit { it[TOOL_CALL_DISPLAY_MODE] = ToolCallDisplayModes.normalize(mode) }
     }
 
-    suspend fun saveFontPreference(value: String) {
-        context.dataStore.edit { it[FONT_PREFERENCE] = value }
-    }
-    suspend fun saveCustomFontPath(value: String) {
-        context.dataStore.edit { it[CUSTOM_FONT_PATH] = value }
-    }
-    suspend fun saveCustomFontName(value: String) {
-        context.dataStore.edit { it[CUSTOM_FONT_NAME] = value }
-    }
 
     suspend fun saveSchemeStyle(style: String) {
         context.dataStore.edit { it[SCHEME_STYLE] = style }
@@ -929,6 +1070,36 @@ class SettingsManager(private val context: Context) {
     }
     suspend fun saveUserProfileOther(value: String) {
         context.dataStore.edit { it[USER_PROFILE_OTHER] = value }
+    }
+    suspend fun saveGithubConnectorEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[GITHUB_CONNECTOR_ENABLED] = enabled }
+    }
+    suspend fun saveGithubToken(token: String) {
+        context.dataStore.edit { it[GITHUB_TOKEN] = token }
+    }
+    suspend fun saveTodoistConnectorEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[TODOIST_CONNECTOR_ENABLED] = enabled }
+    }
+    suspend fun saveTodoistOAuth(oauth: McpOAuthState?) {
+        context.dataStore.edit { prefs ->
+            if (oauth == null) prefs.remove(TODOIST_OAUTH_JSON)
+            else prefs[TODOIST_OAUTH_JSON] = json.encodeToString(McpOAuthState.serializer(), oauth)
+        }
+    }
+    suspend fun saveNotionConnectorEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[NOTION_CONNECTOR_ENABLED] = enabled }
+    }
+    suspend fun saveNotionOAuth(oauth: McpOAuthState?) {
+        context.dataStore.edit { prefs ->
+            if (oauth == null) prefs.remove(NOTION_OAUTH_JSON)
+            else prefs[NOTION_OAUTH_JSON] = json.encodeToString(McpOAuthState.serializer(), oauth)
+        }
+    }
+    suspend fun saveSkillsEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[SKILLS_ENABLED] = enabled }
+    }
+    suspend fun saveSkillsApiToken(token: String) {
+        context.dataStore.edit { it[SKILLS_API_TOKEN] = token }
     }
 
     // ── Auto Backup ───────────────────────────────────────────

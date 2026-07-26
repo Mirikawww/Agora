@@ -1,6 +1,15 @@
 package com.newoether.agora.ui.chat.message
 
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.newoether.agora.R
 import com.newoether.agora.model.MessageSegment
@@ -8,6 +17,43 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+
+/** Drawable for built-in connector tools; null keeps the default wrench. */
+internal fun toolConnectorIconRes(toolName: String?): Int? {
+    val raw = toolName.orEmpty()
+    return when {
+        raw == "github_request" || raw.startsWith("github_") -> R.drawable.ic_github_mark
+        raw.startsWith("todoist_") -> R.drawable.ic_todoist_mark
+        raw.startsWith("notion_") -> R.drawable.ic_notion_mark
+        else -> null
+    }
+}
+
+
+@Composable
+internal fun ToolTypeIcon(
+    toolName: String?,
+    modifier: Modifier = Modifier,
+    size: Dp = 16.dp,
+) {
+    val tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+    val res = toolConnectorIconRes(toolName)
+    if (res != null) {
+        Icon(
+            painter = painterResource(res),
+            contentDescription = null,
+            modifier = modifier.size(size),
+            tint = tint,
+        )
+    } else {
+        Icon(
+            Icons.Default.Build,
+            contentDescription = null,
+            modifier = modifier.size(size),
+            tint = tint,
+        )
+    }
+}
 
 @Composable
 internal fun toolDisplayName(toolName: String?): String {
@@ -31,7 +77,39 @@ internal fun toolDisplayName(toolName: String?): String {
         "file_glob" -> stringResource(R.string.tool_file_glob)
         "file_grep" -> stringResource(R.string.tool_file_grep)
         "generate_image" -> stringResource(R.string.tool_generate_image)
-        else -> (toolName ?: stringResource(R.string.tool_context)).split("_").joinToString(" ") { it.replaceFirstChar { c -> c.uppercaseChar() } }
+        "ask_user" -> stringResource(R.string.tool_ask_user)
+        "get_provider_balance" -> stringResource(R.string.tool_get_provider_balance)
+        "get_user_profile" -> stringResource(R.string.tool_get_user_profile)
+        "update_user_profile" -> stringResource(R.string.tool_update_user_profile)
+        "list_skills" -> stringResource(R.string.tool_list_skills)
+        "load_skill" -> stringResource(R.string.tool_load_skill)
+        "create_skill" -> stringResource(R.string.tool_create_skill)
+        "update_skill" -> stringResource(R.string.tool_update_skill)
+        "delete_skill" -> stringResource(R.string.tool_delete_skill)
+        "search_skillsmp" -> stringResource(R.string.tool_search_skillsmp)
+        "install_skill_from_skillsmp" -> stringResource(R.string.tool_install_skill_from_skillsmp)
+        "github_request" -> stringResource(R.string.tool_github_request_display)
+        else -> {
+            val raw = toolName ?: stringResource(R.string.tool_context)
+            // Built-in connector tools: todoist_add_tasks → "Todoist · Add Tasks"
+            val connectorLabel = when {
+                raw.startsWith("todoist_") -> stringResource(R.string.connector_todoist) to "todoist_"
+                raw.startsWith("notion_") -> stringResource(R.string.connector_notion) to "notion_"
+                else -> null
+            }
+            if (connectorLabel != null) {
+                val (label, prefix) = connectorLabel
+                val action = raw.removePrefix(prefix)
+                    .split("_")
+                    .filter { it.isNotBlank() }
+                    .joinToString(" ") { part -> part.replaceFirstChar { c -> c.uppercaseChar() } }
+                listOf(label, action)
+                    .filter { it.isNotBlank() }
+                    .joinToString(" · ")
+            } else {
+                raw.split("_").joinToString(" ") { it.replaceFirstChar { c -> c.uppercaseChar() } }
+            }
+        }
     }
 }
 
@@ -46,7 +124,8 @@ internal fun toolSummary(seg: MessageSegment): String {
         }
     val nameCount = argsJson?.get("names")?.let { (it as? kotlinx.serialization.json.JsonArray)?.size }
     val content = seg.toolResult ?: ""
-    val isError = content.startsWith("Error")
+    // Many tools return JSON error payloads ({"error":...}), not plain "Error..." text.
+    val isError = content.startsWith("Error") || toolResultLooksLikeError(content)
     return when (name) {
         "read_memory_file" -> when {
             isError -> stringResource(R.string.tool_read_memory_failed)
@@ -212,14 +291,128 @@ internal fun toolSummary(seg: MessageSegment): String {
                 else stringResource(R.string.tool_found_no_files)
             }
         }
-        "generate_image" -> when {
-            isError -> stringResource(R.string.tool_call_failed)
-            content.isEmpty() -> stringResource(R.string.tool_generating_image)
-            else -> stringResource(R.string.tool_generated_image)
+        "generate_image" -> {
+            val resultObj = try {
+                Json.parseToJsonElement(content).jsonObject
+            } catch (_: Exception) {
+                null
+            }
+            val statusOk = (resultObj?.get("status") as? JsonPrimitive)?.content == "ok"
+            when {
+                isError || (resultObj != null && !statusOk && content.isNotBlank()) ->
+                    stringResource(R.string.tool_call_failed)
+                content.isEmpty() -> stringResource(R.string.tool_generating_image)
+                else -> stringResource(R.string.tool_generated_image)
+            }
+        }
+        "ask_user" -> {
+            // Payload: {"status":"answered","answers":[…]} — echo the user's own words back
+            // into the transcript so the decision is visible without opening the tool detail.
+            val payload = try { Json.parseToJsonElement(content).jsonObject } catch (_: Exception) { null }
+            val status = (payload?.get("status") as? JsonPrimitive)?.content
+            val answers = payload?.get("answers")?.jsonArray
+                ?.mapNotNull { (it as? JsonPrimitive)?.content }
+                ?.filter { it.isNotBlank() }
+            when {
+                content.isBlank() -> stringResource(R.string.tool_ask_waiting)
+                status == "dismissed" -> stringResource(R.string.tool_ask_dismissed)
+                !answers.isNullOrEmpty() ->
+                    stringResource(R.string.tool_ask_answered, answers.joinToString("、").take(60))
+                isError -> stringResource(R.string.tool_call_failed)
+                else -> stringResource(R.string.tool_ask_user)
+            }
+        }
+        "get_provider_balance" -> {
+            // Payload: {"results":[{"provider":…,"keys":[{"key":…,"value":…}]}]} — one reading
+            // per API key. The chip is a one-liner, so show the first successful value.
+            val value = try {
+                Json.parseToJsonElement(content).jsonObject["results"]?.jsonArray
+                    ?.firstNotNullOfOrNull { providerEntry ->
+                        providerEntry.jsonObject["keys"]?.jsonArray?.firstNotNullOfOrNull { key ->
+                            (key.jsonObject["value"] as? JsonPrimitive)?.content
+                        }
+                    }
+            } catch (_: Exception) { null }
+            when {
+                isError -> stringResource(R.string.tool_call_failed)
+                content.isBlank() -> stringResource(R.string.tool_get_provider_balance)
+                value != null -> stringResource(R.string.tool_provider_balance_done, value)
+                else -> stringResource(R.string.tool_get_provider_balance)
+            }
+        }
+        "list_skills" -> {
+            if (isError) stringResource(R.string.tool_call_failed)
+            else if (content.isBlank()) stringResource(R.string.tool_list_skills)
+            else {
+                val count = try {
+                    (Json.parseToJsonElement(content).jsonObject["count"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
+                } catch (_: Exception) { 0 }
+                stringResource(R.string.tool_list_skills_done, count)
+            }
+        }
+        "load_skill" -> {
+            if (isError) stringResource(R.string.tool_call_failed)
+            else if (content.isBlank()) stringResource(R.string.tool_load_skill)
+            else if (fileName != null) stringResource(R.string.tool_load_skill_name, fileName)
+            else stringResource(R.string.tool_load_skill)
+        }
+        "create_skill" -> {
+            if (isError) stringResource(R.string.tool_call_failed)
+            else if (content.isBlank()) stringResource(R.string.tool_create_skill)
+            else if (fileName != null) stringResource(R.string.tool_create_skill_name, fileName)
+            else stringResource(R.string.tool_create_skill)
+        }
+        "update_skill" -> {
+            if (isError) stringResource(R.string.tool_call_failed)
+            else if (content.isBlank()) stringResource(R.string.tool_update_skill)
+            else if (fileName != null) stringResource(R.string.tool_update_skill_name, fileName)
+            else stringResource(R.string.tool_update_skill)
+        }
+        "delete_skill" -> {
+            if (isError) stringResource(R.string.tool_call_failed)
+            else if (content.isBlank()) stringResource(R.string.tool_delete_skill)
+            else if (fileName != null) stringResource(R.string.tool_delete_skill_name, fileName)
+            else stringResource(R.string.tool_delete_skill)
+        }
+        "search_skillsmp" -> {
+            if (isError) stringResource(R.string.tool_call_failed)
+            else if (content.isBlank()) stringResource(R.string.tool_search_skillsmp)
+            else {
+                val count = try {
+                    (Json.parseToJsonElement(content).jsonObject["count"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0
+                } catch (_: Exception) { 0 }
+                stringResource(R.string.tool_search_skillsmp_done, count)
+            }
+        }
+        "install_skill_from_skillsmp" -> {
+            val resultName = try {
+                (Json.parseToJsonElement(content).jsonObject["name"] as? JsonPrimitive)?.content
+            } catch (_: Exception) { null }
+            val argId = argsJson?.get("id")?.let { (it as? JsonPrimitive)?.content }
+            when {
+                isError -> stringResource(R.string.tool_call_failed)
+                content.isBlank() -> stringResource(R.string.tool_install_skill_from_skillsmp)
+                resultName != null -> stringResource(R.string.tool_install_skill_from_skillsmp_name, resultName)
+                argId != null -> stringResource(R.string.tool_install_skill_from_skillsmp_name, argId)
+                else -> stringResource(R.string.tool_install_skill_from_skillsmp)
+            }
         }
         else -> {
             if (isError) stringResource(R.string.tool_call_failed)
             else stringResource(R.string.tool_done)
         }
+    }
+}
+
+/** True when tool result is a JSON object with an `error` field (or explicit failed status). */
+private fun toolResultLooksLikeError(content: String): Boolean {
+    if (content.isBlank()) return false
+    return try {
+        val obj = Json.parseToJsonElement(content).jsonObject
+        if (obj.containsKey("error")) return true
+        val status = (obj["status"] as? JsonPrimitive)?.content?.lowercase()
+        status == "error" || status == "failed"
+    } catch (_: Exception) {
+        false
     }
 }

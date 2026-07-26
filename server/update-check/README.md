@@ -119,4 +119,4 @@ curl http://127.0.0.1:8787/latest
 ## 自定义域名（可选）
 
 在 Cloudflare Dashboard → Workers → 该 Worker → Settings → Triggers → Custom Domains  
-绑定例如 `update.newoether.space`，再把 App 里的 `UPDATE_ENDPOINT` 改成该域名。
+绑定你自己的域名，再把 `UpdateChecker.kt` 里的 endpoint 常量改成该域名。

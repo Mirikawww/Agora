@@ -364,7 +364,7 @@
     <string name="web_search_tavily_key">API-ключ Tavily</string>
     <string name="web_search_tavily_key_hint">API-ключ с tavily.com</string>
     <string name="web_search_num_results">Макс. результатов</string>
-    <string name="web_search_num_results_desc">Количество получаемых результатов: %1$d (1-10)</string>
+    <string name="web_search_num_results_desc">Количество получаемых результатов: %1$d (0-100)</string>
     <string name="web_search_searxng_fallback_desc">Публичные экземпляры часто имеют ограничения по частоте. Для надёжной работы рекомендуется собственный хостинг.</string>
     <string name="web_search_advanced">Дополнительно</string>
     <string name="web_search_searxng_url">Базовый URL SearXNG</string>
@@ -534,13 +534,6 @@
     <string name="scheme_style_expressive">Выразительный</string>
     <string name="scheme_style_vibrant">Яркий</string>
     <string name="scheme_style_neutral">Нейтральный</string>
-    <string name="font_title">Шрифт</string>
-    <string name="font_app_default">По умолчанию</string>
-    <string name="font_system_default">Системный</string>
-    <string name="font_custom">Свой шрифт</string>
-    <string name="font_custom_pick">Выбрать файл</string>
-    <string name="font_no_file_selected">Не выбрано</string>
-    <string name="font_invalid_file">Неверный файл шрифта</string>
     <string name="dynamic_color">Динамические цвета</string>
     <string name="dynamic_color_desc">Использовать цвета, создаваемые системой по обоям (Android 12+)</string>
     <string name="visual_effects">Визуальные эффекты</string>
@@ -677,6 +670,24 @@
     <string name="provider_no_local_models_desc">Импортируйте модель GGUF, чтобы начать</string>
     <string name="provider_keys_summary">API-ключей: %1$d</string>
     <string name="provider_connection">Подключение</string>
+
+    <!-- Настройки - Баланс аккаунта провайдера -->
+    <string name="provider_balance_title">Баланс аккаунта</string>
+    <string name="provider_balance_fetch">Получить баланс аккаунта</string>
+    <string name="provider_balance_path">Путь API баланса</string>
+    <string name="provider_balance_json_key">Ключ JSON в ответе</string>
+    <string name="provider_balance_hint">Путь добавляется к базовому URL (например, /credits). Ключ — это путь с точками внутри ответа (например, data.total_usage).</string>
+    <string name="provider_balance_refresh">Обновить</string>
+    <string name="provider_balance_querying">Запрос…</string>
+    <string name="provider_balance_value">Баланс: %1$s</string>
+    <string name="provider_balance_incomplete">Укажите путь и ключ JSON</string>
+    <string name="provider_balance_error_no_base_url">Сначала задайте базовый URL</string>
+    <string name="provider_balance_error_network">Ошибка сети: %1$s</string>
+    <string name="provider_balance_error_http">Запрос не выполнен: %1$s</string>
+    <string name="provider_balance_error_key">Ключ \"%1$s\" не найден в ответе</string>
+    <string name="provider_balance_error_json">Ответ не является корректным JSON</string>
+    <string name="provider_balance_error_empty">Пустой ответ</string>
+    <string name="provider_balance_error_generic">Не удалось получить баланс</string>
     <string name="import_model_chat">Импортировать модель GGUF</string>
     <string name="add_local_chat_model">Добавить локальную модель</string>
     <string name="local_ctx_size">Размер контекста</string>
@@ -825,9 +836,6 @@
     <string name="could_not_read_file">Не удалось прочитать файл</string>
 
     <!-- Documentation -->
-    <string name="documentation">Документация</string>
-    <string name="show_documentation_links">Показывать ссылки на документацию</string>
-    <string name="show_documentation_links_desc">Отображать кнопку документации на страницах настроек</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome_title">Добро пожаловать в Agora</string>
@@ -916,10 +924,10 @@
 
     <!-- Crash reporting -->
     <string name="crash_title">Agora неожиданно завершилась</string>
-    <string name="crash_message">Приносим извинения. Вы можете помочь исправить это, отправив анонимный отчёт о сбое.</string>
+    <string name="crash_message">Извините. Детали ниже остаются на устройстве — скопируйте их в issue, если хотите помочь с исправлением.</string>
     <string name="crash_submit">Отправить отчёт</string>
-    <string name="crash_dismiss">Не отправлять</string>
-    <string name="crash_privacy_note">На newoether.space отправляется только журнал сбоя. Никакая другая информация не собирается.</string>
+    <string name="crash_dismiss">Закрыть</string>
+    <string name="crash_privacy_note">Журнал сбоя остаётся на устройстве и не отправляется. Скопируйте его в issue, если хотите сообщить о проблеме.</string>
     <string name="crash_submitted">Отчёт о сбое отправлен. Спасибо!</string>
     <string name="settings_group_network">Сеть</string>
     <string name="settings_proxy">Прокси</string>

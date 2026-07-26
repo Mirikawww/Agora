@@ -2,6 +2,7 @@ package com.newoether.agora.viewmodel
 
 import android.app.Application
 import com.newoether.agora.util.DebugLog
+import com.newoether.agora.api.GenerationError
 import com.newoether.agora.api.LlmProvider
 import com.newoether.agora.api.ProviderConfig
 import com.newoether.agora.api.StreamEvent
@@ -17,14 +18,21 @@ import com.newoether.agora.model.ToolCallData
 import com.newoether.agora.R
 import com.newoether.agora.service.AgoraForegroundService
 import com.newoether.agora.service.AppForegroundTracker
+import com.newoether.agora.api.util.buildToolCallId
+import com.newoether.agora.api.util.normalizeToolArguments
 import com.newoether.agora.api.util.projectAssistantImagesToLatestUserMessage
 import com.newoether.agora.util.Constants
 import com.newoether.agora.util.SearchResultFormatter
+import com.newoether.agora.tool.AskToolProvider
+import com.newoether.agora.tool.GitHubConnectorToolProvider
 import com.newoether.agora.tool.ImageGenToolProvider
 import com.newoether.agora.tool.MemoryToolProvider
 import com.newoether.agora.tool.McpToolProvider
+import com.newoether.agora.tool.PersonalizationToolProvider
+import com.newoether.agora.tool.ProviderBalanceToolProvider
 import com.newoether.agora.tool.RagToolProvider
 import com.newoether.agora.tool.ShellToolProvider
+import com.newoether.agora.tool.SkillsToolProvider
 import com.newoether.agora.tool.ToolProvider
 import com.newoether.agora.tool.WebSearchToolProvider
 import kotlinx.coroutines.CancellationException
@@ -59,7 +67,8 @@ data class GenerationConfig(
     val maxTokens: Int? = null,
     val topP: Float? = null,
     val frequencyPenalty: Float? = null,
-    val presencePenalty: Float? = null
+    val presencePenalty: Float? = null,
+    val alternateApiKeys: List<String> = emptyList()
 )
 
 data class GenerationContext(
@@ -83,6 +92,14 @@ data class GenerationContext(
     val imageGenBaseUrl: String = "",
     val imageGenModel: String = "gpt-image-1",
     val imageGenSize: String = "1024x1024",
+    val forceImageGen: Boolean = false,
+    val skillsEnabled: Boolean = true,
+    val githubEnabled: Boolean = false,
+    val githubToken: String = "",
+    val todoistEnabled: Boolean = false,
+    val todoistOAuth: com.newoether.agora.data.McpOAuthState? = null,
+    val notionEnabled: Boolean = false,
+    val notionOAuth: com.newoether.agora.data.McpOAuthState? = null,
     val shellEnabled: Boolean = false,
     val shellDevices: List<com.newoether.agora.data.ShellDeviceConfig> = emptyList(),
     val mcpEnabled: Boolean = false,
@@ -132,6 +149,20 @@ data class GenerationCallbacks(
     val onStreamClear: () -> Unit,
     val isLatestPersist: () -> Boolean,
 )
+internal fun formatGenerationDiagnostic(error: GenerationError): String =
+    error.userMessage().trim().take(1_000).ifBlank { "Unknown error" }
+
+internal fun hasFinalAssistantResponse(
+    text: String,
+    segments: List<MessageSegment>,
+    generatedImages: List<String>,
+    usedTools: Boolean,
+    answeredAfterLastTool: Boolean,
+): Boolean {
+    if (generatedImages.isNotEmpty()) return true
+    if (usedTools) return answeredAfterLastTool
+    return text.isNotBlank() || segments.any { it.type == "answer" && it.content.isNotBlank() }
+}
 
 class GenerationManager(
     private val app: Application,
@@ -149,10 +180,30 @@ class GenerationManager(
     var onConfirmShellCommand: (suspend (server: String, summary: String) -> Boolean)? = null
     var onConfirmMcpTool: (suspend (server: String, summary: String) -> Boolean)? = null
 
+    /** Account-balance probe for one provider, one reading per stored API key. Set by the
+     *  ViewModel (ProviderRegistry owns Base URL / key resolution); empty = no runnable probe. */
+    var onProbeProviderBalance: (suspend (provider: String) -> List<ProviderKeyBalance>)? = null
+
+    /** Puts the model's question to the user and suspends for the answer. Set by the
+     *  ViewModel; null result = the user dismissed the sheet. */
+    var onAskUser: (suspend (question: String, header: String, mode: AskMode, options: List<String>) -> AskController.AskAnswer?)? = null
+
     private val memoryToolProvider = MemoryToolProvider(memoryManager)
     private val webSearchToolProvider = WebSearchToolProvider()
     private val ragToolProvider = RagToolProvider(conversations)
     private val imageGenToolProvider = ImageGenToolProvider(app)
+    private val personalizationToolProvider = PersonalizationToolProvider(settings)
+    private val providerBalanceToolProvider = ProviderBalanceToolProvider(settings).also { btp ->
+        // Read the var lazily so the ViewModel can wire the probe after construction.
+        btp.probe = { provider -> onProbeProviderBalance?.invoke(provider).orEmpty() }
+    }
+    private val askToolProvider = AskToolProvider().also { atp ->
+        atp.ask = { question, header, mode, options -> onAskUser?.invoke(question, header, mode, options) }
+    }
+    private val skillsManager = com.newoether.agora.data.SkillsManager(app)
+    private val skillsToolProvider = SkillsToolProvider(skillsManager, settings)
+    private val githubConnectorToolProvider = GitHubConnectorToolProvider()
+    val skillsManagerPublic: com.newoether.agora.data.SkillsManager get() = skillsManager
     private val shellToolProvider = ShellToolProvider(sandboxFactory).also { stp ->
         // Forward to the ViewModel-provided gate at call time (read the var lazily).
         stp.confirm = { server, summary -> onConfirmShellCommand?.invoke(server, summary) ?: true }
@@ -161,16 +212,49 @@ class GenerationManager(
         com.newoether.agora.mcp.McpClientManager(context.applicationContext)
     ).also { mtp ->
         mtp.confirm = { server, summary -> onConfirmMcpTool?.invoke(server, summary) ?: false }
+        // Observe user MCP servers + the built-in connectors so the connection pool
+        // stays warm even when the global MCP toggle is off.
         mtp.observeServers(
-            kotlinx.coroutines.flow.combine(settings.mcpEnabled, settings.mcpServers) { enabled, servers ->
-                if (enabled) servers else emptyList()
+            kotlinx.coroutines.flow.combine(
+                settings.mcpEnabled,
+                settings.mcpServers,
+                kotlinx.coroutines.flow.combine(
+                    settings.todoistConnectorEnabled,
+                    settings.todoistOAuth,
+                ) { on, oauth -> on to oauth },
+                kotlinx.coroutines.flow.combine(
+                    settings.notionConnectorEnabled,
+                    settings.notionOAuth,
+                ) { on, oauth -> on to oauth },
+            ) { mcpOn, servers, todoist, notion ->
+                buildList {
+                    if (mcpOn) {
+                        // A hand-added row is only stripped when the matching connector is on
+                        // (its synthetic row takes over); otherwise the user's own entry stays.
+                        addAll(
+                            com.newoether.agora.tool.NotionConnector.withoutBuiltin(
+                                com.newoether.agora.tool.TodoistConnector.withoutBuiltin(servers, todoist.first),
+                                notion.first
+                            )
+                        )
+                    }
+                    // Always register the synthetic server when a connector is on so OAuth can
+                    // run even before the first successful authorization.
+                    if (todoist.first) {
+                        add(com.newoether.agora.tool.TodoistConnector.serverConfig(todoist.second))
+                    }
+                    if (notion.first) {
+                        add(com.newoether.agora.tool.NotionConnector.serverConfig(notion.second))
+                    }
+                }
             },
             settings::updateMcpServerNow,
         )
     }
     private val toolProviders: List<ToolProvider> = listOf(
-        memoryToolProvider, webSearchToolProvider, ragToolProvider, imageGenToolProvider, shellToolProvider,
-        mcpToolProvider,
+        memoryToolProvider, webSearchToolProvider, ragToolProvider, imageGenToolProvider,
+        personalizationToolProvider, providerBalanceToolProvider, askToolProvider,
+        skillsToolProvider, githubConnectorToolProvider, shellToolProvider, mcpToolProvider,
     )
 
     fun buildImageGenTool(ctx: GenerationContext): List<ToolDefinition> =
@@ -235,10 +319,11 @@ class GenerationManager(
         ragToolProvider.semanticSearch(query, limit, ctx)
 
     private suspend fun executeTool(name: String, arguments: String, ctx: GenerationContext): String {
+        val normalizedArgs = normalizeToolArguments(arguments)
         return try {
             for (provider in toolProviders) {
                 if (provider.handles(name)) {
-                    return provider.execute(name, arguments, ctx)
+                    return provider.execute(name, normalizedArgs, ctx)
                 }
             }
             "Unknown tool: $name"
@@ -351,7 +436,17 @@ class GenerationManager(
         val currentPath = expanded.map {
             val segs = it.toolCallJson?.let { json -> try { Json.decodeFromString<List<MessageSegment>>(json) } catch (_: Exception) { null } }
             val toolCall = segs?.lastOrNull { s -> s.type == "tool" }?.let { s ->
-                ToolCallData(s.toolName ?: "", s.toolArgs ?: "{}", s.toolResult ?: "", s.toolCallId)
+                val args = normalizeToolArguments(s.toolArgs)
+                val callId = s.toolCallId?.takeIf { it.isNotBlank() }
+                    ?: buildToolCallId(s.toolName ?: "", args)
+                // signature=null, toolCallId=callId — 4th positional arg is signature, not id.
+                ToolCallData(
+                    toolName = s.toolName ?: "",
+                    arguments = args,
+                    result = s.toolResult ?: "",
+                    signature = s.signature,
+                    toolCallId = callId,
+                )
             }
             val meta = it.attachmentMeta?.let { json -> try { Json.decodeFromString<com.newoether.agora.model.AttachmentMeta>(json) } catch (_: Exception) { null } }
             val attachmentText = if (meta != null) {
@@ -390,8 +485,15 @@ class GenerationManager(
         val shellTool = buildShellTool(ctx)
         val fileTool = buildFileTool(ctx)
         val imageGenTool = buildImageGenTool(ctx)
+        val personalizationTools = personalizationToolProvider.definitions(ctx)
+        val balanceTools = providerBalanceToolProvider.definitions(ctx)
+        val askTools = askToolProvider.definitions(ctx)
+        val skillsTools = skillsToolProvider.definitions(ctx)
+        val githubTools = githubConnectorToolProvider.definitions(ctx)
         val mcpTools = mcpToolProvider.refresh(ctx)
-        val allTools = memoryTools + webSearchTool + ragTool + imageGenTool + shellTool + fileTool + mcpTools
+        val allTools = memoryTools + webSearchTool + ragTool + imageGenTool +
+            personalizationTools + balanceTools + askTools + skillsTools + githubTools +
+            shellTool + fileTool + mcpTools
         val providerConfig = ProviderConfig(
             apiKey = config.apiKey,
             modelId = config.modelId,
@@ -412,7 +514,8 @@ class GenerationManager(
             maxTokens = config.maxTokens,
             topP = config.topP,
             frequencyPenalty = config.frequencyPenalty,
-            presencePenalty = config.presencePenalty
+            presencePenalty = config.presencePenalty,
+            alternateApiKeys = config.alternateApiKeys
         )
         return Pair(currentPath, providerConfig)
     }
@@ -436,7 +539,20 @@ class GenerationManager(
         onLoadingChange(true)
         onGeneratingIdChange(conversationId)
         com.newoether.agora.util.CrashReporter.note("generate provider=${config.providerName} regen=$isRegenerate")
-        withContext(Dispatchers.Main) { AgoraForegroundService.start(app) }
+        // Promote FGS ASAP on Main — before any IO/transcription delay — so startForeground
+        // lands well inside the system 5s window even if generate fails immediately after.
+        // Pair exactly one FGS.stop with a successful start in finally. User stop/regenerate
+        // must only cancel the generation; its finally owns FGS teardown.
+        var fgsStarted = false
+        try {
+            fgsStarted = withContext(Dispatchers.Main.immediate) {
+                AgoraForegroundService.start(app)
+            }
+        } catch (e: Exception) {
+            // Never let FGS start failure abort generation.
+            com.newoether.agora.util.CrashReporter.note("generate FGS.start threw ${e.javaClass.simpleName}")
+            DebugLog.w("AgoraVM", "FGS start failed", e)
+        }
 
         var totalText = ""
         var totalThoughts = ""
@@ -449,7 +565,9 @@ class GenerationManager(
         var currentThoughtDurationMs: Long = 0
         var currentStatus = MessageStatus.SENDING
         var retryText: String? = null
-        val segments = mutableListOf(MessageSegment(type = "answer"))
+        // Do NOT seed a blank answer segment — it makes tool-only turns look like
+        // "has answer segments" in timeline mode while rendering nothing.
+        val segments = mutableListOf<MessageSegment>()
         val generatedImages = mutableListOf<String>()
         var currentAnswerBuf = StringBuilder()
         var currentThoughtBuf = StringBuilder()
@@ -505,6 +623,9 @@ class GenerationManager(
 
             var toolCallData: ToolCallData? = null
             var toolCallDataList: List<ToolCallData> = emptyList()
+            var lastGenerationError: GenerationError? = null
+            var usedTools = false
+            var answeredAfterLastTool = false
             val roundToolSegments = mutableListOf<MessageSegment>()
 
             var lastEmitMs = 0L
@@ -564,6 +685,7 @@ class GenerationManager(
                         currentAnswerBuf.append(answerText)
                         if (answerText.isNotBlank()) {
                             currentStatus = MessageStatus.SENDING
+                            if (usedTools) answeredAfterLastTool = true
                         }
                         retryText = null
                     }
@@ -600,65 +722,113 @@ class GenerationManager(
                     is StreamEvent.Error -> {
                         flushThoughtSegment()
                         retryText = null
+                        lastGenerationError = event.error
                         if (toolCallData == null && toolCallDataList.isEmpty()) {
-                            totalText = event.message
+                            totalText = formatGenerationDiagnostic(event.error)
                             currentStatus = MessageStatus.ERROR
                         }
                     }
                     is StreamEvent.ToolCallRequest -> {
                         flushAnswerSegment()
                         flushThoughtSegment()
-                        val ts = MessageSegment(type = "tool", toolName = event.name, toolArgs = event.arguments, toolResult = null, toolCallId = event.id, signature = event.signature)
+                        val args = normalizeToolArguments(event.arguments)
+                        val callId = event.id.takeIf { it.isNotBlank() }
+                            ?: buildToolCallId(event.name, args)
+                        val ts = MessageSegment(
+                            type = "tool",
+                            toolName = event.name,
+                            toolArgs = args,
+                            toolResult = null,
+                            toolCallId = callId,
+                            signature = event.signature,
+                        )
                         appendMergedSegment(segments, ts)
+                        usedTools = true
+                        answeredAfterLastTool = false
+                        // Stay in TOOL_CALLING until the multi-tool loop finishes a follow-up
+                        // answer. Switching to SENDING here made short tool-only turns look
+                        // "completed" before the model could reply with search results.
                         currentStatus = MessageStatus.TOOL_CALLING
                         onStreamUpdate(modelMessage())
                         lastEmitMs = System.currentTimeMillis()
-                        val result = executeTool(event.name, event.arguments, ctx)
+                        val result = executeTool(event.name, args, ctx)
                         generatedImages.addAll(imageGenToolProvider.drainImages())
                         val clipped = result.take(Constants.MAX_TOOL_RESULT_LENGTH)
-                        val idx = segments.indexOfLast { it.toolCallId == event.id }
+                        val idx = segments.indexOfLast { it.toolCallId == callId }
                         if (idx >= 0) {
                             segments[idx] = segments[idx].copy(toolResult = clipped)
                             roundToolSegments.add(segments[idx])
                         }
-                        val tcd = ToolCallData(event.name, event.arguments, clipped, event.signature, event.id)
+                        val tcd = ToolCallData(
+                            toolName = event.name,
+                            arguments = args,
+                            result = clipped,
+                            signature = event.signature,
+                            toolCallId = callId,
+                        )
                         if (toolCallData == null) toolCallData = tcd
                         toolCallDataList = toolCallDataList + tcd
-                        currentStatus = MessageStatus.SENDING
+                        currentStatus = MessageStatus.TOOL_CALLING
                         onStreamUpdate(modelMessage())
                         lastEmitMs = System.currentTimeMillis()
                     }
                     is StreamEvent.ToolCallsRequest -> {
                         flushAnswerSegment()
                         flushThoughtSegment()
-                        event.calls.forEach { call ->
-                            appendMergedSegment(segments, MessageSegment(type = "tool", toolName = call.name, toolArgs = call.arguments, toolResult = null, toolCallId = call.id, signature = call.signature))
+                        val normalizedCalls = event.calls.map { call ->
+                            val args = normalizeToolArguments(call.arguments)
+                            val callId = call.id.takeIf { it.isNotBlank() }
+                                ?: buildToolCallId(call.name, args)
+                            Triple(call, args, callId)
                         }
+                        normalizedCalls.forEach { (call, args, callId) ->
+                            appendMergedSegment(
+                                segments,
+                                MessageSegment(
+                                    type = "tool",
+                                    toolName = call.name,
+                                    toolArgs = args,
+                                    toolResult = null,
+                                    toolCallId = callId,
+                                    signature = call.signature,
+                                ),
+                            )
+                        }
+                        usedTools = true
+                        answeredAfterLastTool = false
                         currentStatus = MessageStatus.TOOL_CALLING
                         onStreamUpdate(modelMessage())
                         lastEmitMs = System.currentTimeMillis()
-                        val tcds = event.calls.map { call ->
-                            val result = executeTool(call.name, call.arguments, ctx)
+                        val tcds = normalizedCalls.map { (call, args, callId) ->
+                            val result = executeTool(call.name, args, ctx)
                             generatedImages.addAll(imageGenToolProvider.drainImages())
                             val clipped = result.take(Constants.MAX_TOOL_RESULT_LENGTH)
-                            val idx = segments.indexOfLast { it.toolCallId == call.id }
+                            val idx = segments.indexOfLast { it.toolCallId == callId }
                             if (idx >= 0) {
                                 segments[idx] = segments[idx].copy(toolResult = clipped)
                                 roundToolSegments.add(segments[idx])
                             }
-                            ToolCallData(call.name, call.arguments, clipped, call.signature, call.id)
+                            ToolCallData(
+                                toolName = call.name,
+                                arguments = args,
+                                result = clipped,
+                                signature = call.signature,
+                                toolCallId = callId,
+                            )
                         }
                         toolCallData = tcds.firstOrNull()
                         toolCallDataList = tcds
-                        currentStatus = MessageStatus.SENDING
+                        currentStatus = MessageStatus.TOOL_CALLING
                         onStreamUpdate(modelMessage())
                         lastEmitMs = System.currentTimeMillis()
                     }
                 }
 
+                // UI throttle: keep streaming snappy (~12-15 fps) without flooding Compose
+                // on every SSE token. 500 ms made long replies feel laggy or stuck.
                 val now = System.currentTimeMillis()
                 val isSignificant = event is StreamEvent.Error
-                if (now - lastEmitMs >= 500 || isSignificant) {
+                if (now - lastEmitMs >= 80 || isSignificant) {
                     onStreamUpdate(modelMessage())
                     lastEmitMs = now
                 }
@@ -733,9 +903,14 @@ class GenerationManager(
                 toolCallDataList = emptyList()
 
                 lastEmitMs = 0L
+                // Keep generating UI active while we ask the model to continue from tool results.
+                currentStatus = MessageStatus.SENDING
+                onStreamUpdate(modelMessage())
 
                 val projectedToolPath = projectAssistantImagesToLatestUserMessage(toolPath, providerConfig.includeImages)
                 val apiToolPath = applyUserTemplate(projectedToolPath, config.userPrepend, config.userPostpend)
+                // One normal continuation request after tool results. If the model returns no
+                // final output, completion validation below marks the generation as ERROR.
                 provider.generateResponse(apiToolPath, providerConfig).collect { event ->
                     handleStreamEvent(event)
                 }
@@ -766,7 +941,24 @@ class GenerationManager(
             }
 
             if (currentStatus != MessageStatus.ERROR) {
-                currentStatus = if (totalText.isNotEmpty() || totalThoughts.isNotEmpty()) MessageStatus.SUCCESS else MessageStatus.ERROR
+                val hasFinalResponse = hasFinalAssistantResponse(
+                    text = totalText,
+                    segments = segments,
+                    generatedImages = generatedImages,
+                    usedTools = usedTools,
+                    answeredAfterLastTool = answeredAfterLastTool,
+                )
+                currentStatus = if (hasFinalResponse) MessageStatus.SUCCESS else MessageStatus.ERROR
+                if (!hasFinalResponse) {
+                    totalText = when (val error = lastGenerationError) {
+                        null -> if (usedTools) {
+                            context.getString(R.string.generation_empty_after_tool)
+                        } else {
+                            context.getString(R.string.generation_empty_response)
+                        }
+                        else -> formatGenerationDiagnostic(error)
+                    }
+                }
             }
             if (generationJob?.isCancelled == true && currentStatus != MessageStatus.ERROR) {
                 currentStatus = MessageStatus.STOPPED
@@ -779,7 +971,8 @@ class GenerationManager(
             val isCancelled = generationJob?.isCancelled == true
             currentStatus = if (isCancelled) MessageStatus.STOPPED else MessageStatus.ERROR
             if (!isCancelled) {
-                totalText = "Error: ${e.localizedMessage ?: "An unexpected error occurred."}"
+                val detail = "${e.javaClass.simpleName}: ${e.localizedMessage ?: "No exception message"}"
+                totalText = detail.take(1_000)
             }
         } finally {
             withContext(NonCancellable) {
@@ -823,9 +1016,18 @@ class GenerationManager(
                 onStreamClear()
                 onLoadingChange(false)
                 onGeneratingIdChange(null)
-                AgoraForegroundService.stop(app)
+                // Only the generate() that successfully started the FGS may stop it.
+                if (fgsStarted) {
+                    try {
+                        AgoraForegroundService.stop(app)
+                    } catch (e: Exception) {
+                        DebugLog.w("AgoraVM", "FGS stop failed", e)
+                    }
+                }
                 if (!AppForegroundTracker.isInForeground && currentStatus == MessageStatus.SUCCESS && totalText.isNotBlank()) {
-                    AgoraForegroundService.showCompletionNotification(app, totalText)
+                    runCatching {
+                        AgoraForegroundService.showCompletionNotification(app, totalText)
+                    }
                 }
             }
         }

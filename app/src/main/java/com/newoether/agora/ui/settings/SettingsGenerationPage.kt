@@ -45,12 +45,10 @@ fun SettingsGenerationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val thinkingLevel by viewModel.settings.thinkingLevel.collectAsState()
     val thinkingBudgetEnabled by viewModel.settings.thinkingBudgetEnabled.collectAsState()
     val thinkingBudgetTokens by viewModel.settings.thinkingBudgetTokens.collectAsState()
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
 
     CollapsingSettingsScaffold(
         title = stringResource(R.string.generation_title),
         onBack = onBack,
-        floatingActionButton = { if (showDocFab) DocumentationFab("generation.md") }
     ) {
             SettingsGroupColumn {
                 // ── Section 1: Default Context Window ──
@@ -228,7 +226,6 @@ fun SettingsGenerationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 )
             }
 
-            if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
     }
 }
 

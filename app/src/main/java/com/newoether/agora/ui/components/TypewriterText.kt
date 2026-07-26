@@ -6,7 +6,11 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -14,11 +18,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlin.random.Random
 
@@ -128,19 +135,34 @@ fun TypewriterTexts(
         label = "typewriterCursorAlpha"
     )
 
-    Row(modifier = modifier) {
+    // CJK glyphs are typically taller than Latin; a plain "|" looks short.
+    // Use a solid bar sized from the text style so the caret covers full line height.
+    val density = LocalDensity.current
+    val cursorHeight = with(density) {
+        val linePx = style.lineHeight.takeIf { it.isSp }?.toPx()
+            ?: (style.fontSize.toPx() * 1.35f)
+        (linePx * 1.05f).toDp().coerceAtLeast(16.dp)
+    }
+    val cursorWidth = with(density) {
+        (style.fontSize.toPx() * 0.12f).toDp().coerceIn(1.5.dp, 3.dp)
+    }
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Text(
             text = current.take(visibleCount),
             style = style,
             fontWeight = fontWeight,
             color = color
         )
-        Text(
-            text = "|",
-            style = style,
-            fontWeight = fontWeight,
-            color = color.copy(alpha = cursorAlpha),
-            modifier = Modifier.alpha(cursorAlpha)
+        Box(
+            modifier = Modifier
+                .width(cursorWidth)
+                .height(cursorHeight)
+                .alpha(cursorAlpha)
+                .background(if (color == Color.Unspecified) Color.Black.copy(alpha = cursorAlpha) else color.copy(alpha = cursorAlpha.coerceIn(0f, 1f)))
         )
     }
 }

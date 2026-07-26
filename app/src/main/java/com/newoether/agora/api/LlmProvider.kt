@@ -49,7 +49,9 @@ data class ProviderConfig(
     val maxTokens: Int? = null,
     val topP: Float? = null,
     val frequencyPenalty: Float? = null,
-    val presencePenalty: Float? = null
+    val presencePenalty: Float? = null,
+    /** Additional enabled keys to try after a 401/invalid-key failure. */
+    val alternateApiKeys: List<String> = emptyList()
 )
 
 @Serializable
@@ -213,15 +215,38 @@ data class OpenAiStreamResponse(
 
 @Serializable
 data class OpenAiChoice(
-    val index: Int,
+    // Some proxies omit index on tool-only / final chunks.
+    val index: Int = 0,
     val delta: OpenAiDelta? = null,
+    /**
+     * Non-standard but common among Chinese OpenAI-compatible proxies:
+     * they put the completed assistant payload under `message` even in stream mode,
+     * including `tool_calls`, instead of (or in addition to) incremental `delta`s.
+     */
+    val message: OpenAiStreamMessage? = null,
     @SerialName("finish_reason") val finishReason: String? = null
+)
+
+@Serializable
+data class OpenAiStreamMessage(
+    val role: String? = null,
+    /**
+     * May be a plain string or (rarely) an array of content parts. Keep as [JsonElement]
+     * so a non-string value doesn't fail the whole SSE event decode.
+     */
+    val content: JsonElement? = null,
+    @SerialName("reasoning_content") val reasoningContent: String? = null,
+    @SerialName("tool_calls") val toolCalls: List<OpenAiToolCall>? = null
 )
 
 @Serializable
 data class OpenAiDelta(
     val role: String? = null,
-    val content: String? = null,
+    /**
+     * Same as [OpenAiStreamMessage.content]: accept string or other JSON so proxies that
+     * emit `content: null` / arrays don't drop the entire event (and its tool_calls).
+     */
+    val content: JsonElement? = null,
     @SerialName("reasoning_content") val reasoningContent: String? = null,
     @SerialName("reasoning_details") val reasoningDetails: List<OpenAiReasoningDetail>? = null,
     @SerialName("tool_calls") val toolCalls: List<OpenAiToolCall>? = null

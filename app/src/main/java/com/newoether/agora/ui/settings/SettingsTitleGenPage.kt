@@ -31,12 +31,10 @@ fun SettingsTitleGenPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val enabledModels by viewModel.settings.enabledModels.collectAsState()
     var showTitleModelDialog by remember { mutableStateOf(false) }
     var showPromptDialog by remember { mutableStateOf(false) }
-    val showDocFab by viewModel.settings.showDocumentationFab.collectAsState()
 
     CollapsingSettingsScaffold(
         title = stringResource(R.string.settings_title_gen),
         onBack = onBack,
-        floatingActionButton = { if (showDocFab) DocumentationFab("title-generation.md") }
     ) {
             SettingsGroupColumn {
                 SettingsGroup(
@@ -83,7 +81,6 @@ fun SettingsTitleGenPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                     })
                 )
             }
-            if (showDocFab) { Spacer(modifier = Modifier.height(80.dp)) }
     }
 
     if (showTitleModelDialog) {
