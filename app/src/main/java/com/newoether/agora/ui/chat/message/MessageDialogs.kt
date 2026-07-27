@@ -24,6 +24,31 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+internal data class MessageTokenBreakdown(
+    val totalInputTokens: Int,
+    val freshInputTokens: Int,
+    val cachedInputTokens: Int,
+    val cacheTelemetryAvailable: Boolean,
+    val outputTokens: Int,
+)
+
+internal fun messageTokenBreakdown(
+    promptTokens: Int,
+    cachedPromptTokens: Int,
+    cacheTelemetryAvailable: Boolean,
+    completionTokens: Int,
+): MessageTokenBreakdown {
+    val totalInput = promptTokens.coerceAtLeast(0)
+    val cachedInput = cachedPromptTokens.coerceIn(0, totalInput)
+    return MessageTokenBreakdown(
+        totalInputTokens = totalInput,
+        freshInputTokens = totalInput - cachedInput,
+        cachedInputTokens = cachedInput,
+        cacheTelemetryAvailable = cacheTelemetryAvailable && totalInput > 0,
+        outputTokens = completionTokens.coerceAtLeast(0),
+    )
+}
+
 /** Read-only message metadata (timestamp + resolved model name) shown from the overflow menu. */
 @Composable
 internal fun MessageInfoDialog(
@@ -56,14 +81,32 @@ internal fun MessageInfoDialog(
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(stringResource(R.string.ttft_with_label, message.ttftMs), style = bodyStyle)
                     }
-                    // Upload / download token split
-                    if (message.promptTokens > 0) {
+                    val usage = messageTokenBreakdown(
+                        promptTokens = message.promptTokens,
+                        cachedPromptTokens = message.cachedPromptTokens,
+                        cacheTelemetryAvailable = message.cacheTelemetryAvailable,
+                        completionTokens = message.completionTokens,
+                    )
+                    if (usage.totalInputTokens > 0) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(stringResource(R.string.upload_tokens_with_label, message.promptTokens), style = bodyStyle)
+                        Text(stringResource(R.string.input_tokens_total_with_label, usage.totalInputTokens), style = bodyStyle)
+                        if (usage.cacheTelemetryAvailable) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(stringResource(R.string.input_tokens_fresh_with_label, usage.freshInputTokens), style = bodyStyle)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(stringResource(R.string.input_tokens_cached_with_label, usage.cachedInputTokens), style = bodyStyle)
+                        } else {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(stringResource(R.string.input_tokens_cache_not_reported), style = bodyStyle)
+                        }
                     }
-                    if (message.completionTokens > 0) {
+                    if (usage.outputTokens > 0) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(stringResource(R.string.download_tokens_with_label, message.completionTokens), style = bodyStyle)
+                        Text(stringResource(R.string.output_tokens_with_label, usage.outputTokens), style = bodyStyle)
+                    }
+                    if (message.tokenCount > 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(stringResource(R.string.total_tokens, message.tokenCount), style = bodyStyle)
                     }
                 } else if (message.participant == Participant.USER) {
                     val tokenCount = com.newoether.agora.util.TokenEstimator.estimate(message.text)

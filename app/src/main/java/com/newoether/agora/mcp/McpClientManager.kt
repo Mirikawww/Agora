@@ -536,6 +536,7 @@ class McpClientManager(
     private fun remoteDefinitions(connection: Connection): List<ToolDefinition> =
         connection.exposedTools.map { (exposedName, tool) ->
             val rawSchema = McpJson.encodeToJsonElement(ToolSchema.serializer(), tool.inputSchema).jsonObject
+            val completeParameters = ToolParameters(properties = emptyMap(), rawSchema = rawSchema)
             val isBuiltinConnector = connection.config.id.startsWith("connector:")
             val description = if (isBuiltinConnector) {
                 // First-class connector tools: no noisy MCP prefix in the schema the model sees.
@@ -552,12 +553,15 @@ class McpClientManager(
                     name = exposedName,
                     description = description,
                     parameters = ToolParameters(properties = emptyMap(), rawSchema = trimSchema(rawSchema)),
-                )
+                ),
+                // The compact schema is only a routing capsule. Once this tool is selected directly,
+                // or returned by the capability broker, Agora restores this exact server schema.
+                fullParameters = completeParameters,
             )
         }
 
     /**
-     * Strips token-heavy but LLM-unneeded JSON Schema details from MCP tool schemas.
+     * Builds a compact routing capsule while retaining the exact schema in ToolDefinition.
      *
      * Notion/Todoist MCP servers expose tools with extremely large schemas: rich_text
      * block types, deep anyOf/oneOf enumerations, $defs references, and multi-level
@@ -572,8 +576,9 @@ class McpClientManager(
      *   - required array
      *   - items.type for array properties
      *
-     * The stripped schema is still valid JSON Schema and fully sufficient for the
-     * model to construct correct tool calls; deep enum lists and $defs are noise.
+     * The capsule is deliberately not treated as execution-complete: enum, oneOf, conditional
+     * constraints, and $defs can change call correctness. Top-K direct exposure and broker search
+     * always restore the original schema before the model constructs arguments.
      */
     private fun trimSchema(schema: JsonObject): JsonObject {
         // ~2 000 chars ≈ 500 tokens — small schemas pass through unchanged.

@@ -44,8 +44,8 @@ data class ModelCapabilities(
 )
 
 private const val MODELS_DEV_CATALOG_URL = "https://models.dev/catalog.json"
-// v5: added `tools` (tool_call) and `contextTokens` (limit.context) to ModelCapabilities.
-private const val MODELS_DEV_CACHE_FILE = "models_dev_capabilities_v5.json"
+// v6: provider-scoped indexes prevent one provider's tool_call=false disabling another.
+private const val MODELS_DEV_CACHE_FILE = "models_dev_capabilities_v6.json"
 private const val MODELS_DEV_CACHE_TTL_MS = 24 * 60 * 60 * 1000L
 private const val ALL_PROVIDERS = "*"
 
@@ -68,7 +68,7 @@ internal fun parseModelsDevCapabilities(raw: String): Map<String, ModelCapabilit
     val root = modelsDevJson.parseToJsonElement(raw).jsonObject
     val providers = root["providers"] as? JsonObject ?: return emptyMap()
     return buildMap {
-        providers.forEach providerLoop@ { (_, providerElement) ->
+        providers.forEach providerLoop@ { (providerId, providerElement) ->
             val provider = providerElement as? JsonObject ?: return@providerLoop
             val models = provider["models"] as? JsonObject ?: return@providerLoop
             models.forEach modelLoop@ { (modelId, modelElement) ->
@@ -93,19 +93,29 @@ internal fun parseModelsDevCapabilities(raw: String): Map<String, ModelCapabilit
                     if (displayName.isNotBlank()) add(normalizeModelsDevIdentifier(displayName))
                 }.filter { it.isNotBlank() }
                 aliases.forEach { alias ->
-                    val key = ModelsDevRepository.key(ALL_PROVIDERS, alias)
-                    val previous = get(key)
+                    val providerKey = ModelsDevRepository.key(
+                        normalizeModelsDevIdentifier(providerId),
+                        alias,
+                    )
+                    put(providerKey, capabilities)
+
+                    val fallbackKey = ModelsDevRepository.key(ALL_PROVIDERS, alias)
+                    val previous = get(fallbackKey)
+                    // A provider-agnostic lookup is used for custom relays whose Agora name cannot
+                    // be mapped to models.dev. It must remain permissive: only an exact provider's
+                    // explicit false is authoritative enough to remove tool capability.
+                    val permissiveFallback = capabilities.copy(tools = true)
                     put(
-                        key,
-                        if (previous == null) capabilities else ModelCapabilities(
-                            reasoning = previous.reasoning || capabilities.reasoning,
-                            fast = previous.fast || capabilities.fast,
-                            // AND, unlike the OR above: aliases collide across providers, and a
-                            // model listed anywhere as tool-incapable must not be re-enabled by a
-                            // permissive sibling entry.
-                            tools = previous.tools && capabilities.tools,
+                        fallbackKey,
+                        if (previous == null) permissiveFallback else ModelCapabilities(
+                            reasoning = previous.reasoning || permissiveFallback.reasoning,
+                            fast = previous.fast || permissiveFallback.fast,
+                            tools = true,
                             // 0 means unknown, so any real figure wins over it.
-                            contextTokens = maxOf(previous.contextTokens, capabilities.contextTokens)
+                            contextTokens = maxOf(
+                                previous.contextTokens,
+                                permissiveFallback.contextTokens,
+                            )
                         )
                     )
                 }
@@ -117,6 +127,7 @@ internal fun parseModelsDevCapabilities(raw: String): Map<String, ModelCapabilit
 internal fun findModelsDevCapabilities(
     capabilities: Map<String, ModelCapabilities>,
     apiModelName: String,
+    providerName: String? = null,
     providerFast: Boolean? = null,
 ): ModelCapabilities {
     val candidates = listOf(
@@ -124,7 +135,13 @@ internal fun findModelsDevCapabilities(
         normalizeModelsDevIdentifier(apiModelName),
         normalizeModelsDevIdentifier(apiModelName.substringAfterLast('/')),
     ).distinct().filter { it.isNotBlank() }
-    val catalogCapabilities = candidates.firstNotNullOfOrNull { candidate ->
+    val providerId = providerName?.let(::normalizeModelsDevIdentifier).orEmpty()
+    val providerCapabilities = providerId.takeIf { it.isNotBlank() }?.let { id ->
+        candidates.firstNotNullOfOrNull { candidate ->
+            capabilities[ModelsDevRepository.key(id, candidate)]
+        }
+    }
+    val catalogCapabilities = providerCapabilities ?: candidates.firstNotNullOfOrNull { candidate ->
         capabilities[ModelsDevRepository.key(ALL_PROVIDERS, candidate)]
     } ?: ModelCapabilities()
     return catalogCapabilities.copy(fast = providerFast ?: catalogCapabilities.fast)
@@ -183,6 +200,7 @@ class ModelsDevRepository(context: Context) {
         return findModelsDevCapabilities(
             capabilities = _capabilities.value,
             apiModelName = apiModelName,
+            providerName = providerName,
             providerFast = providerFast,
         )
     }

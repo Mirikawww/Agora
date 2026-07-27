@@ -121,6 +121,11 @@
     <string name="ttft_with_label">First token: %1$d ms</string>
     <string name="upload_tokens_with_label">Upload: %1$d tokens</string>
     <string name="download_tokens_with_label">Download: %1$d tokens</string>
+    <string name="input_tokens_total_with_label">Input (total): %1$d tokens</string>
+    <string name="input_tokens_fresh_with_label">Input (fresh/uncached): %1$d tokens</string>
+    <string name="input_tokens_cached_with_label">Input (cached): %1$d tokens</string>
+    <string name="input_tokens_cache_not_reported">Cache split: Not reported by provider</string>
+    <string name="output_tokens_with_label">Output: %1$d tokens</string>
     <string name="user_tokens_with_label">Tokens: %1$d</string>
     <string name="about_ci_status">Build status</string>
     <string name="about_ci_running">Building #%1$d…</string>

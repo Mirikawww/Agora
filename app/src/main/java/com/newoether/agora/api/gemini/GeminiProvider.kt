@@ -69,8 +69,25 @@ internal data class ApiTool(
 internal data class GeminiFunctionDeclaration(
     val name: String,
     val description: String,
-    val parameters: JsonObject? = null
+    val parameters: JsonObject? = null,
+    @SerialName("parametersJsonSchema") val parametersJsonSchema: JsonObject? = null,
 )
+
+/**
+ * Gemini's `parameters` field accepts its OpenAPI Schema subset. Exact MCP schemas can contain
+ * JSON-Schema-only constructs such as $defs/$ref/oneOf and must use the mutually exclusive
+ * `parametersJsonSchema` field or the API may reject an otherwise valid connector tool.
+ */
+internal fun ToolDefinition.toGeminiFunctionDeclaration(): GeminiFunctionDeclaration {
+    val schema = function.parameters.asJsonObject()
+    val isExactJsonSchema = function.parameters.rawSchema != null
+    return GeminiFunctionDeclaration(
+        name = function.name,
+        description = function.description,
+        parameters = schema.takeUnless { isExactJsonSchema },
+        parametersJsonSchema = schema.takeIf { isExactJsonSchema },
+    )
+}
 
 @Serializable
 internal data class ApiRequestContent(val role: String? = null, val parts: List<ApiRequestPart>)
@@ -133,8 +150,26 @@ internal data class ApiCandidate(val content: ApiResponseContent? = null)
 @Serializable
 internal data class ApiUsageMetadata(
     val totalTokenCount: Int? = null,
+    val promptTokenCount: Int? = null,
+    val candidatesTokenCount: Int? = null,
+    val cachedContentTokenCount: Int? = null,
+    val toolUsePromptTokenCount: Int? = null,
     val thoughtsTokenCount: Int? = null
 )
+
+internal fun ApiUsageMetadata.toUsageUpdate(): StreamEvent.UsageUpdate {
+    val prompt = (promptTokenCount ?: 0) + (toolUsePromptTokenCount ?: 0)
+    val thoughts = thoughtsTokenCount ?: 0
+    val completion = (candidatesTokenCount ?: 0) + thoughts
+    return StreamEvent.UsageUpdate(
+        tokenCount = totalTokenCount ?: (prompt + completion),
+        thoughtsTokenCount = thoughts,
+        promptTokens = prompt,
+        cachedPromptTokens = cachedContentTokenCount ?: 0,
+        cacheTelemetryAvailable = cachedContentTokenCount != null,
+        completionTokens = completion,
+    )
+}
 
 @Serializable
 internal data class ApiErrorResponse(val error: ApiError)
@@ -263,13 +298,7 @@ class GeminiProvider : LlmProvider {
         if (config.googleSearchEnabled) tools.add(ApiTool(googleSearch = JsonObject(emptyMap())))
 
         // Add memory function declarations as a separate tool entry
-        val functionDeclarations = config.tools?.map { td ->
-            GeminiFunctionDeclaration(
-                name = td.function.name,
-                description = td.function.description,
-                parameters = td.function.parameters.asJsonObject()
-            )
-        }
+        val functionDeclarations = config.tools?.map(ToolDefinition::toGeminiFunctionDeclaration)
         if (!functionDeclarations.isNullOrEmpty()) {
             tools.add(ApiTool(functionDeclarations = functionDeclarations))
         }
@@ -440,7 +469,7 @@ class GeminiProvider : LlmProvider {
                                         }
                                     }
                                     response.usageMetadata?.let { metadata ->
-                                        emit(StreamEvent.UsageUpdate(metadata.totalTokenCount ?: 0, metadata.thoughtsTokenCount ?: 0))
+                                        emit(metadata.toUsageUpdate())
                                     }
                                 } catch (e: Exception) {
                                     DebugLog.e("AgoraAPI", "Parse error: ${e.message}", e)

@@ -684,6 +684,11 @@
     <string name="message_info">详细信息</string>
     <string name="time_with_label">时间：%1$s</string>
     <string name="model_with_label">模型：%1$s</string>
+    <string name="input_tokens_total_with_label">输入（总计）：%1$d tokens</string>
+    <string name="input_tokens_fresh_with_label">输入（未缓存）：%1$d tokens</string>
+    <string name="input_tokens_cached_with_label">输入（缓存命中）：%1$d tokens</string>
+    <string name="input_tokens_cache_not_reported">缓存明细：供应商未上报</string>
+    <string name="output_tokens_with_label">输出：%1$d tokens</string>
     <string name="arguments_label">参数：</string>
     <string name="result_label">结果：</string>
 

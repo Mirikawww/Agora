@@ -23,6 +23,10 @@ sealed class StreamEvent {
         val thoughtsTokenCount: Int = 0,
         /** Prompt (input/upload) tokens for this request. 0 = not reported by provider. */
         val promptTokens: Int = 0,
+        /** Prompt tokens served from a provider cache. Included in [promptTokens]. */
+        val cachedPromptTokens: Int = 0,
+        /** True only when the provider explicitly reported cache-token telemetry. */
+        val cacheTelemetryAvailable: Boolean = false,
         /** Completion (output/download) tokens for this request. 0 = not reported by provider. */
         val completionTokens: Int = 0,
         /** Time-to-first-token in ms, measured client-side. 0 = not yet known. */
@@ -95,6 +99,8 @@ data class ToolDefinition(
     val function: ToolFunction,
     /** Not serialised: request-shaping metadata, never part of the wire format. */
     @Transient val defer: DeferPolicy = DeferPolicy.AUTO,
+    /** Complete original schema retained locally when [function] carries a compact wire schema. */
+    @Transient val fullParameters: ToolParameters? = null,
 )
 
 @Serializable
@@ -165,6 +171,8 @@ data class OpenAiChatRequest(
     val messages: List<OpenAiMessage>,
     val stream: Boolean = true,
     @SerialName("stream_options") val streamOptions: OpenAiStreamOptions? = null,
+    /** OpenAI-only cache-routing fingerprint. Null for compatible providers. */
+    @SerialName("prompt_cache_key") val promptCacheKey: String? = null,
     val tools: List<ToolDefinition>? = null,
     @SerialName("reasoning_effort") val reasoningEffort: String? = null,
     val reasoning: OpenAiReasoning? = null,
@@ -314,12 +322,27 @@ data class OpenAiUsage(
     @SerialName("prompt_tokens") val promptTokens: Int,
     @SerialName("completion_tokens") val completionTokens: Int,
     @SerialName("total_tokens") val totalTokens: Int,
+    @SerialName("prompt_tokens_details") val promptTokensDetails: OpenAiPromptTokensDetails? = null,
     @SerialName("completion_tokens_details") val completionTokensDetails: OpenAiCompletionTokensDetails? = null
+)
+
+@Serializable
+data class OpenAiPromptTokensDetails(
+    @SerialName("cached_tokens") val cachedTokens: Int? = null
 )
 
 @Serializable
 data class OpenAiCompletionTokensDetails(
     @SerialName("reasoning_tokens") val reasoningTokens: Int? = null
+)
+
+internal fun OpenAiUsage.toUsageUpdate() = StreamEvent.UsageUpdate(
+    tokenCount = totalTokens,
+    thoughtsTokenCount = completionTokensDetails?.reasoningTokens ?: 0,
+    promptTokens = promptTokens,
+    cachedPromptTokens = promptTokensDetails?.cachedTokens ?: 0,
+    cacheTelemetryAvailable = promptTokensDetails?.cachedTokens != null,
+    completionTokens = completionTokens,
 )
 
 @Serializable

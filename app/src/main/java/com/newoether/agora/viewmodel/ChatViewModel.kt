@@ -891,6 +891,8 @@ class ChatViewModel(
                                 thoughtTitle = it.thoughtTitle,
                                 tokenCount = it.tokenCount,
                                 promptTokens = it.promptTokens,
+                                cachedPromptTokens = it.cachedPromptTokens,
+                                cacheTelemetryAvailable = it.cacheTelemetryAvailable,
                                 completionTokens = it.completionTokens,
                                 ttftMs = it.ttftMs,
                                 status = it.status,

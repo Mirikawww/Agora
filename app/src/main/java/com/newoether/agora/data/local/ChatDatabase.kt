@@ -101,6 +101,8 @@ data class MessageEntity(
     val thoughtTitle: String? = null,
     val tokenCount: Int = 0,
     val promptTokens: Int = 0,
+    val cachedPromptTokens: Int = 0,
+    val cacheTelemetryAvailable: Boolean = false,
     val completionTokens: Int = 0,
     val ttftMs: Long = 0L,
     val status: MessageStatus = MessageStatus.SUCCESS,
@@ -208,7 +210,7 @@ abstract class ChatDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
 
     companion object {
-        const val CURRENT_VERSION = 14
+        const val CURRENT_VERSION = 16
         const val DB_NAME = "agora_db"
 
         val ALL_MIGRATIONS = listOf(
@@ -291,6 +293,16 @@ abstract class ChatDatabase : RoomDatabase() {
                     db.execSQL("ALTER TABLE messages ADD COLUMN promptTokens INTEGER NOT NULL DEFAULT 0")
                     db.execSQL("ALTER TABLE messages ADD COLUMN completionTokens INTEGER NOT NULL DEFAULT 0")
                     db.execSQL("ALTER TABLE messages ADD COLUMN ttftMs INTEGER NOT NULL DEFAULT 0")
+                }
+            },
+            object : Migration(14, 15) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE messages ADD COLUMN cachedPromptTokens INTEGER NOT NULL DEFAULT 0")
+                }
+            },
+            object : Migration(15, 16) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE messages ADD COLUMN cacheTelemetryAvailable INTEGER NOT NULL DEFAULT 0")
                 }
             }
         )

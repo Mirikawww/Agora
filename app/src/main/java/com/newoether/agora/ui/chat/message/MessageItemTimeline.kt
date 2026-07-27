@@ -196,7 +196,7 @@ internal fun segmentDetailTitle(
     detailIndex: Int
 ): String {
     return when (seg.type) {
-        "tool" -> toolDisplayName(seg.toolName)
+        "tool" -> toolDisplayName(seg.effectiveToolName())
         "transcription" -> transcriptionLabel(detailSegments, detailIndex)
         else -> stringResource(R.string.tool_thinking)
     }
@@ -238,7 +238,7 @@ internal fun compactSegmentTitle(
     return when {
         isThinking -> message.thoughtTitle ?: stringResource(R.string.thinking_ellipsis)
         isTranscribing -> message.thoughtTitle ?: stringResource(R.string.transcription_ellipsis)
-        isToolCalling || isToolInProgress -> toolDisplayName(lastSeg.toolName)
+        isToolCalling || isToolInProgress -> toolDisplayName(lastSeg.effectiveToolName())
         hasThought -> thoughtDurationTitle(thoughtMs!!, toolCount)
         toolCount > 0 -> stringResource(R.string.called_n_tools, toolCount)
         message.thoughtTitle != null -> message.thoughtTitle
@@ -410,7 +410,7 @@ private fun CompactSegmentBlock(
                                     .padding(horizontal = 10.dp, vertical = 8.dp)
                             ) {
                                 Text(
-                                    toolDisplayName(seg.toolName),
+                                    toolDisplayName(seg.effectiveToolName()),
                                     style = ChatType.meta,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontWeight = FontWeight.SemiBold
@@ -635,7 +635,7 @@ private fun TimelineInfoSegmentGroup(
                     val isTool = seg.type == "tool"
                     val isTranscription = seg.type == "transcription"
                     if (isTool) {
-                        ToolTypeIcon(seg.toolName)
+                        ToolTypeIcon(seg.effectiveToolName())
                     } else if (isTranscription) {
                         Icon(Icons.Filled.Image, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
                     } else {
@@ -645,7 +645,7 @@ private fun TimelineInfoSegmentGroup(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = when (seg.type) {
-                                "tool" -> toolDisplayName(seg.toolName)
+                                "tool" -> toolDisplayName(seg.effectiveToolName())
                                 "transcription" -> transcriptionLabel(detailSegments, detailIndex)
                                 else -> stringResource(R.string.tool_thinking)
                             },
@@ -717,7 +717,7 @@ private fun TimelineInfoSegmentCard(
             val isTool = seg.type == "tool"
             val isTranscription = seg.type == "transcription"
             if (isTool) {
-                ToolTypeIcon(seg.toolName)
+                ToolTypeIcon(seg.effectiveToolName())
             } else if (isTranscription) {
                 Icon(Icons.Filled.Image, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
             } else {
@@ -727,7 +727,7 @@ private fun TimelineInfoSegmentCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = when (seg.type) {
-                        "tool" -> toolDisplayName(seg.toolName)
+                        "tool" -> toolDisplayName(seg.effectiveToolName())
                         "transcription" -> transcriptionLabel(detailSegments, detailIndex)
                         else -> stringResource(R.string.tool_thinking)
                     },

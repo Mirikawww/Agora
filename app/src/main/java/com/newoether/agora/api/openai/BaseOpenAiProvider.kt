@@ -342,14 +342,7 @@ abstract class BaseOpenAiProvider : LlmProvider {
                 }
 
                 response.usage?.let { usage ->
-                    send(
-                        StreamEvent.UsageUpdate(
-                            tokenCount = usage.totalTokens,
-                            thoughtsTokenCount = usage.completionTokensDetails?.reasoningTokens ?: 0,
-                            promptTokens = usage.promptTokens,
-                            completionTokens = usage.completionTokens,
-                        )
-                    )
+                    send(usage.toUsageUpdate())
                 }
             } catch (e: Exception) {
                 parseFailures++

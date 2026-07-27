@@ -19,6 +19,26 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 
+/**
+ * Capability-broker calls keep their wire name for provider history, but the UI presents the
+ * concrete tool selected inside the broker arguments. This preserves connector icons and labels
+ * without corrupting the tool_call/tool_result name pair sent back to the model.
+ */
+internal fun MessageSegment.effectiveToolName(): String? {
+    if (toolName != "agora_capabilities" && toolName != "mcp_tool_invoke") return toolName
+    val args = try {
+        Json.parseToJsonElement(toolArgs ?: "{}").jsonObject
+    } catch (_: Exception) {
+        return toolName
+    }
+    if (toolName == "agora_capabilities" &&
+        (args["action"] as? JsonPrimitive)?.content?.lowercase() != "invoke"
+    ) {
+        return toolName
+    }
+    return (args["name"] as? JsonPrimitive)?.content ?: toolName
+}
+
 /** Drawable for built-in connector tools; null keeps the default wrench. */
 internal fun toolConnectorIconRes(toolName: String?): Int? {
     val raw = toolName.orEmpty()
@@ -120,8 +140,25 @@ internal fun toolDisplayName(toolName: String?): String {
 
 @Composable
 internal fun toolSummary(seg: MessageSegment): String {
-    val rawName = seg.toolName ?: ""
-    val argsJson = try { Json.parseToJsonElement(seg.toolArgs ?: "{}").jsonObject } catch (_: Exception) { null }
+    val rawName = seg.effectiveToolName() ?: ""
+    val outerArgs = try {
+        Json.parseToJsonElement(seg.toolArgs ?: "{}").jsonObject
+    } catch (_: Exception) {
+        null
+    }
+    val argsJson = if (rawName != seg.toolName) {
+        when (val nested = outerArgs?.get("arguments")) {
+            is kotlinx.serialization.json.JsonObject -> nested
+            is JsonPrimitive -> try {
+                Json.parseToJsonElement(nested.content).jsonObject
+            } catch (_: Exception) {
+                outerArgs
+            }
+            else -> outerArgs
+        }
+    } else {
+        outerArgs
+    }
     // `memory` and `skills` dispatch on an `action` argument. Map it back to the per-operation
     // name every branch below is written against, so merging those tools did not silently
     // downgrade every memory/skill row to the generic fallback label.

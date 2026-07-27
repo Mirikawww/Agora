@@ -335,7 +335,7 @@ internal fun SegmentDetailSheet(
                             // Fixed title
                             Text(
                                 text = if (selectedSegs.size > 1) compactSegmentTitle(selectedSegs, message, useLiveStatus = false)
-                                    else if (seg.type == "tool") toolDisplayName(seg.toolName)
+                                    else if (seg.type == "tool") toolDisplayName(seg.effectiveToolName())
                                     else if (seg.type == "transcription") transcriptionLabel(liveSegs, selectedSegmentIndex)
                                     else stringResource(R.string.tool_thinking),
                                 style = ChatType.detailTitle,

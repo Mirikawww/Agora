@@ -724,7 +724,8 @@ class SettingsManager(private val context: Context) {
             } catch (_: Exception) {
                 emptyList()
             }
-            val migratedPrompts = migrateLegacyDefaultPromptTitle(currentPrompts, locale)
+            val upgradedPrompts = currentPrompts.map { DefaultSystemPrompt.upgradeKnownLegacy(it, locale) }
+            val migratedPrompts = migrateLegacyDefaultPromptTitle(upgradedPrompts, locale)
             if (migratedPrompts != currentPrompts) {
                 prefs[SYSTEM_PROMPTS_JSON] = json.encodeToString(migratedPrompts)
             }

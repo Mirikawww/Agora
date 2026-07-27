@@ -81,6 +81,8 @@ data class GenerationConfig(
 
 data class GenerationContext(
     val conversationId: String? = null,
+    /** Unique generation key for request-scoped capability routing within one conversation. */
+    val capabilityRequestId: String? = null,
     val accessSavedMemories: Boolean = true,
     val accessActiveMemory: Boolean = true,
     val accessPastConversations: Boolean = true,
@@ -489,7 +491,7 @@ class GenerationManager(
             val combinedText = if (attachmentText.isNotBlank()) it.text + attachmentText else it.text
             val hasTranscription = ctx.imageTranscriptionEnabled && meta != null && meta.items.any { item -> !item.transcription.isNullOrBlank() }
             val effectiveImages = if (hasTranscription) emptyList() else it.images
-            ChatMessage(id = it.id, parentId = it.parentId, text = combinedText, images = effectiveImages, thoughts = it.thoughts, thoughtTitle = it.thoughtTitle, tokenCount = it.tokenCount, promptTokens = it.promptTokens, completionTokens = it.completionTokens, ttftMs = it.ttftMs, status = it.status, participant = it.participant, timestamp = it.timestamp, completedAt = it.completedAt, thoughtTimeMs = it.thoughtTimeMs, segments = segs, toolCall = toolCall)
+            ChatMessage(id = it.id, parentId = it.parentId, text = combinedText, images = effectiveImages, thoughts = it.thoughts, thoughtTitle = it.thoughtTitle, tokenCount = it.tokenCount, promptTokens = it.promptTokens, cachedPromptTokens = it.cachedPromptTokens, cacheTelemetryAvailable = it.cacheTelemetryAvailable, completionTokens = it.completionTokens, ttftMs = it.ttftMs, status = it.status, participant = it.participant, timestamp = it.timestamp, completedAt = it.completedAt, thoughtTimeMs = it.thoughtTimeMs, segments = segs, toolCall = toolCall)
         }.filter { it.participant != Participant.ERROR }
             .let { path ->
                 if (isRegenerate && replaceMessageId != null) {
@@ -515,24 +517,33 @@ class GenerationManager(
         val builtinTools = memoryTools + webSearchTool + ragTool + imageGenTool +
             personalizationTools + balanceTools + askTools + skillsTools + githubTools +
             shellTool + fileTool
-        // Budget the whole pool, built-ins included — the previous version only ever gated the
-        // MCP list, so seven verbose built-in schemas shipped in full on every request no matter
-        // how small the turn. Deferral hides a schema, it never removes a capability: anything
-        // deferred stays reachable through mcp_tool_search / mcp_tool_invoke.
         val toolPool = builtinTools + mcpTools
-        val deferred = mcpDeferredToolProvider.prepare(
-            allTools = toolPool,
-            contextTokens = config.contextTokens,
-        )
-        val allTools = when {
-            // Model cannot call tools at all — send no `tools` field (models.dev tool_call=false).
-            !config.toolsSupported -> emptyList()
-            deferred -> mcpDeferredToolProvider.inlineTools() + mcpDeferredToolProvider.definitions(ctx)
-            else -> toolPool
+        val userTexts = currentPath
+            .filter { it.participant == Participant.USER }
+            .map { it.text }
+        val exposure = if (config.toolsSupported) {
+            mcpDeferredToolProvider.prepare(
+                requestId = ctx.capabilityRequestId ?: conversationId,
+                allTools = toolPool,
+                contextTokens = config.contextTokens,
+                currentText = userTexts.lastOrNull().orEmpty(),
+                recentTexts = userTexts.dropLast(1).takeLast(3),
+            )
+        } else {
+            mcpDeferredToolProvider.clear(ctx.capabilityRequestId ?: conversationId)
+            null
+        }
+        val allTools = if (exposure == null) {
+            // Model cannot call tools at all — omit the `tools` field completely.
+            emptyList()
+        } else {
+            exposure.inlineTools + mcpDeferredToolProvider.definitions(ctx)
         }
         DebugLog.d(
             "AgoraTiming",
-            "tools: builtin=${builtinTools.size} mcp=${mcpTools.size} deferred=$deferred " +
+            "tools: builtin=${builtinTools.size} mcp=${mcpTools.size} " +
+                "route=${exposure?.route?.mode ?: "unsupported"} " +
+                "deferred=${exposure?.deferredTools?.size ?: 0} " +
                 "supported=${config.toolsSupported} total=${allTools.size} " +
                 "(~${McpDeferredToolProvider.estimateSchemaTokens(allTools)} tok)"
         )
@@ -583,6 +594,11 @@ class GenerationManager(
         // Destructure into locals so the body below reads exactly as before.
         val (onStreamUpdate, onLoadingChange, onGeneratingIdChange, onStreamClear, isLatestPersist) = callbacks
         val provider = getProviderInstance(config.providerName)
+        // modelMessageId can be reused by retry/regenerate while the old coroutine is still
+        // unwinding. Capability state needs a unique generation token so the old finally cannot
+        // clear the replacement generation's registry.
+        val capabilityRequestId = UUID.randomUUID().toString()
+        val requestCtx = ctx.copy(capabilityRequestId = capabilityRequestId)
 
         onLoadingChange(true)
         onGeneratingIdChange(conversationId)
@@ -627,12 +643,7 @@ class GenerationManager(
         // counter holds the in-flight request's figure; it is settled into the running total
         // after each collect. This used to be a single field that each round OVERWROTE, so the
         // number shown was the last round only and understated what the turn actually cost.
-        var totalTokenCount = 0
-        var roundTokenCount = 0
-        var roundPromptTokens = 0
-        var roundCompletionTokens = 0
-        var totalPromptTokens = 0
-        var totalCompletionTokens = 0
+        val usageAccumulator = GenerationUsageAccumulator()
         /** Epoch-ms when the current HTTP request was dispatched (reset each round). */
         var requestDispatchMs = 0L
         /** TTFT for this turn (first TextChunk or ThoughtChunk after request). */
@@ -706,7 +717,14 @@ class GenerationManager(
             }
 
             if (currentStatus != MessageStatus.ERROR) {
-            val (currentPath, rawProviderConfig) = buildApiPath(parentId, conversationId, isRegenerate, replaceMessageId, config, ctx)
+            val (currentPath, rawProviderConfig) = buildApiPath(
+                parentId,
+                conversationId,
+                isRegenerate,
+                replaceMessageId,
+                config,
+                requestCtx,
+            )
             val providerConfig = if (transcriptionPerformed) rawProviderConfig.copy(includeImages = false) else rawProviderConfig
 
             var toolCallData: ToolCallData? = null
@@ -718,26 +736,31 @@ class GenerationManager(
 
             var lastEmitMs = 0L
 
-            fun modelMessage() = ChatMessage(
-                id = modelMessageId, parentId = parentId,
-                text = totalText, thoughts = totalThoughts.ifBlank { null },
-                thoughtTitle = totalThoughtTitle, tokenCount = totalTokenCount + roundTokenCount,
-                promptTokens = totalPromptTokens + roundPromptTokens,
-                completionTokens = totalCompletionTokens + roundCompletionTokens,
-                ttftMs = ttftMs,
-                status = currentStatus, participant = Participant.MODEL,
-                timestamp = startTime, thoughtTimeMs = totalThoughtTimeMs,
-                modelName = modelName, toolCall = toolCallData,
-                images = generatedImages.toList(),
-                segments = buildLiveSegments(
-                    segments,
-                    currentAnswerBuf,
-                    currentThoughtBuf,
-                    currentThoughtSignature,
-                    liveThoughtDurationMs()
-                ),
-                retryText = retryText
-            )
+            fun modelMessage(): ChatMessage {
+                val usage = usageAccumulator.snapshot()
+                return ChatMessage(
+                    id = modelMessageId, parentId = parentId,
+                    text = totalText, thoughts = totalThoughts.ifBlank { null },
+                    thoughtTitle = totalThoughtTitle, tokenCount = usage.tokenCount,
+                    promptTokens = usage.promptTokens,
+                    cachedPromptTokens = usage.cachedPromptTokens,
+                    cacheTelemetryAvailable = usage.cacheTelemetryAvailable,
+                    completionTokens = usage.completionTokens,
+                    ttftMs = ttftMs,
+                    status = currentStatus, participant = Participant.MODEL,
+                    timestamp = startTime, thoughtTimeMs = totalThoughtTimeMs,
+                    modelName = modelName, toolCall = toolCallData,
+                    images = generatedImages.toList(),
+                    segments = buildLiveSegments(
+                        segments,
+                        currentAnswerBuf,
+                        currentThoughtBuf,
+                        currentThoughtSignature,
+                        liveThoughtDurationMs()
+                    ),
+                    retryText = retryText
+                )
+            }
 
             fun flushAnswerSegment() {
                 if (currentAnswerBuf.isNotEmpty()) {
@@ -805,9 +828,7 @@ class GenerationManager(
                         if (event.signature != null) currentThoughtSignature = event.signature
                     }
                     is StreamEvent.UsageUpdate -> {
-                        if (event.tokenCount > 0) roundTokenCount = event.tokenCount
-                        if (event.promptTokens > 0) roundPromptTokens = event.promptTokens
-                        if (event.completionTokens > 0) roundCompletionTokens = event.completionTokens
+                        usageAccumulator.update(event)
                         if (totalText.isEmpty() && event.thoughtsTokenCount > 0) {
                             currentStatus = MessageStatus.THINKING
                             if (currentThoughtStartMs == null) {
@@ -852,7 +873,7 @@ class GenerationManager(
                         currentStatus = MessageStatus.TOOL_CALLING
                         onStreamUpdate(modelMessage())
                         lastEmitMs = System.currentTimeMillis()
-                        val result = executeTool(event.name, args, ctx)
+                        val result = executeTool(event.name, args, requestCtx)
                         generatedImages.addAll(imageGenToolProvider.drainImages())
                         val clipped = result.take(Constants.MAX_TOOL_RESULT_LENGTH)
                         val idx = segments.indexOfLast { it.toolCallId == callId }
@@ -901,7 +922,7 @@ class GenerationManager(
                         onStreamUpdate(modelMessage())
                         lastEmitMs = System.currentTimeMillis()
                         val tcds = normalizedCalls.map { (call, args, callId) ->
-                            val result = executeTool(call.name, args, ctx)
+                            val result = executeTool(call.name, args, requestCtx)
                             generatedImages.addAll(imageGenToolProvider.drainImages())
                             val clipped = result.take(Constants.MAX_TOOL_RESULT_LENGTH)
                             val idx = segments.indexOfLast { it.toolCallId == callId }
@@ -942,12 +963,7 @@ class GenerationManager(
                 handleStreamEvent(event)
             }
             // Settle this request's usage before any tool round issues the next one.
-            totalTokenCount += roundTokenCount
-            roundTokenCount = 0
-            totalPromptTokens += roundPromptTokens
-            roundPromptTokens = 0
-            totalCompletionTokens += roundCompletionTokens
-            roundCompletionTokens = 0
+            usageAccumulator.settleRound()
             finishCurrentThoughtTiming()
             // Always emit final state after collection completes
             if (generationJob?.isCancelled != true) {
@@ -1024,12 +1040,7 @@ class GenerationManager(
                 provider.generateResponse(apiToolPath, providerConfig).collect { event ->
                     handleStreamEvent(event)
                 }
-                totalTokenCount += roundTokenCount
-                roundTokenCount = 0
-                totalPromptTokens += roundPromptTokens
-                roundPromptTokens = 0
-                totalCompletionTokens += roundCompletionTokens
-                roundCompletionTokens = 0
+                usageAccumulator.settleRound()
                 finishCurrentThoughtTiming()
                 // Always emit final state after tool round completes
                 onStreamUpdate(modelMessage())
@@ -1108,13 +1119,16 @@ class GenerationManager(
                             val segmentsJson = finalSegments?.let { Json.encodeToString(it) }
                             val effectiveParentId = parentId
                             val finishedAt = System.currentTimeMillis()
+                            val finalUsage = usageAccumulator.snapshot()
                             conversations.upsertMessage(MessageEntity(
                                 id = modelMessageId, conversationId = conversationId, parentId = effectiveParentId,
                                 text = totalText, images = generatedImages.toList(),
                                 thoughts = totalThoughts.ifBlank { null },
-                                thoughtTitle = totalThoughtTitle, tokenCount = totalTokenCount + roundTokenCount,
-                                promptTokens = totalPromptTokens + roundPromptTokens,
-                                completionTokens = totalCompletionTokens + roundCompletionTokens,
+                                thoughtTitle = totalThoughtTitle, tokenCount = finalUsage.tokenCount,
+                                promptTokens = finalUsage.promptTokens,
+                                cachedPromptTokens = finalUsage.cachedPromptTokens,
+                                cacheTelemetryAvailable = finalUsage.cacheTelemetryAvailable,
+                                completionTokens = finalUsage.completionTokens,
                                 ttftMs = ttftMs,
                                 status = currentStatus, participant = Participant.MODEL, timestamp = startTime,
                                 completedAt = finishedAt,
@@ -1135,6 +1149,7 @@ class GenerationManager(
                 onStreamClear()
                 onLoadingChange(false)
                 onGeneratingIdChange(null)
+                mcpDeferredToolProvider.clear(capabilityRequestId)
                 // Only the generate() that successfully started the FGS may stop it.
                 if (fgsStarted) {
                     try {

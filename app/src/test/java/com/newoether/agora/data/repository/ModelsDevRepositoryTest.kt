@@ -51,7 +51,7 @@ class ModelsDevRepositoryTest {
     }
 
     @Test
-    fun `explicit tool_call false is recorded and survives alias merging`() {
+    fun `tool restrictions stay scoped to the provider that declared them`() {
         val catalog = """
             {
               "providers": {
@@ -71,9 +71,49 @@ class ModelsDevRepositoryTest {
 
         val parsed = parseModelsDevCapabilities(catalog)
 
-        // Provider "b" lists the same id without tool_call (permissive default). The AND merge
-        // must keep the restriction from "a" rather than letting the sibling re-enable tools.
-        assertEquals(false, parsed["*:embed-1"]?.tools)
+        assertEquals(false, parsed["a:embed-1"]?.tools)
+        assertEquals(true, parsed["b:embed-1"]?.tools)
+        assertEquals(
+            false,
+            findModelsDevCapabilities(parsed, "embed-1", providerName = "a").tools,
+        )
+        assertEquals(
+            true,
+            findModelsDevCapabilities(parsed, "embed-1", providerName = "b").tools,
+        )
+        // An unknown/custom relay must not inherit an unrelated provider's false restriction.
+        assertEquals(
+            true,
+            findModelsDevCapabilities(parsed, "embed-1", providerName = "custom relay").tools,
+        )
+    }
+
+    @Test
+    fun `single provider false never leaks through provider agnostic fallback`() {
+        val parsed = parseModelsDevCapabilities(
+            """
+            {
+              "providers": {
+                "embedding_vendor": {
+                  "models": {
+                    "shared-model-name": { "tool_call": false }
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(false, parsed["embeddingvendor:shared-model-name"]?.tools)
+        assertEquals(true, parsed["*:shared-model-name"]?.tools)
+        assertEquals(
+            true,
+            findModelsDevCapabilities(
+                parsed,
+                "shared-model-name",
+                providerName = "unrelated custom relay",
+            ).tools,
+        )
     }
 
     @Test

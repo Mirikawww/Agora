@@ -25,6 +25,9 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
+import java.net.URI
+
+private const val ANTHROPIC_API_HOST = "api.anthropic.com"
 
 @Serializable
 internal data class AnthropicRequest(
@@ -38,15 +41,44 @@ internal data class AnthropicRequest(
     val tools: List<AnthropicTool>? = null,
     val temperature: Float? = null,
     @SerialName("top_p") val topP: Float? = null,
-    val speed: String? = null
+    val speed: String? = null,
+    @SerialName("cache_control") val cacheControl: AnthropicCacheControl? = null
 )
 
 @Serializable
 internal data class AnthropicTool(
     val name: String,
     val description: String,
-    @SerialName("input_schema") val inputSchema: JsonObject
+    @SerialName("input_schema") val inputSchema: JsonObject,
+    @SerialName("cache_control") val cacheControl: AnthropicCacheControl? = null
 )
+
+@Serializable
+internal data class AnthropicCacheControl(
+    val type: String = "ephemeral"
+)
+
+/**
+ * A custom Anthropic-compatible endpoint may reject Anthropic-only cache controls.
+ */
+internal fun isOfficialAnthropicEndpoint(baseUrl: String?): Boolean {
+    if (baseUrl.isNullOrBlank()) return true
+    return runCatching { URI(baseUrl.trim()).host.equals(ANTHROPIC_API_HOST, ignoreCase = true) }
+        .getOrDefault(false)
+}
+
+/**
+ * Anthropic treats the final marked tool as a breakpoint after the complete tool prefix.
+ * Preserve registry order so an unchanged capability list produces a byte-stable prefix.
+ */
+internal fun List<AnthropicTool>.withStablePrefixCacheBreakpoint(
+    cacheControl: AnthropicCacheControl?
+): List<AnthropicTool> {
+    if (isEmpty() || cacheControl == null) return this
+    return mapIndexed { index, tool ->
+        tool.copy(cacheControl = cacheControl.takeIf { index == lastIndex })
+    }
+}
 
 @Serializable
 internal data class AnthropicThinking(
@@ -124,8 +156,23 @@ internal data class AnthropicMessageInfo(
 @Serializable
 internal data class AnthropicUsage(
     @SerialName("input_tokens") val inputTokens: Int? = null,
+    @SerialName("cache_creation_input_tokens") val cacheCreationInputTokens: Int? = null,
+    @SerialName("cache_read_input_tokens") val cacheReadInputTokens: Int? = null,
     @SerialName("output_tokens") val outputTokens: Int? = null
 )
+
+internal fun AnthropicUsage.toUsageUpdate(outputTokens: Int = this.outputTokens ?: 0): StreamEvent.UsageUpdate {
+    val cached = cacheReadInputTokens ?: 0
+    val totalInput = (inputTokens ?: 0) + (cacheCreationInputTokens ?: 0) + cached
+    return StreamEvent.UsageUpdate(
+        tokenCount = totalInput + outputTokens,
+        promptTokens = totalInput,
+        cachedPromptTokens = cached,
+        cacheTelemetryAvailable =
+            cacheCreationInputTokens != null || cacheReadInputTokens != null,
+        completionTokens = outputTokens,
+    )
+}
 
 class AnthropicProvider : LlmProvider {
     override val name: String = Constants.PROVIDER_ANTHROPIC
@@ -138,6 +185,8 @@ class AnthropicProvider : LlmProvider {
     ): Flow<StreamEvent> = flow {
         val baseUrl = config.baseUrl?.trimEnd('/') ?: "https://api.anthropic.com/v1"
         val modelName = config.modelId
+        val cacheControl = AnthropicCacheControl()
+            .takeIf { isOfficialAnthropicEndpoint(baseUrl) }
 
         val validatedPath = prepareMessages(messages, config.maxContextWindow)
 
@@ -208,7 +257,7 @@ class AnthropicProvider : LlmProvider {
                 description = td.function.description,
                 inputSchema = td.function.parameters.asJsonObject()
             )
-        }
+        }?.withStablePrefixCacheBreakpoint(cacheControl)
 
         val requestBody = AnthropicRequest(
             model = modelName,
@@ -220,7 +269,8 @@ class AnthropicProvider : LlmProvider {
             tools = anthropicTools,
             temperature = config.temperature,
             topP = config.topP,
-            speed = if (config.fastEnabled) "fast" else null
+            speed = if (config.fastEnabled) "fast" else null,
+            cacheControl = cacheControl
         )
 
         try {
@@ -254,7 +304,7 @@ class AnthropicProvider : LlmProvider {
                             var toolUseName: String? = null
                     var toolUseArgs = StringBuilder()
                     var thinkingSignature: String? = null
-                    var messageInputTokens = 0
+                    var messageUsage = AnthropicUsage()
                     val liveness = com.newoether.agora.api.util.StreamLiveness()
 
                     while (currentCoroutineContext().isActive) {
@@ -282,7 +332,7 @@ class AnthropicProvider : LlmProvider {
                                 val event = json.decodeFromString<AnthropicStreamEvent>(jsonStr)
                                 when (event.type) {
                                     "message_start" -> {
-                                        event.message?.usage?.inputTokens?.let { messageInputTokens = it }
+                                        event.message?.usage?.let { messageUsage = it }
                                     }
                                     "content_block_start" -> {
                                         event.contentBlock?.let { block ->
@@ -326,12 +376,7 @@ class AnthropicProvider : LlmProvider {
                                     }
                                     "message_delta" -> {
                                         event.usage?.let { u ->
-                                            val total = messageInputTokens + (u.outputTokens ?: 0)
-                                            emit(StreamEvent.UsageUpdate(
-                                                tokenCount = total,
-                                                promptTokens = messageInputTokens,
-                                                completionTokens = u.outputTokens ?: 0,
-                                            ))
+                                            emit(messageUsage.toUsageUpdate(u.outputTokens ?: 0))
                                         }
                                     }
                                 }

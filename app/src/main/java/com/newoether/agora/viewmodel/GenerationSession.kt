@@ -408,6 +408,8 @@ class GenerationSession(
             thoughtTitle = thoughtTitle,
             tokenCount = tokenCount,
             promptTokens = promptTokens,
+            cachedPromptTokens = cachedPromptTokens,
+            cacheTelemetryAvailable = cacheTelemetryAvailable,
             completionTokens = completionTokens,
             ttftMs = ttftMs,
             status = MessageStatus.STOPPED,

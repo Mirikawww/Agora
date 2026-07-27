@@ -71,6 +71,11 @@ class DataExporter(
         val thoughts: String? = null,
         val thoughtTitle: String? = null,
         val tokenCount: Int = 0,
+        val promptTokens: Int = 0,
+        val cachedPromptTokens: Int = 0,
+        val cacheTelemetryAvailable: Boolean = false,
+        val completionTokens: Int = 0,
+        val ttftMs: Long = 0L,
         val status: String = "SUCCESS",
         val participant: String = "MODEL",
         val timestamp: Long,
@@ -244,9 +249,29 @@ class DataExporter(
                 val messages = allMessages.map { m ->
                     // Only include images that were successfully exported
                     val exportedImages = imageMap[m.id] ?: emptyList()
-                    ExportMessageEntity(m.id, m.conversationId, m.parentId, m.text, exportedImages,
-                        m.thoughts, m.thoughtTitle, m.tokenCount, m.status.name, m.participant.name,
-                        m.timestamp, m.completedAt, m.thoughtTimeMs, m.modelName, m.toolCallJson, m.attachmentMeta)
+                    ExportMessageEntity(
+                        id = m.id,
+                        conversationId = m.conversationId,
+                        parentId = m.parentId,
+                        text = m.text,
+                        images = exportedImages,
+                        thoughts = m.thoughts,
+                        thoughtTitle = m.thoughtTitle,
+                        tokenCount = m.tokenCount,
+                        promptTokens = m.promptTokens,
+                        cachedPromptTokens = m.cachedPromptTokens,
+                        cacheTelemetryAvailable = m.cacheTelemetryAvailable,
+                        completionTokens = m.completionTokens,
+                        ttftMs = m.ttftMs,
+                        status = m.status.name,
+                        participant = m.participant.name,
+                        timestamp = m.timestamp,
+                        completedAt = m.completedAt,
+                        thoughtTimeMs = m.thoughtTimeMs,
+                        modelName = m.modelName,
+                        toolCallJson = m.toolCallJson,
+                        attachmentMeta = m.attachmentMeta,
+                    )
                 }
                 zip.putNextEntry(ZipEntry("conversations.json"))
                 Json.encodeToStream(ExportConversations(conversations, messages), zip)

@@ -56,9 +56,13 @@ data class ChatMessage(
     val thoughts: String? = null,
     val thoughtTitle: String? = null,
     val tokenCount: Int = 0,
-    /** Prompt (input/upload) tokens for this round. 0 = not reported. */
+    /** Prompt input tokens for this generation. 0 = not reported. */
     val promptTokens: Int = 0,
-    /** Completion (output/download) tokens for this round. 0 = not reported. */
+    /** Prompt tokens served from a provider cache. Included in [promptTokens]. */
+    val cachedPromptTokens: Int = 0,
+    /** True only when every prompt-bearing request reported its cache-token split. */
+    val cacheTelemetryAvailable: Boolean = false,
+    /** Completion output tokens for this generation. 0 = not reported. */
     val completionTokens: Int = 0,
     /** Time-to-first-token in ms (client-side). 0 = not measured. */
     val ttftMs: Long = 0L,

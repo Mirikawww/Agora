@@ -8,314 +8,472 @@ import com.newoether.agora.api.ToolProperty
 import com.newoether.agora.util.DebugLog
 import com.newoether.agora.util.TokenEstimator
 import com.newoether.agora.viewmodel.GenerationContext
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
 /**
- * Deferred MCP tool exposure — mirrors Cherry Studio's tool deferral design.
+ * Per-conversation capability exposure.
  *
- * Problem: with 3 connectors (Notion 20 + Todoist 45 + built-ins ~16 = 81 tools)
- * the total schema easily exceeds provider limits (Anthropic caps at 64 tools;
- * large schemas also inflate prompt tokens unnecessarily on every request).
+ * Large registries are represented by a handful of directly relevant tools plus one compact
+ * broker. The broker is not a lossy replacement: it can search, return the complete schema, and
+ * invoke every enabled tool. Small registries remain direct because an extra tool round would cost
+ * more than their schemas.
  *
- * Solution: when the MCP tool pool is large, replace the full schema list with
- * three lightweight meta-tools the model can use to discover and invoke any tool:
- *
- *   mcp_tool_search  — list available tools (name + one-line description)
- *   mcp_tool_inspect — fetch the full input schema for one tool by name
- *   mcp_tool_invoke  — execute a tool by name with a JSON arguments string
- *
- * The model pays a small extra round-trip on first use (search → inspect → invoke),
- * but the upfront token cost drops from O(all_schemas) to O(3_meta_tools) = ~200 tokens.
- * For infrequent tool use this is a net win; for heavy tool use the model can cache
- * the inspect result across calls in the same turn.
- *
- * **No tool is ever removed.** Deferral changes the *entry point*, not the capability:
- * every MCP tool stays reachable through mcp_tool_invoke, which forwards to the same
- * execution path a direct call would take. This is the difference between deferral and
- * truncating the list to fit a provider cap — truncation would genuinely cost the model
- * tools, deferral costs it one discovery round-trip.
- *
- * Deferral triggers when either:
- *   • total tools would exceed [MAX_INLINE_TOOLS] (provider cap), or
- *   • the estimated schema cost of deferrable tools exceeds 10% of the model's real token
- *     window, and the pool is big enough for the meta-tools to pay for themselves.
- *
- * When deferral is NOT triggered the provider returns an empty definitions list
- * and [McpToolProvider] keeps serving the full tool schemas as usual.
+ * State is keyed by conversation. Agora permits concurrent generations, so a process-global
+ * `deferredTools` list would let one conversation search or invoke another conversation's tools.
  */
 class McpDeferredToolProvider(
-    /**
-     * Executes a tool once the model picks it via mcp_tool_invoke.
-     *
-     * Routes across *every* tool provider, not just MCP: built-in tools are deferrable too,
-     * and they must stay executable while their schema is withheld.
-     */
-    private val deferredExecute: suspend (name: String, arguments: String, ctx: GenerationContext) -> String,
+    private val deferredExecute: suspend (
+        name: String,
+        arguments: String,
+        ctx: GenerationContext,
+    ) -> String,
 ) : ToolProvider {
 
-    // ── State set once per buildApiPath call ─────────────────────────────────
+    private data class RequestState(
+        val allTools: List<ToolDefinition>,
+        val inlineTools: List<ToolDefinition>,
+        val deferredTools: List<ToolDefinition>,
+        val brokerDefinition: ToolDefinition?,
+        val route: CapabilityRoute,
+    )
 
-    @Volatile private var deferredTools: List<ToolDefinition> = emptyList()
-    @Volatile private var inlineTools: List<ToolDefinition> = emptyList()
-    @Volatile private var deferred: Boolean = false
+    private val states = ConcurrentHashMap<String, RequestState>()
 
     /**
-     * Called by [GenerationManager] with the full MCP tool list before each generation.
-     * Returns true if deferral was activated (caller should drop mcpTools from allTools
-     * and use [definitions] instead), false if everything fits inline.
+     * Builds and stores the exposure plan for one generation.
+     *
+     * [contextTokens] is retained for diagnostics. Upload cost is absolute, not a percentage of a
+     * context window, so it no longer weakens routing merely because a model has a 1M-token window.
      */
     fun prepare(
+        requestId: String,
         allTools: List<ToolDefinition>,
         contextTokens: Int,
-    ): Boolean {
-        val deferredNames = selectDeferred(allTools, contextTokens)
-        // Keep the full pool addressable by mcp_tool_invoke: a tool that stayed inline is
-        // still a legal invoke target, so callers can reach anything either way.
-        deferredTools = allTools.filter { it.function.name in deferredNames }
-        inlineTools = allTools.filter { it.function.name !in deferredNames }
-        deferred = deferredTools.isNotEmpty()
-        if (deferred) {
+        currentText: String,
+        recentTexts: List<String>,
+    ): ToolExposurePlan {
+        val plan = plan(
+            tools = allTools,
+            contextTokens = contextTokens,
+            currentText = currentText,
+            recentTexts = recentTexts,
+        )
+        val broker = if (plan.deferredTools.isNotEmpty()) {
+            brokerDefinition(allTools)
+        } else {
+            null
+        }
+        states[requestId] = RequestState(
+            allTools = allTools,
+            inlineTools = plan.inlineTools,
+            deferredTools = plan.deferredTools,
+            brokerDefinition = broker,
+            route = plan.route,
+        )
+        // android.util.Log is a stub in local JVM tests; diagnostics must never affect routing.
+        runCatching {
             DebugLog.d(
                 "AgoraTiming",
-                "tools deferred: ${deferredTools.size}/${allTools.size} " +
-                    "(~${estimateSchemaTokens(deferredTools)} tok saved, " +
-                    "inline=${inlineTools.size} ctx=$contextTokens)"
+                "capability route=${plan.route.mode} direct=${plan.inlineTools.size} " +
+                    "broker=${broker != null} deferred=${plan.deferredTools.size}/${allTools.size} " +
+                    "schema=${plan.inlineSchemaTokens}tok ctx=$contextTokens",
             )
         }
-        return deferred
+        return plan
     }
 
-    /** The tools that stayed inline for this request. */
-    fun inlineTools(): List<ToolDefinition> = inlineTools
+    fun inlineTools(requestId: String): List<ToolDefinition> =
+        states[requestId]?.inlineTools.orEmpty()
 
-    fun isDeferred(): Boolean = deferred
+    fun isDeferred(requestId: String): Boolean =
+        states[requestId]?.deferredTools?.isNotEmpty() == true
 
-    // ── ToolProvider interface ────────────────────────────────────────────────
-
-    override fun definitions(ctx: GenerationContext): List<ToolDefinition> {
-        if (!deferred || deferredTools.isEmpty()) return emptyList()
-        return META_TOOLS
+    fun clear(requestId: String) {
+        states.remove(requestId)
     }
+
+    override fun definitions(ctx: GenerationContext): List<ToolDefinition> =
+        state(ctx)?.brokerDefinition?.let(::listOf).orEmpty()
 
     override fun handles(name: String): Boolean = name in META_TOOL_NAMES
 
-    override suspend fun execute(name: String, arguments: String, ctx: GenerationContext): String {
-        val args = try {
-            Json.parseToJsonElement(arguments.ifBlank { "{}" }) as? JsonObject ?: JsonObject(emptyMap())
-        } catch (_: Exception) {
-            JsonObject(emptyMap())
-        }
+    override suspend fun execute(
+        name: String,
+        arguments: String,
+        ctx: GenerationContext,
+    ): String {
+        val state = state(ctx) ?: return errorJson(
+            code = "capability_state_missing",
+            hint = "The generation's capability registry is no longer active.",
+        )
+        val args = parseObject(arguments)
         return when (name) {
-            TOOL_SEARCH  -> handleSearch(args)
-            TOOL_INSPECT -> handleInspect(args)
-            TOOL_INVOKE  -> handleInvoke(args, ctx)
-            else         -> buildJsonObject { put("error", "unknown_meta_tool") }.toString()
+            TOOL_BROKER -> when (args.string("action")?.lowercase()) {
+                ACTION_SEARCH -> handleSearch(state, args)
+                ACTION_INSPECT -> handleInspect(state, args)
+                ACTION_INVOKE -> handleInvoke(state, args, ctx)
+                else -> errorJson(
+                    code = "invalid_action",
+                    hint = "Use action=search, action=inspect, or action=invoke.",
+                )
+            }
+            // Compatibility for tool-call history created by older Agora builds.
+            LEGACY_SEARCH -> handleSearch(state, args)
+            LEGACY_INSPECT -> handleInspect(state, args)
+            LEGACY_INVOKE -> handleInvoke(state, args, ctx)
+            else -> errorJson("unknown_capability_tool")
         }
     }
 
-    // ── Meta-tool handlers ───────────────────────────────────────────────────
+    private fun state(ctx: GenerationContext): RequestState? =
+        (ctx.capabilityRequestId ?: ctx.conversationId)?.let(states::get)
 
-    private fun handleSearch(args: JsonObject): String {
-        val query = (args["query"] as? JsonPrimitive)?.content?.trim()?.lowercase()
-        val tools = deferredTools.filter { tool ->
-            if (query.isNullOrBlank()) true
-            else tool.function.name.lowercase().contains(query) ||
-                tool.function.description.lowercase().contains(query)
-        }
+    private fun handleSearch(state: RequestState, args: JsonObject): String {
+        val query = args.string("query").orEmpty()
+        val ranked = CapabilityRouter.rank(query, emptyList(), state.allTools)
+        val cursor = args.int("cursor").coerceAtLeast(0)
+        val limit = args.int("limit", DEFAULT_SEARCH_RESULTS).coerceIn(1, MAX_SEARCH_RESULTS)
+        // Keep zero-score entries after relevant matches. This makes every enabled tool reachable
+        // through cursor pagination even when a new connector uses vocabulary the local router
+        // has never seen.
+        val matches = ranked.drop(cursor).take(limit).map { it.tool }
+        val nextCursor = (cursor + matches.size).takeIf { it < ranked.size }
+        val lexicalMatches = ranked.count { it.score > 0 }
+
         return buildJsonObject {
-            put("total", tools.size)
-            put("hint", "Call mcp_tool_inspect with a name to get the full schema, then mcp_tool_invoke to run it.")
+            put("query", query)
+            put("total", ranked.size)
+            put("lexical_matches", lexicalMatches)
+            put("cursor", cursor)
+            nextCursor?.let { put("next_cursor", it) }
+            put(
+                "hint",
+                if (matches.isEmpty()) {
+                    "No more results. Search with a connector or operation name."
+                } else {
+                    "Use action=inspect with an exact name for its full schema, then action=invoke. " +
+                        "Continue with next_cursor when present."
+                },
+            )
             putJsonArray("tools") {
-                tools.forEach { tool ->
+                matches.forEach { tool ->
                     add(buildJsonObject {
                         put("name", tool.function.name)
-                        // First sentence of description only — keeps search results concise.
-                        put("description", tool.function.description.substringBefore(". ").take(120))
+                        put("description", tool.function.description.take(240))
                     })
                 }
             }
         }.toString()
     }
 
-    private fun handleInspect(args: JsonObject): String {
-        val toolName = (args["name"] as? JsonPrimitive)?.content?.trim() ?: run {
-            return buildJsonObject { put("error", "missing_name") }.toString()
-        }
-        val tool = deferredTools.firstOrNull { it.function.name == toolName } ?: run {
-            return buildJsonObject {
-                put("error", "tool_not_found")
-                put("name", toolName)
-                put("hint", "Call mcp_tool_search to see available tool names.")
-            }.toString()
-        }
+    private fun handleInspect(state: RequestState, args: JsonObject): String {
+        val name = args.string("name") ?: return errorJson("missing_name")
+        val tool = state.allTools.firstOrNull { it.function.name == name }
+            ?: return errorJson("tool_not_found", "Search enabled capabilities first.")
+        val schema = tool.completeParameters().asJsonObject()
+        val schemaText = schema.toString()
+        val cursor = args.int("cursor").coerceIn(0, schemaText.length)
+        val maxChars = args.int("max_chars", DEFAULT_SCHEMA_CHUNK_CHARS)
+            .coerceIn(MIN_SCHEMA_CHUNK_CHARS, MAX_SCHEMA_CHUNK_CHARS)
+        val end = (cursor + maxChars).coerceAtMost(schemaText.length)
+        val isCompleteObject = cursor == 0 && end == schemaText.length
         return buildJsonObject {
             put("name", tool.function.name)
             put("description", tool.function.description)
-            put("input_schema", tool.function.parameters.rawSchema
-                ?: buildJsonObject {
-                    put("type", "object")
-                    putJsonArray("required") {
-                        tool.function.parameters.required.forEach { add(JsonPrimitive(it)) }
-                    }
-                    put("properties", buildJsonObject {
-                        tool.function.parameters.properties.forEach { (k, v) ->
-                            put(k, buildJsonObject {
-                                put("type", v.type)
-                                put("description", v.description)
-                            })
-                        }
-                    })
-                }
-            )
+            put("complete", end == schemaText.length)
+            if (isCompleteObject) {
+                put("input_schema", schema)
+            } else {
+                // A JSON string chunk keeps the outer tool result valid; blindly taking the first
+                // 100k characters would produce malformed JSON and silently lose schema suffixes.
+                put("input_schema_json_chunk", schemaText.substring(cursor, end))
+                put("cursor", cursor)
+                if (end < schemaText.length) put("next_cursor", end)
+            }
         }.toString()
     }
 
-    private suspend fun handleInvoke(args: JsonObject, ctx: GenerationContext): String {
-        val toolName = (args["name"] as? JsonPrimitive)?.content?.trim() ?: run {
-            return buildJsonObject { put("error", "missing_name") }.toString()
+    private suspend fun handleInvoke(
+        state: RequestState,
+        args: JsonObject,
+        ctx: GenerationContext,
+    ): String {
+        val name = args.string("name") ?: return errorJson("missing_name")
+        if (state.allTools.none { it.function.name == name }) {
+            return errorJson("tool_not_found", "Search enabled capabilities first.")
         }
-        // Validate the tool exists in deferred set before forwarding
-        if (deferredTools.none { it.function.name == toolName }) {
-            return buildJsonObject {
-                put("error", "tool_not_found")
-                put("name", toolName)
-                put("hint", "Call mcp_tool_search to discover available tools.")
-            }.toString()
+        val toolArgs = when (val value = args["arguments"]) {
+            null -> "{}"
+            is JsonPrimitive -> value.contentOrNull?.takeIf(String::isNotBlank) ?: "{}"
+            else -> value.toString()
         }
-        val toolArgs = (args["arguments"] as? JsonPrimitive)?.content?.trim() ?: "{}"
-        return deferredExecute(toolName, toolArgs, ctx)
+        return deferredExecute(name, toolArgs, ctx)
     }
 
-    // ── Threshold logic ───────────────────────────────────────────────────────
-
     companion object {
-        /** Hard cap on total inline tools (Anthropic and most providers limit to 64). */
-        const val MAX_INLINE_TOOLS = 64
+        /** Provider wire cap, including the broker itself. */
+        const val MAX_WIRE_TOOLS = 64
 
-        /** Share of the model's real token window that inline tool schemas may occupy. */
-        private const val DEFER_THRESHOLD_PCT = 10
+        /** Pools at or above this size use Top-K + broker even when every schema is terse. */
+        const val LARGE_REGISTRY_TOOLS = 12
 
-        /** Used when models.dev has no `limit.context` for the model. */
-        private const val FALLBACK_CONTEXT_TOKENS = 32_000
+        /** Absolute schema budget for a direct pool; context-window size does not change upload. */
+        const val MAX_INLINE_SCHEMA_TOKENS = 1_500
 
-        /**
-         * Below this many deferrable tools, inlining beats the discovery round-trip.
-         * Guards against paying meta-tool overhead to hide a handful of small schemas.
-         */
-        private const val MIN_AUTO_DEFER_COUNT = 5
+        const val TOP_K_DIRECT_TOOLS = 6
+        private const val DEFAULT_SEARCH_RESULTS = 10
+        private const val MAX_SEARCH_RESULTS = 20
+        private const val DEFAULT_SCHEMA_CHUNK_CHARS = 30_000
+        private const val MIN_SCHEMA_CHUNK_CHARS = 1_000
+        private const val MAX_SCHEMA_CHUNK_CHARS = 40_000
 
-        /** Static cost of the three meta-tools; deferral must save at least this much. */
-        private const val META_TOOLS_OVERHEAD_TOKENS = 500
+        const val TOOL_BROKER = "agora_capabilities"
+        const val LEGACY_SEARCH = "mcp_tool_search"
+        const val LEGACY_INSPECT = "mcp_tool_inspect"
+        const val LEGACY_INVOKE = "mcp_tool_invoke"
+        const val ACTION_SEARCH = "search"
+        const val ACTION_INSPECT = "inspect"
+        const val ACTION_INVOKE = "invoke"
 
-        const val TOOL_SEARCH  = "mcp_tool_search"
-        const val TOOL_INSPECT = "mcp_tool_inspect"
-        const val TOOL_INVOKE  = "mcp_tool_invoke"
-
-        val META_TOOL_NAMES = setOf(TOOL_SEARCH, TOOL_INSPECT, TOOL_INVOKE)
-
-        private val META_TOOLS: List<ToolDefinition> = listOf(
-            ToolDefinition(function = ToolFunction(
-                name = TOOL_SEARCH,
-                description = "Discover available MCP tools by name/description. " +
-                    "Call this first to find the right tool name, then use mcp_tool_inspect to get its schema.",
-                parameters = ToolParameters(
-                    properties = mapOf(
-                        "query" to ToolProperty("string",
-                            "Optional keyword to filter tools by name or description.")
-                    ),
-                    required = emptyList()
-                )
-            ), defer = DeferPolicy.NEVER),
-            ToolDefinition(function = ToolFunction(
-                name = TOOL_INSPECT,
-                description = "Get the full input schema for a specific MCP tool. " +
-                    "Call this after mcp_tool_search to understand a tool's parameters before invoking it.",
-                parameters = ToolParameters(
-                    properties = mapOf(
-                        "name" to ToolProperty("string", "Exact tool name as returned by mcp_tool_search.")
-                    ),
-                    required = listOf("name")
-                )
-            ), defer = DeferPolicy.NEVER),
-            ToolDefinition(function = ToolFunction(
-                name = TOOL_INVOKE,
-                description = "Execute an MCP tool by name. " +
-                    "Use mcp_tool_inspect first to understand the required arguments.",
-                parameters = ToolParameters(
-                    properties = mapOf(
-                        "name"      to ToolProperty("string", "Exact tool name to invoke."),
-                        "arguments" to ToolProperty("string", "JSON string of tool arguments matching the tool's input schema.")
-                    ),
-                    required = listOf("name", "arguments")
-                )
-            ), defer = DeferPolicy.NEVER),
+        val META_TOOL_NAMES = setOf(
+            TOOL_BROKER,
+            LEGACY_SEARCH,
+            LEGACY_INSPECT,
+            LEGACY_INVOKE,
         )
 
-        /**
-         * Estimated prompt-token cost of shipping [tools] inline.
-         *
-         * Counts what the model actually sees — name + description + serialised schema — via
-         * the same [TokenEstimator] the UI uses, so the gate and the reported figures agree.
-         */
-        fun estimateSchemaTokens(tools: List<ToolDefinition>): Int {
-            var total = 0
-            for (tool in tools) {
-                total += TokenEstimator.estimate(tool.function.name)
-                total += TokenEstimator.estimate(tool.function.description)
-                total += TokenEstimator.estimate(tool.function.parameters.asJsonObject().toString())
+        fun estimateSchemaTokens(tools: List<ToolDefinition>): Int = tools.sumOf { tool ->
+            TokenEstimator.estimate(tool.function.name) +
+                TokenEstimator.estimate(tool.function.description) +
+                TokenEstimator.estimate(tool.function.parameters.asJsonObject().toString())
+        }
+
+        fun plan(
+            tools: List<ToolDefinition>,
+            contextTokens: Int,
+            currentText: String,
+            recentTexts: List<String> = emptyList(),
+        ): ToolExposurePlan {
+            if (tools.isEmpty()) {
+                val route = CapabilityRouter.route(currentText, recentTexts, tools)
+                return ToolExposurePlan(route, emptyList(), emptyList(), 0)
             }
-            return total
+
+            val directEligible = tools
+                .filter { it.defer != DeferPolicy.ALWAYS }
+                .sortedBy { it.function.name }
+            val directComplete = directEligible.map { it.withCompleteSchema() }
+            val totalSchemaTokens = estimateSchemaTokens(directComplete)
+            val mustRoute = tools.any { it.defer == DeferPolicy.ALWAYS } ||
+                directEligible.size >= LARGE_REGISTRY_TOOLS ||
+                directEligible.size > MAX_WIRE_TOOLS ||
+                totalSchemaTokens > MAX_INLINE_SCHEMA_TOKENS
+
+            if (!mustRoute) {
+                val route = CapabilityRoute(
+                    mode = CapabilityRouteMode.DIRECT,
+                    selectedToolNames = directEligible.map { it.function.name },
+                    confidence = 1f,
+                    reason = "Registry is already smaller than the broker threshold.",
+                    schemaTokenEstimate = totalSchemaTokens,
+                    requiresBroker = false,
+                )
+                return ToolExposurePlan(
+                    route = route,
+                    inlineTools = directComplete,
+                    deferredTools = tools.filter { it.defer == DeferPolicy.ALWAYS },
+                    inlineSchemaTokens = estimateSchemaTokens(
+                        directComplete,
+                    ),
+                )
+            }
+
+            val route = CapabilityRouter.route(
+                currentText = currentText,
+                recentTexts = recentTexts,
+                tools = tools.filter { it.defer == DeferPolicy.AUTO },
+                topK = TOP_K_DIRECT_TOOLS,
+            )
+            val mandatory = tools
+                .filter { it.defer == DeferPolicy.NEVER }
+                .sortedBy { it.function.name }
+            require(mandatory.size < MAX_WIRE_TOOLS) {
+                "Cannot expose ${mandatory.size} NEVER-deferred tools plus the capability broker " +
+                    "within the $MAX_WIRE_TOOLS-tool provider limit."
+            }
+            val selected = route.selectedToolsFrom(tools)
+                .filter { it.defer == DeferPolicy.AUTO }
+            // Reserve one of the provider's 64 slots for the broker. If an impossible registry
+            // contains 64+ NEVER items, the overflow remains broker-reachable instead of vanishing.
+            val inline = (mandatory + selected)
+                .distinctBy { it.function.name }
+                .take(MAX_WIRE_TOOLS - 1)
+                .map { it.withCompleteSchema() }
+            val inlineNames = inline.map { it.function.name }.toSet()
+            val deferred = tools.filter { it.function.name !in inlineNames }
+            return ToolExposurePlan(
+                route = route.copy(requiresBroker = deferred.isNotEmpty()),
+                inlineTools = inline,
+                deferredTools = deferred,
+                inlineSchemaTokens = estimateSchemaTokens(inline),
+            )
         }
 
         /**
-         * Which tools to withhold from the request, keyed by token budget rather than count.
-         *
-         * Counting tools was the original bug: seven built-in providers with verbose schemas
-         * cost far more than a dozen terse MCP entries, yet only the MCP pool was ever gated
-         * and `maxContextWindow` was accepted and ignored. The budget is now the real one —
-         * [DEFER_THRESHOLD_PCT] of the context window, measured over *all* eligible tools.
-         *
-         * Two gates guard against a net-negative deferral, mirroring Cherry Studio:
-         *   • [MIN_AUTO_DEFER_COUNT] — below this the discovery round-trip costs more than
-         *     inlining would have.
-         *   • [META_TOOLS_OVERHEAD_TOKENS] — the savings must at least pay for the three
-         *     meta-tools' own schemas.
-         *
-         * [DeferPolicy.NEVER] tools are always inline; [DeferPolicy.ALWAYS] always deferred.
+         * Compatibility helper for existing tests and callers. New code should use [plan], because
+         * selecting relevant tools without the current request is necessarily less precise.
          */
         fun selectDeferred(
             tools: List<ToolDefinition>,
             contextTokens: Int,
-        ): Set<String> {
-            val always = tools.filter { it.defer == DeferPolicy.ALWAYS }
-            val candidates = tools.filter { it.defer == DeferPolicy.AUTO }
+        ): Set<String> = plan(
+            tools = tools,
+            contextTokens = contextTokens,
+            currentText = "",
+        ).deferredTools.map { it.function.name }.toSet()
 
-            // Real token window from the models.dev catalog. NOT the `maxContextWindow`
-            // setting — that one counts messages, and reading it as tokens is exactly the
-            // bug that made the previous budget branch dead code.
-            val ctx = if (contextTokens > 0) contextTokens else FALLBACK_CONTEXT_TOKENS
-            val threshold = ctx * DEFER_THRESHOLD_PCT / 100
-            val cost = estimateSchemaTokens(candidates)
-
-            // Hard provider cap (Anthropic and most relays stop at 64) still forces deferral
-            // even when the token budget alone would have allowed the pool through.
-            val overProviderCap = tools.count { it.defer != DeferPolicy.ALWAYS } > MAX_INLINE_TOOLS
-
-            val autoDeferred = when {
-                overProviderCap -> candidates
-                cost <= threshold -> emptyList()
-                candidates.size < MIN_AUTO_DEFER_COUNT -> emptyList()
-                cost <= META_TOOLS_OVERHEAD_TOKENS -> emptyList()
-                else -> candidates
-            }
-
-            return (always + autoDeferred).map { it.function.name }.toSet()
+        private fun brokerDefinition(tools: List<ToolDefinition>): ToolDefinition {
+            val labels = capabilityLabels(tools)
+            val catalog = labels.joinToString(", ").ifBlank { "enabled Agora tools" }
+            return ToolDefinition(
+                function = ToolFunction(
+                    name = TOOL_BROKER,
+                    description = "Access enabled capabilities not directly listed in this request " +
+                        "($catalog). Search by the user's intent for short summaries, inspect one " +
+                        "exact name for its full paginated schema, then invoke it. Search results " +
+                        "are cursor-paginated across the complete registry; never claim a capability " +
+                        "is unavailable before exhausting the relevant search.",
+                    parameters = ToolParameters(
+                        properties = mapOf(
+                            "action" to ToolProperty("string", "search, inspect, or invoke"),
+                            "query" to ToolProperty("string", "For search: the user's concrete intent."),
+                            "name" to ToolProperty("string", "For inspect/invoke: exact result name."),
+                            "arguments" to ToolProperty("object", "For invoke: arguments matching the returned schema."),
+                            "cursor" to ToolProperty("integer", "For paginated search/inspect: next_cursor."),
+                            "limit" to ToolProperty("integer", "For search: summaries per page, 1-20."),
+                            "max_chars" to ToolProperty("integer", "For inspect: schema chunk size, 1000-40000."),
+                        ),
+                        required = listOf("action"),
+                        rawSchema = buildJsonObject {
+                            put("type", "object")
+                            put("properties", buildJsonObject {
+                                put("action", buildJsonObject {
+                                    put("type", "string")
+                                    put("enum", buildJsonArray {
+                                        add(JsonPrimitive(ACTION_SEARCH))
+                                        add(JsonPrimitive(ACTION_INSPECT))
+                                        add(JsonPrimitive(ACTION_INVOKE))
+                                    })
+                                })
+                                put("query", buildJsonObject {
+                                    put("type", "string")
+                                    put("description", "User intent to search for.")
+                                })
+                                put("name", buildJsonObject {
+                                    put("type", "string")
+                                    put("description", "Exact capability name for inspect or invoke.")
+                                })
+                                put("arguments", buildJsonObject {
+                                    put("type", "object")
+                                    put("description", "Arguments matching the returned input_schema.")
+                                })
+                                put("cursor", buildJsonObject {
+                                    put("type", "integer")
+                                    put("description", "Pagination cursor returned by search or inspect.")
+                                })
+                                put("limit", buildJsonObject {
+                                    put("type", "integer")
+                                    put("description", "Search page size from 1 to 20.")
+                                })
+                                put("max_chars", buildJsonObject {
+                                    put("type", "integer")
+                                    put("description", "Inspect chunk size from 1000 to 40000 characters.")
+                                })
+                            })
+                            putJsonArray("required") { add(JsonPrimitive("action")) }
+                        },
+                    ),
+                ),
+                defer = DeferPolicy.NEVER,
+            )
         }
+
+        private fun capabilityLabels(tools: List<ToolDefinition>): List<String> {
+            val text = tools.joinToString(" ") {
+                "${it.function.name} ${it.function.description}"
+            }.lowercase()
+            val customMcpNames = tools.mapNotNull { tool ->
+                Regex("""\[MCP:\s*([^]]+)]""", RegexOption.IGNORE_CASE)
+                    .find(tool.function.description)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.trim()
+                    ?.takeIf(String::isNotBlank)
+            }
+            return buildList {
+                if ("todoist" in text) add("Todoist")
+                if ("notion" in text) add("Notion")
+                if ("github" in text) add("GitHub")
+                addAll(customMcpNames.sortedWith(String.CASE_INSENSITIVE_ORDER))
+                if ("web_search" in text || "web_fetch" in text) add("web")
+                if ("memory" in text) add("memory")
+                if ("conversation" in text) add("past conversations")
+                if ("file_" in text) add("files")
+                if ("shell" in text) add("shell")
+                if ("skill" in text) add("Skills")
+                if ("image" in text) add("images")
+                if ("ask_user" in text) add("Ask")
+                if ("user_profile" in text || "personalization" in text) add("personalization")
+                if ("provider_balance" in text) add("provider balances")
+                if ("mcp_list_resources" in text || "mcp_read_resource" in text) add("MCP resources")
+                if ("mcp_list_prompts" in text || "mcp_get_prompt" in text) add("MCP prompts")
+            }.distinct()
+        }
+
+        private fun parseObject(value: String): JsonObject = try {
+            Json.parseToJsonElement(value.ifBlank { "{}" }) as? JsonObject ?: JsonObject(emptyMap())
+        } catch (_: Exception) {
+            JsonObject(emptyMap())
+        }
+
+        private fun JsonObject.string(name: String): String? =
+            (get(name) as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty)
+
+        private fun JsonObject.int(name: String, default: Int = 0): Int =
+            (get(name) as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: default
+
+        private fun errorJson(code: String, hint: String? = null): String =
+            buildJsonObject {
+                put("error", code)
+                hint?.let { put("hint", it) }
+            }.toString()
     }
+}
+
+data class ToolExposurePlan(
+    val route: CapabilityRoute,
+    val inlineTools: List<ToolDefinition>,
+    val deferredTools: List<ToolDefinition>,
+    val inlineSchemaTokens: Int,
+) {
+    val usesBroker: Boolean get() = deferredTools.isNotEmpty()
+    val wireToolCount: Int get() = inlineTools.size + if (usesBroker) 1 else 0
+}
+
+/** Complete schema is populated for MCP tools; built-ins already carry their only schema. */
+private fun ToolDefinition.completeParameters(): ToolParameters =
+    fullParameters ?: function.parameters
+
+private fun ToolDefinition.withCompleteSchema(): ToolDefinition {
+    val complete = fullParameters ?: return this
+    return copy(function = function.copy(parameters = complete))
 }
