@@ -62,6 +62,24 @@ data class ReleaseNotes(
     val publishedAt: String = "",
 )
 
+/**
+ * Outcome of an update check.
+ *
+ * "No update" and "the check did not complete" used to both be `null`, so the UI
+ * reported *已是最新* for network errors, a misconfigured Worker, and a CI channel
+ * that could not find a build alike — the one failure mode that most needs to be
+ * visible was the one guaranteed to be silent.
+ */
+sealed class UpdateCheckResult {
+    data class Available(val info: UpdateInfo) : UpdateCheckResult()
+
+    /** The endpoint answered, and the installed build is current. */
+    data object UpToDate : UpdateCheckResult()
+
+    /** The check itself failed. [reason] is short and user-facing. */
+    data class Failed(val reason: String) : UpdateCheckResult()
+}
+
 object UpdateChecker {
     /**
      * Cloudflare Worker that proxies latest-release checks for the private
@@ -112,47 +130,82 @@ object UpdateChecker {
      * installed build did not come from CI, in which case any CI build counts
      * as newer).
      */
-    fun checkCi(installedRun: Int): UpdateInfo? {
+    fun checkCi(installedRun: Int): UpdateCheckResult {
         return try {
             val request = Request.Builder()
                 .url(CI_ENDPOINT)
                 .header("Accept", "application/json")
                 .build()
             val response = client.newCall(request).execute()
-            if (response.code == 204 || !response.isSuccessful) {
+            // 204 is the one legitimate "nothing to offer": no successful build exists.
+            if (response.code == 204) {
                 response.close()
-                return null
+                return UpdateCheckResult.UpToDate
+            }
+            if (!response.isSuccessful) {
+                val code = response.code
+                val detail = runCatching { response.body.string() }.getOrNull()
+                response.close()
+                return UpdateCheckResult.Failed(describeHttpFailure(code, detail))
             }
             val body = response.body.string()
             response.close()
 
             val build = json.decodeFromString<CiBuild>(body)
-            if (build.run_number <= installedRun) return null
+            if (build.run_number <= installedRun) return UpdateCheckResult.UpToDate
 
-            UpdateInfo(
-                version = build.version.ifBlank { "ci-${build.run_number}" },
-                url = build.download_url ?: build.html_url,
-                body = build.body.ifBlank { build.title },
-                downloadUrl = build.download_url,
-                htmlUrl = build.html_url,
-                isZipArchive = build.is_zip,
-                channel = UpdateChannel.CI,
+            UpdateCheckResult.Available(
+                UpdateInfo(
+                    version = build.version.ifBlank { "ci-${build.run_number}" },
+                    url = build.download_url ?: build.html_url,
+                    body = build.body.ifBlank { build.title },
+                    downloadUrl = build.download_url,
+                    htmlUrl = build.html_url,
+                    isZipArchive = build.is_zip,
+                    channel = UpdateChannel.CI,
+                )
             )
-        } catch (_: Exception) {
-            null
+        } catch (e: Exception) {
+            UpdateCheckResult.Failed(describeException(e))
         }
     }
 
     /**
-     * Check the update endpoint for a newer release. Returns [UpdateInfo] if an
-     * update is available, or null if the current version is up-to-date or the
-     * check fails.
+     * Turns the Worker's error envelope into something actionable. Its failures are
+     * specific for a reason — `no_artifact` (build's artifact expired) needs a very
+     * different response from the user than a 500 (Worker misconfigured).
      */
-    fun check(currentVersion: String): UpdateInfo? {
+    private fun describeHttpFailure(code: Int, body: String?): String {
+        val tag = body?.let {
+            runCatching {
+                json.parseToJsonElement(it).jsonObject["error"]?.toString()?.trim('"')
+            }.getOrNull()
+        }
+        return when (tag) {
+            "no_artifact" -> "CI build artifact expired or missing"
+            "no_run" -> "No successful CI build found"
+            "misconfigured" -> "Update server misconfigured"
+            "no_signed_url" -> "GitHub refused the artifact download"
+            else -> "Update check failed (HTTP $code)"
+        }
+    }
+
+    private fun describeException(e: Exception): String = when (e) {
+        is java.net.UnknownHostException -> "No network connection"
+        is java.net.SocketTimeoutException -> "Update server timed out"
+        is javax.net.ssl.SSLException -> "Secure connection failed"
+        is java.io.IOException -> "Network error: ${e.message ?: "unreachable"}"
+        else -> "Unexpected response from update server"
+    }
+
+    /**
+     * Check the update endpoint for a newer release. Distinguishes "up to date"
+     * from "the check failed" so the caller can surface the difference.
+     */
+    fun check(currentVersion: String): UpdateCheckResult {
         return try {
             if (UPDATE_ENDPOINT.contains("CHANGE_ME")) {
-                // Endpoint not configured yet — skip quietly.
-                return null
+                return UpdateCheckResult.Failed("Update endpoint not configured")
             }
 
             val request = Request.Builder()
@@ -161,13 +214,16 @@ object UpdateChecker {
                 .build()
 
             val response = client.newCall(request).execute()
+            // 204 = repository has no releases at all; nothing newer can exist.
             if (response.code == 204) {
                 response.close()
-                return null
+                return UpdateCheckResult.UpToDate
             }
             if (!response.isSuccessful) {
+                val code = response.code
+                val detail = runCatching { response.body.string() }.getOrNull()
                 response.close()
-                return null
+                return UpdateCheckResult.Failed(describeHttpFailure(code, detail))
             }
 
             val body = response.body.string()
@@ -179,20 +235,22 @@ object UpdateChecker {
 
             if (compareVersions(latestVersion, currentVersion) > 0) {
                 val download = release.download_url?.takeIf { it.isNotBlank() }
-                UpdateInfo(
-                    version = latestVersion,
-                    // Prefer Worker-proxied APK download when available (private assets),
-                    // otherwise fall back to the release page URL.
-                    url = download ?: release.html_url,
-                    body = release.body.orEmpty(),
-                    downloadUrl = download,
-                    htmlUrl = release.html_url,
+                UpdateCheckResult.Available(
+                    UpdateInfo(
+                        version = latestVersion,
+                        // Prefer Worker-proxied APK download when available (private assets),
+                        // otherwise fall back to the release page URL.
+                        url = download ?: release.html_url,
+                        body = release.body.orEmpty(),
+                        downloadUrl = download,
+                        htmlUrl = release.html_url,
+                    )
                 )
             } else {
-                null
+                UpdateCheckResult.UpToDate
             }
-        } catch (_: Exception) {
-            null
+        } catch (e: Exception) {
+            UpdateCheckResult.Failed(describeException(e))
         }
     }
 

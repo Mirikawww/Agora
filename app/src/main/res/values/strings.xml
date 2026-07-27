@@ -845,6 +845,7 @@
     <string name="about_auto_update_desc">Check on every app launch</string>
     <string name="about_update_available">Update available: v%1$s</string>
     <string name="about_up_to_date">You\'re up to date (v%1$s)</string>
+    <string name="about_check_failed">Check failed: %1$s</string>
     <string name="about_checking">Checking...</string>
     <string name="about_available_body">A new version of Agora is available.</string>
     <string name="about_view_release">View Release</string>

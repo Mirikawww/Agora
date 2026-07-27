@@ -368,16 +368,41 @@ function abiAliasesFor(abi) {
 
 const CI_ARTIFACT_NAME = "agora-release";
 const CI_WORKFLOW_BRANCH = "main";
+/**
+ * The build workflow's filename. The runs query MUST be scoped to it.
+ *
+ * `/actions/runs?branch=…&status=success` returns runs of *every* workflow, so a
+ * successful Dependabot or CodeQL run becomes "the latest CI build", and since it
+ * carries no `agora-release` artifact the channel answers 404 forever — the app
+ * then reports "up to date" because `checkCi` maps any failure to null.
+ *
+ * Scoping also makes `run_number` meaningful: it is a per-workflow counter, so
+ * numbers from different workflows are not comparable at all (a fresh Dependabot
+ * run is #1 while the build workflow is at #3).
+ */
+const CI_WORKFLOW_FILE = "build.yml";
+/** How many recent successful builds to consider before giving up. */
+const CI_RUN_SCAN_DEPTH = 10;
 
-/** Newest successful workflow run on [CI_WORKFLOW_BRANCH], or null. */
+/**
+ * Newest successful build run on [CI_WORKFLOW_BRANCH] that still has a usable
+ * artifact, paired with that artifact. Scans back [CI_RUN_SCAN_DEPTH] runs so a
+ * single artifact-less run (they expire after 90 days) does not stall the channel.
+ */
 async function fetchLatestCiRun(env) {
   const apiUrl =
     `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}` +
-    `/actions/runs?branch=${CI_WORKFLOW_BRANCH}&status=success&per_page=1`;
+    `/actions/workflows/${CI_WORKFLOW_FILE}/runs` +
+    `?branch=${CI_WORKFLOW_BRANCH}&status=success&event=push&per_page=${CI_RUN_SCAN_DEPTH}`;
   const res = await fetch(apiUrl, { headers: githubHeaders(env, "application/vnd.github+json") });
   if (!res.ok) return null;
   const data = await res.json();
-  return (data.workflow_runs && data.workflow_runs[0]) || null;
+  const runs = data.workflow_runs || [];
+  for (const run of runs) {
+    const artifact = await fetchRunArtifact(env, run);
+    if (artifact) return { run, artifact };
+  }
+  return null;
 }
 
 /** The APK artifact of [run], or null when it has expired (artifacts live 90 days). */
@@ -397,14 +422,11 @@ async function fetchRunArtifact(env, run) {
 }
 
 async function handleCiLatest(env, origin) {
-  const run = await fetchLatestCiRun(env);
-  if (!run) {
+  const latest = await fetchLatestCiRun(env);
+  if (!latest) {
     return new Response(null, { status: 204, headers: { ...CORS, "Cache-Control": "public, max-age=60" } });
   }
-  const artifact = await fetchRunArtifact(env, run);
-  if (!artifact) {
-    return json({ error: "no_artifact", message: "Build has no unexpired artifact" }, 404);
-  }
+  const { run, artifact } = latest;
   return json(
     {
       // Not a semver — the app compares run numbers for the CI channel.
@@ -428,10 +450,9 @@ async function handleCiLatest(env, origin) {
 }
 
 async function handleCiDownload(env) {
-  const run = await fetchLatestCiRun(env);
-  if (!run) return json({ error: "no_run" }, 404);
-  const artifact = await fetchRunArtifact(env, run);
-  if (!artifact) return json({ error: "no_artifact" }, 404);
+  const latest = await fetchLatestCiRun(env);
+  if (!latest) return json({ error: "no_run" }, 404);
+  const { artifact } = latest;
 
   // manual redirect: we want the Location header, not the body.
   const res = await fetch(artifact.archive_download_url, {

@@ -94,11 +94,16 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         modifier = Modifier.clickable(enabled = !isChecking) {
                             isChecking = true
                             scope.launch {
-                                val info = withContext(Dispatchers.IO) { viewModel.checkForUpdates() }
-                                if (info != null) {
-                                    viewModel.showUpdateDialog(info)
-                                } else {
-                                    updateStatus = context.getString(R.string.about_up_to_date, versionName)
+                                when (val result = withContext(Dispatchers.IO) { viewModel.checkForUpdates() }) {
+                                    is com.newoether.agora.util.UpdateCheckResult.Available ->
+                                        viewModel.showUpdateDialog(result.info)
+                                    com.newoether.agora.util.UpdateCheckResult.UpToDate ->
+                                        updateStatus = context.getString(R.string.about_up_to_date, versionName)
+                                    // Surfacing the reason is the whole point: a failed check
+                                    // reported as "up to date" hides exactly the case the user
+                                    // needs to act on.
+                                    is com.newoether.agora.util.UpdateCheckResult.Failed ->
+                                        updateStatus = context.getString(R.string.about_check_failed, result.reason)
                                 }
                                 isChecking = false
                             }

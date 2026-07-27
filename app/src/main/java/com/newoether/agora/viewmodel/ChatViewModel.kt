@@ -257,12 +257,16 @@ class ChatViewModel(
             )
             kotlinx.coroutines.flow.combine(proxyFlows) { it }.collect { applyProxy() }
         }
-        // Auto-check for updates on launch (no daily throttle).
+        // Auto-check for updates on launch (no daily throttle). Goes through
+        // checkForUpdates() so it honours the selected channel — calling
+        // UpdateChecker.check() directly pinned the launch check to stable, so a
+        // user on the CI channel silently never got an automatic check at all.
+        // A failure stays quiet here (no dialog); the About page reports the reason.
         viewModelScope.launch(Dispatchers.IO) {
             if (settings.getAutoUpdateCheck()) {
-                val info = UpdateChecker.check(getCurrentVersion())
-                if (info != null) {
-                    _updateDialogData.value = info
+                val result = checkForUpdates()
+                if (result is com.newoether.agora.util.UpdateCheckResult.Available) {
+                    _updateDialogData.value = result.info
                 }
             }
         }
@@ -973,7 +977,7 @@ class ChatViewModel(
      * apart); `BuildConfig.CI_RUN_NUMBER` is 0 for locally built APKs, which makes
      * any CI build count as newer.
      */
-    suspend fun checkForUpdates(): UpdateInfo? {
+    suspend fun checkForUpdates(): com.newoether.agora.util.UpdateCheckResult {
         return when (com.newoether.agora.util.UpdateChannel.from(settings.updateChannel.value)) {
             com.newoether.agora.util.UpdateChannel.CI ->
                 UpdateChecker.checkCi(com.newoether.agora.BuildConfig.CI_RUN_NUMBER)

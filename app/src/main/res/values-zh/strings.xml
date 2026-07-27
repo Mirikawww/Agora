@@ -825,6 +825,7 @@
     <string name="about_auto_update_desc">每次启动时检查</string>
     <string name="about_update_available">有新版本：v%1$s</string>
     <string name="about_up_to_date">已是最新版本 (v%1$s)</string>
+    <string name="about_check_failed">检查失败：%1$s</string>
     <string name="about_checking">检查中...</string>
     <string name="about_available_body">Agora 有新版本可用。</string>
     <string name="about_view_release">查看版本</string>
