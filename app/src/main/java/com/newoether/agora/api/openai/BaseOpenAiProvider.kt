@@ -140,7 +140,9 @@ abstract class BaseOpenAiProvider : LlmProvider {
                 while (endpointIndex < endpointUrls.size && !finished && !retryScheduled) {
                     val endpointUrl = endpointUrls[endpointIndex]
                     applyAuthHeader()
+                    val tStreamPost = System.currentTimeMillis()
                     val handle = HttpClient.streamPost(endpointUrl, requestBodyJson, headers, config.streamTag)
+                    DebugLog.d("AgoraTiming", "[$name] streamPost took ${System.currentTimeMillis() - tStreamPost}ms code=${handle.code}")
                     try {
                         if (handle.code == 200) {
                             consumeSuccessfulStream(handle, config, thinkParser) { emit(it) }

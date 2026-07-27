@@ -26,8 +26,9 @@ import com.newoether.agora.util.SearchResultFormatter
 import com.newoether.agora.tool.AskToolProvider
 import com.newoether.agora.tool.GitHubConnectorToolProvider
 import com.newoether.agora.tool.ImageGenToolProvider
-import com.newoether.agora.tool.MemoryToolProvider
+import com.newoether.agora.tool.McpDeferredToolProvider
 import com.newoether.agora.tool.McpToolProvider
+import com.newoether.agora.tool.MemoryToolProvider
 import com.newoether.agora.tool.PersonalizationToolProvider
 import com.newoether.agora.tool.ProviderBalanceToolProvider
 import com.newoether.agora.tool.RagToolProvider
@@ -253,10 +254,14 @@ class GenerationManager(
             settings::updateMcpServerNow,
         )
     }
+    private val mcpDeferredToolProvider = McpDeferredToolProvider(
+        mcpExecute = { name: String, arguments: String, ctx: GenerationContext -> executeTool(name, arguments, ctx) }
+    )
     private val toolProviders: List<ToolProvider> = listOf(
         memoryToolProvider, webSearchToolProvider, ragToolProvider, imageGenToolProvider,
         personalizationToolProvider, providerBalanceToolProvider, askToolProvider,
         skillsToolProvider, githubConnectorToolProvider, shellToolProvider, mcpToolProvider,
+        mcpDeferredToolProvider,
     )
 
     fun buildImageGenTool(ctx: GenerationContext): List<ToolDefinition> =
@@ -497,10 +502,25 @@ class GenerationManager(
         val askTools = askToolProvider.definitions(ctx)
         val skillsTools = skillsToolProvider.definitions(ctx)
         val githubTools = githubConnectorToolProvider.definitions(ctx)
+        val t0 = System.currentTimeMillis()
         val mcpTools = mcpToolProvider.refresh(ctx)
-        val allTools = memoryTools + webSearchTool + ragTool + imageGenTool +
+        DebugLog.d("AgoraTiming", "mcpToolProvider.refresh took ${System.currentTimeMillis() - t0}ms, tools=${mcpTools.size}")
+        val builtinTools = memoryTools + webSearchTool + ragTool + imageGenTool +
             personalizationTools + balanceTools + askTools + skillsTools + githubTools +
-            shellTool + fileTool + mcpTools
+            shellTool + fileTool
+        // Defer MCP tools behind 3 meta-tools when the total schema would exceed the
+        // provider's tool limit (64) or the context-window token budget (10%).
+        val deferred = mcpDeferredToolProvider.prepare(
+            mcpTools = mcpTools,
+            builtinToolCount = builtinTools.size,
+            maxContextWindow = config.maxContextWindow,
+        )
+        val allTools = if (deferred) {
+            builtinTools + mcpDeferredToolProvider.definitions(ctx)
+        } else {
+            builtinTools + mcpTools
+        }
+        DebugLog.d("AgoraTiming", "tools: builtin=${builtinTools.size} mcp=${mcpTools.size} deferred=$deferred total=${allTools.size}")
         val providerConfig = ProviderConfig(
             apiKey = config.apiKey,
             modelId = config.modelId,

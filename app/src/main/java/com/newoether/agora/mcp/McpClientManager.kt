@@ -153,8 +153,9 @@ class McpClientManager(
         // a reconnect) we connect synchronously as before — that cost is paid once.
         val remote = active.map { server ->
             async {
+                val t = System.currentTimeMillis()
                 val existing = connections[server.id]
-                if (existing != null) {
+                val defs = if (existing != null) {
                     // Fast path: return cached definitions now, refresh in background.
                     scope.launch { runCatching { refreshTools(existing) } }
                     remoteDefinitions(existing)
@@ -162,6 +163,8 @@ class McpClientManager(
                     // Slow path: must connect first (only happens once per server).
                     runCatching { refreshTools(connection(server)).let(::remoteDefinitions) }.getOrDefault(emptyList())
                 }
+                android.util.Log.d("AgoraTiming", "MCP definitions [${server.name}] took ${System.currentTimeMillis() - t}ms cached=${existing != null} tools=${defs.size}")
+                defs
             }
         }.awaitAll().flatten()
         remote + brokerDefinitions(active)
