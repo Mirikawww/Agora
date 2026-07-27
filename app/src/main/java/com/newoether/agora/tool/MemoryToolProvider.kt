@@ -19,124 +19,72 @@ class MemoryToolProvider(
     private val memoryManager: MemoryManager
 ) : ToolProvider {
 
+    /**
+     * One dispatching tool instead of six.
+     *
+     * Six sibling definitions repeated the same JSON scaffolding — `type`/`function`/`parameters`/
+     * `properties`/`required` plus overlapping `name`, `content`, `old_string`, `new_string`
+     * parameters — six times on every single request, for ~1,170 tokens of schema the model rarely
+     * needed. Collapsing them behind an `action` selector keeps every operation reachable at about
+     * a third of the size. Legacy names still execute (see [execute]) so historical conversations
+     * that recorded them replay unchanged.
+     *
+     * The two access flags stay independent: they decide which actions are advertised, so turning
+     * off saved memories genuinely removes file access rather than merely hiding it.
+     */
     override fun definitions(ctx: GenerationContext): List<ToolDefinition> {
         if (!ctx.accessSavedMemories && !ctx.accessActiveMemory) return emptyList()
-        val tools = mutableListOf<ToolDefinition>()
-        if (ctx.accessSavedMemories) {
-            tools.addAll(
-                listOf(
-                    ToolDefinition(
-                        function = ToolFunction(
-                            name = "list_memory_files",
-                            description = "List all files in the memory database with their names and descriptions.",
-                            parameters = ToolParameters(properties = emptyMap())
-                        )
-                    ),
-                    ToolDefinition(
-                        function = ToolFunction(
-                            name = "read_memory_file",
-                            description = "Read the content of one or more files from the memory database.",
-                            parameters = ToolParameters(
-                                properties = mapOf(
-                                    "name" to ToolProperty("string", "The file name to read."),
-                                    "names" to ToolProperty(
-                                        "array",
-                                        "Multiple file names to read in one call.",
-                                        items = ToolProperty("string", "A file name.")
-                                    )
-                                ),
-                                required = emptyList()
-                            )
-                        )
-                    ),
-                    ToolDefinition(
-                        function = ToolFunction(
-                            name = "create_memory_file",
-                            description = "Create a new file in the memory database with the given content and optional description.",
-                            parameters = ToolParameters(
-                                properties = mapOf(
-                                    "name" to ToolProperty("string", "The file name to create (e.g., 'notes.md')."),
-                                    "content" to ToolProperty("string", "The markdown content for the file."),
-                                    "description" to ToolProperty(
-                                        "string",
-                                        "A short description of what this file contains (optional)."
-                                    )
-                                ),
-                                required = listOf("name", "content")
-                            )
-                        )
-                    ),
-                    ToolDefinition(
-                        function = ToolFunction(
-                            name = "edit_memory_file",
-                            description = "Edit, rename, or update the description of a file in the memory database. Use 'old_string' + 'new_string' for precise string replacement — the old_string must match exactly once in the file. Use 'content' for full rewrites (mutually exclusive with old_string). At least one of 'content', 'old_string', 'new_name', or 'description' must be provided.",
-                            parameters = ToolParameters(
-                                properties = mapOf(
-                                    "name" to ToolProperty("string", "The current file name to edit."),
-                                    "content" to ToolProperty(
-                                        "string",
-                                        "The new markdown content (full rewrite). Omit to keep existing content. Mutually exclusive with 'old_string'."
-                                    ),
-                                    "old_string" to ToolProperty(
-                                        "string",
-                                        "Exact string to find and replace. Must match exactly once in the file. Mutually exclusive with 'content'."
-                                    ),
-                                    "new_string" to ToolProperty(
-                                        "string",
-                                        "Replacement string for old_string. Pass empty string to delete the matched text. Required when old_string is provided."
-                                    ),
-                                    "new_name" to ToolProperty("string", "New file name to rename to. Omit to keep existing name."),
-                                    "description" to ToolProperty(
-                                        "string",
-                                        "A short description of the file contents. Omit to keep existing description. Pass empty string to remove."
-                                    )
-                                ),
-                                required = listOf("name")
-                            )
-                        )
-                    ),
-                    ToolDefinition(
-                        function = ToolFunction(
-                            name = "delete_memory_file",
-                            description = "Delete a file from the memory database.",
-                            parameters = ToolParameters(
-                                properties = mapOf("name" to ToolProperty("string", "The file name to delete.")),
-                                required = listOf("name")
-                            )
-                        )
-                    )
+
+        val actions = buildList {
+            if (ctx.accessSavedMemories) {
+                add("list — every memory file with its description; no other parameters")
+                add("read — file contents; 'name' for one file, or 'names' for several at once")
+                add("create — new file; needs 'name' and 'content', optional 'description'")
+                add(
+                    "edit — change a file; needs 'name', then EITHER 'content' (full rewrite) OR " +
+                        "'old_string' + 'new_string' (exact replace, old_string must match once); " +
+                        "optional 'new_name' to rename and 'description' to retitle"
+                )
+                add("delete — remove a file; needs 'name'")
+            }
+            if (ctx.accessActiveMemory) {
+                add(
+                    "update_active — rewrite the always-loaded active memory; needs 'content', " +
+                        "optional 'mode' (replace | append | prepend | patch, default replace); " +
+                        "patch mode needs 'old_string' + 'new_string' instead"
+                )
+            }
+        }
+
+        val properties = buildMap {
+            put("action", ToolProperty("string", "One of: ${actions.joinToString(", ") { it.substringBefore(" —") }}."))
+            if (ctx.accessSavedMemories) {
+                put("name", ToolProperty("string", "File name, e.g. 'notes.md'."))
+                put(
+                    "names",
+                    ToolProperty("array", "Several file names, for action=read.", items = ToolProperty("string", "A file name."))
+                )
+                put("new_name", ToolProperty("string", "New file name, for action=edit."))
+                put("description", ToolProperty("string", "Short description of the file. Empty string removes it."))
+            }
+            put("content", ToolProperty("string", "File or active-memory content."))
+            put("old_string", ToolProperty("string", "Exact text to replace. Must match exactly once."))
+            put("new_string", ToolProperty("string", "Replacement for old_string. Empty string deletes the match."))
+            if (ctx.accessActiveMemory) {
+                put("mode", ToolProperty("string", "replace | append | prepend | patch, for action=update_active."))
+            }
+        }
+
+        return listOf(
+            ToolDefinition(
+                function = ToolFunction(
+                    name = "memory",
+                    description = "Read and write the user's persistent memory. Choose an operation with 'action':\n" +
+                        actions.joinToString("\n") { "- $it" },
+                    parameters = ToolParameters(properties = properties, required = listOf("action")),
                 )
             )
-        }
-        if (ctx.accessActiveMemory) {
-            tools.add(
-                ToolDefinition(
-                    function = ToolFunction(
-                        name = "update_active_memory",
-                        description = "Update the active memory context. Modes: 'replace' (overwrite with 'content'), 'append' (add 'content' to end), 'prepend' (add 'content' to beginning), 'patch' (find 'old_string' exactly once and replace with 'new_string'). Default is replace.",
-                        parameters = ToolParameters(
-                            properties = mapOf(
-                                "content" to ToolProperty("string", "The content to write (for replace/append/prepend modes)."),
-                                "mode" to ToolProperty(
-                                    "string",
-                                    "One of: replace, append, prepend, patch. Default is replace."
-                                ),
-                                "old_string" to ToolProperty(
-                                    "string",
-                                    "Exact string to find and replace in the active memory. Required for patch mode. Must match exactly once."
-                                ),
-                                "new_string" to ToolProperty(
-                                    "string",
-                                    "Replacement string for old_string in patch mode. Pass empty string to delete the matched text."
-                                )
-                            ),
-                            required = listOf("content")
-                        )
-                    )
-                )
-            )
-        }
-        return tools
+        )
     }
 
     override suspend fun execute(name: String, arguments: String, ctx: GenerationContext): String {
@@ -146,7 +94,24 @@ class MemoryToolProvider(
         fun arg(key: String): String =
             (args[key] as? JsonPrimitive)?.content ?: ""
 
-        return when (name) {
+        // The merged `memory` entry point maps onto the legacy operation names, which stay live
+        // below so tool calls recorded in existing conversations still execute.
+        val op = if (name == "memory") {
+            when (val action = arg("action").trim().lowercase()) {
+                "list", "list_memory_files" -> "list_memory_files"
+                "read", "read_memory_file" -> "read_memory_file"
+                "create", "create_memory_file" -> "create_memory_file"
+                "edit", "edit_memory_file" -> "edit_memory_file"
+                "delete", "delete_memory_file" -> "delete_memory_file"
+                "update_active", "update_active_memory" -> "update_active_memory"
+                "" -> return "Error: 'action' is required. Use list, read, create, edit, delete, or update_active."
+                else -> return "Error: unknown action '$action'. Use list, read, create, edit, delete, or update_active."
+            }
+        } else {
+            name
+        }
+
+        return when (op) {
             "list_memory_files" -> {
                 val files = memoryManager.listFiles()
                 if (files.isEmpty()) {
@@ -237,6 +202,7 @@ class MemoryToolProvider(
     }
 
     override fun handles(name: String): Boolean = name in setOf(
+        "memory",
         "list_memory_files",
         "read_memory_file",
         "create_memory_file",

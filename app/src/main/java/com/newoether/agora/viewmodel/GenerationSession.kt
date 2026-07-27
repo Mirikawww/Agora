@@ -11,6 +11,7 @@ import com.newoether.agora.model.MessageStatus
 import com.newoether.agora.model.Participant
 import com.newoether.agora.util.Constants
 import com.newoether.agora.util.DebugLog
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,7 +52,29 @@ class GenerationSession(
     private val onIndexMessageForRag: (messageId: String, text: String) -> Unit,
     private val onCacheMessages: (modelId: String) -> Unit,
 ) {
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+     * Root scope for every generation coroutine.
+     *
+     * `SupervisorJob` keeps one failing conversation from cancelling its siblings, but it does
+     * **not** stop an uncaught exception from reaching the thread's default handler — which here
+     * is [com.newoether.agora.util.CrashReporter], i.e. process death. The launch bodies in
+     * [MessageGenerationController] carry `finally` but no `catch`, so any Room / DataStore /
+     * file failure on a Stop or Retry path (a `SQLiteConstraintException` from a conversation
+     * deleted mid-flight being the realistic one) killed the app outright.
+     *
+     * This handler is the safety net: cancellation still propagates normally, everything else is
+     * recorded and the process stays alive. It is a backstop, not a licence to skip local
+     * handling — a crash that lands here is still a bug worth fixing at its source.
+     */
+    val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e ->
+            if (e is kotlinx.coroutines.CancellationException) return@CoroutineExceptionHandler
+            com.newoether.agora.util.CrashReporter.note(
+                "generation scope caught ${e.javaClass.simpleName}: ${e.message?.take(120)}"
+            )
+            com.newoether.agora.util.DebugLog.e("AgoraVM", "Uncaught exception in generation scope", e)
+        }
+    )
 
     /** Last-started job (legacy single-slot accessors still used by a few call sites). */
     @Volatile
@@ -64,7 +87,6 @@ class GenerationSession(
     private val sendGates = ConcurrentHashMap<String, AtomicBoolean>()
     private val uiTokens = ConcurrentHashMap<String, AtomicLong>()
     private val persistIds = ConcurrentHashMap<String, AtomicLong>()
-    private val streamHandlesByConversation = ConcurrentHashMap<String, MutableSet<HttpClient.StreamHandle>>()
 
     @Volatile private var stopFinalizationJob: Job? = null
     private val genLock = Any()
@@ -131,19 +153,17 @@ class GenerationSession(
         conversationId = currentConversationId.value.orEmpty(),
     )
 
-    fun registerStreamHandle(conversationId: String, handle: HttpClient.StreamHandle) {
-        streamHandlesByConversation
-            .getOrPut(conversationId) { ConcurrentHashMap.newKeySet() }
-            .add(handle)
-    }
-
-    fun unregisterStreamHandle(conversationId: String, handle: HttpClient.StreamHandle) {
-        streamHandlesByConversation[conversationId]?.remove(handle)
-    }
-
+    /**
+     * Sever this conversation's in-flight HTTP streams.
+     *
+     * This used to drain `streamHandlesByConversation`, a map that nothing ever wrote to —
+     * `registerStreamHandle` / `unregisterStreamHandle` had zero call sites, so every invocation
+     * here was a no-op that merely *looked* like Stop cancelled the connection. In reality the
+     * socket lived until the read tick expired, with the upstream still generating and billing.
+     * [HttpClient] now tags each stream with its conversation id, so the cancel is real.
+     */
     private fun cancelStreamHandles(conversationId: String) {
-        val handles = streamHandlesByConversation.remove(conversationId).orEmpty().toList()
-        handles.forEach { runCatching { it.cancel() } }
+        HttpClient.cancelStreamsForTag(conversationId)
     }
 
     fun attachJob(conversationId: String, job: Job) {

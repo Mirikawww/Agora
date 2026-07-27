@@ -140,7 +140,7 @@ abstract class BaseOpenAiProvider : LlmProvider {
                 while (endpointIndex < endpointUrls.size && !finished && !retryScheduled) {
                     val endpointUrl = endpointUrls[endpointIndex]
                     applyAuthHeader()
-                    val handle = HttpClient.streamPost(endpointUrl, requestBodyJson, headers)
+                    val handle = HttpClient.streamPost(endpointUrl, requestBodyJson, headers, config.streamTag)
                     try {
                         if (handle.code == 200) {
                             consumeSuccessfulStream(handle, config, thinkParser) { emit(it) }
@@ -188,6 +188,14 @@ abstract class BaseOpenAiProvider : LlmProvider {
         }
     }.flowOn(Dispatchers.IO)
 
+    /**
+     * Idle budgets, aggregated from [HttpClient.STREAM_TICK_SECONDS] socket ticks. A reasoning
+     * model can think for a long while before the first visible token, so the pre-content
+     * budget is the more generous one.
+     */
+    protected open val firstTokenTimeoutMs: Long = 120_000L
+    protected open val idleTimeoutMs: Long = 90_000L
+
     private suspend fun consumeSuccessfulStream(
         handle: HttpClient.StreamHandle,
         config: ProviderConfig,
@@ -196,6 +204,27 @@ abstract class BaseOpenAiProvider : LlmProvider {
     ) {
         val pendingToolCalls = mutableMapOf<Int, PendingToolCall>()
         var sawToolFinishReason = false
+
+        val startedMs = System.currentTimeMillis()
+        var lastActivityMs = startedMs
+        var producedContent = false
+        var totalLines = 0
+        var dataLines = 0
+        var parseFailures = 0
+        var lastFinishReason: String? = null
+        var sampleUnrecognised: String? = null
+
+        // Everything goes out through here so the empty-stream diagnosis below knows whether
+        // anything ever reached the user, and so the stall watchdog has a liveness timestamp.
+        suspend fun send(event: StreamEvent) {
+            when (event) {
+                is StreamEvent.TextChunk, is StreamEvent.ThoughtChunk,
+                is StreamEvent.ToolCallRequest, is StreamEvent.ToolCallsRequest -> producedContent = true
+                else -> Unit
+            }
+            lastActivityMs = System.currentTimeMillis()
+            emit(event)
+        }
 
         suspend fun emitPendingToolCalls() {
             if (pendingToolCalls.isEmpty()) return
@@ -209,8 +238,8 @@ abstract class BaseOpenAiProvider : LlmProvider {
                 }
             pendingToolCalls.clear()
             when {
-                calls.size == 1 -> emit(calls.first())
-                calls.size > 1 -> emit(StreamEvent.ToolCallsRequest(calls))
+                calls.size == 1 -> send(calls.first())
+                calls.size > 1 -> send(StreamEvent.ToolCallsRequest(calls))
             }
         }
 
@@ -219,19 +248,49 @@ abstract class BaseOpenAiProvider : LlmProvider {
                 handle.readLine()
             } catch (e: SocketTimeoutException) {
                 if (!currentCoroutineContext().isActive) break
+                // A socket tick, not a deadline — decide whether the stream is merely quiet
+                // or actually dead. Previously this was a bare `continue`, so a stalled
+                // upstream burned the full 5-minute read timeout and then surfaced as
+                // "Unknown error" instead of a timeout.
+                val idleMs = System.currentTimeMillis() - lastActivityMs
+                val limit = if (producedContent) idleTimeoutMs else firstTokenTimeoutMs
+                if (idleMs >= limit) {
+                    DebugLog.w("AgoraAPI", "[$name] stream stalled ${idleMs}ms content=$producedContent")
+                    send(StreamEvent.Error(GenerationError.StreamStalled(idleMs, producedContent)))
+                    return
+                }
                 continue
             } ?: break
 
-            if (!line.startsWith("data: ")) continue
-            val jsonStr = line.substring(6).trim()
+            totalLines++
+            // SSE framing: a blank line separates events, ':' opens a comment/heartbeat.
+            if (line.isEmpty() || line.startsWith(":")) continue
+
+            if (!line.startsWith("data:")) {
+                // Relays that answer a stream request with an ordinary JSON body would
+                // otherwise have every line skipped and end the turn as "no response".
+                rescueNonSseBody(line)?.let { rescued ->
+                    DebugLog.e("AgoraAPI", "[$name] non-SSE body on a 200 stream: ${line.take(200)}")
+                    send(StreamEvent.Error(rescued))
+                    return
+                }
+                if (sampleUnrecognised == null && line.isNotBlank()) sampleUnrecognised = line
+                continue
+            }
+
+            // The space after "data:" is OPTIONAL in the SSE grammar. Requiring it dropped
+            // every frame from relays that emit the compact `data:{...}` form.
+            val jsonStr = line.removePrefix("data:").trim()
             if (jsonStr == "[DONE]") break
+            if (jsonStr.isEmpty()) continue
+            dataLines++
 
             try {
                 val response = json.decodeFromString<OpenAiStreamResponse>(jsonStr)
                 val choice = response.choices?.firstOrNull()
 
                 choice?.delta?.let { delta ->
-                    parseDeltaContent(delta, config, thinkParser) { emit(it) }
+                    parseDeltaContent(delta, config, thinkParser) { send(it) }
 
                     delta.toolCalls?.forEach { tc ->
                         accumulateToolCall(pendingToolCalls, tc)
@@ -242,11 +301,11 @@ abstract class BaseOpenAiProvider : LlmProvider {
                 choice?.message?.let { msg ->
                     msg.reasoningContent?.let { reasoning ->
                         if (reasoning.isNotEmpty() && config.thinkingEnabled) {
-                            emit(StreamEvent.ThoughtChunk(reasoning))
+                            send(StreamEvent.ThoughtChunk(reasoning))
                         }
                     }
                     extractTextContent(msg.content)?.let { content ->
-                        if (content.isNotEmpty()) emit(StreamEvent.TextChunk(content))
+                        if (content.isNotEmpty()) send(StreamEvent.TextChunk(content))
                     }
                     msg.toolCalls?.forEach { tc ->
                         // Prefer complete message payload over partial deltas of the same call.
@@ -258,6 +317,10 @@ abstract class BaseOpenAiProvider : LlmProvider {
                 // "stop" while still carrying complete tool_calls. Emit as soon as the stream
                 // signals completion with pending tools — don't require exact "tool_calls".
                 val finish = choice?.finishReason?.trim()?.lowercase().orEmpty()
+                // Remember it unconditionally. This used to be read ONLY when a tool call was
+                // pending, so an upstream that stopped for a stated reason (content_filter,
+                // length, or a relay's own non-standard value) told us why and we threw it away.
+                if (finish.isNotEmpty()) lastFinishReason = finish
                 if (finish.isNotEmpty() && pendingToolCalls.isNotEmpty()) {
                     val looksLikeToolFinish = finish == "tool_calls" ||
                         finish == "function_call" ||
@@ -272,7 +335,7 @@ abstract class BaseOpenAiProvider : LlmProvider {
                 }
 
                 response.usage?.let { usage ->
-                    emit(
+                    send(
                         StreamEvent.UsageUpdate(
                             tokenCount = usage.totalTokens,
                             thoughtsTokenCount = usage.completionTokensDetails?.reasoningTokens ?: 0
@@ -280,13 +343,15 @@ abstract class BaseOpenAiProvider : LlmProvider {
                     )
                 }
             } catch (e: Exception) {
+                parseFailures++
+                if (sampleUnrecognised == null) sampleUnrecognised = line
                 DebugLog.e("AgoraAPI", "Parse error: ${e.message}", e)
             }
         }
 
         thinkParser.flush(
-            onText = { emit(StreamEvent.TextChunk(it)) },
-            onThought = { emit(StreamEvent.ThoughtChunk(it)) }
+            onText = { send(StreamEvent.TextChunk(it)) },
+            onThought = { send(StreamEvent.ThoughtChunk(it)) }
         )
 
         // Stream ended without a recognized tool finish_reason (common with some proxies
@@ -304,6 +369,50 @@ abstract class BaseOpenAiProvider : LlmProvider {
 
         if (!currentCoroutineContext().isActive) {
             throw CancellationException("Stream cancelled")
+        }
+
+        // HTTP 200, stream closed, nothing to show. Report what the reader actually saw
+        // rather than letting GenerationManager fall back to a generic "no response" string
+        // with no error attached — that made every upstream failure look identical.
+        if (!producedContent) {
+            send(
+                StreamEvent.Error(
+                    GenerationError.EmptyStream(
+                        bytesRead = handle.bytesRead,
+                        totalLines = totalLines,
+                        dataLines = dataLines,
+                        parseFailures = parseFailures,
+                        finishReason = lastFinishReason,
+                        elapsedMs = System.currentTimeMillis() - startedMs,
+                        sampleLine = sampleUnrecognised,
+                    )
+                )
+            )
+        }
+    }
+
+    /**
+     * Some relays answer `stream: true` with an ordinary JSON body — usually an error object —
+     * while still returning HTTP 200. Without this the SSE reader skips every line and the turn
+     * ends as "no response at all", hiding a message the upstream actually sent.
+     */
+    private fun rescueNonSseBody(line: String): GenerationError? {
+        val trimmed = line.trim()
+        if (!trimmed.startsWith("{")) return null
+        val obj = try {
+            json.parseToJsonElement(trimmed) as? JsonObject ?: return null
+        } catch (_: Exception) {
+            return null
+        }
+        val text = { key: String, from: JsonObject -> (from[key] as? JsonPrimitive)?.content }
+        return when (val error = obj["error"]) {
+            is JsonObject -> GenerationError.Api(
+                code = text("code", error),
+                type = text("type", error),
+                message = text("message", error) ?: error.toString(),
+            )
+            is JsonPrimitive -> GenerationError.Api(code = null, type = null, message = error.content)
+            else -> null
         }
     }
 

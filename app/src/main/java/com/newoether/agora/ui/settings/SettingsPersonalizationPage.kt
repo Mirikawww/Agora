@@ -1,5 +1,6 @@
 package com.newoether.agora.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,6 +20,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -51,6 +53,7 @@ fun SettingsPersonalizationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val height by viewModel.settings.userProfileHeight.collectAsState()
     val occupation by viewModel.settings.userProfileOccupation.collectAsState()
     val other by viewModel.settings.userProfileOther.collectAsState()
+    val personalizationToolsEnabled by viewModel.settings.personalizationToolsEnabled.collectAsState()
 
     CollapsingSettingsScaffold(
         title = stringResource(R.string.settings_personalization),
@@ -126,6 +129,35 @@ fun SettingsPersonalizationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
             )
+
+            SettingsGroup(
+                title = stringResource(R.string.tool_personalization_section),
+                items = listOf(
+                    {
+                        SettingsItem(
+                            headlineContent = { Text(stringResource(R.string.tool_personalization)) },
+                            supportingContent = { Text(stringResource(R.string.tool_personalization_desc)) },
+                            leadingContent = {
+                                Icon(
+                                    Icons.Default.Person,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            },
+                            trailingContent = {
+                                Switch(
+                                    checked = personalizationToolsEnabled,
+                                    onCheckedChange = { viewModel.settings.setPersonalizationToolsEnabled(it) },
+                                )
+                            },
+                            modifier = Modifier.clickable {
+                                viewModel.settings.setPersonalizationToolsEnabled(!personalizationToolsEnabled)
+                            },
+                        )
+                    },
+                ),
+            )
+
             Spacer(modifier = Modifier.height(12.dp))
         }
     }

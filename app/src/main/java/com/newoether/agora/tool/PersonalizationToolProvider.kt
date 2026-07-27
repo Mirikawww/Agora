@@ -21,14 +21,19 @@ class PersonalizationToolProvider(
     private val settings: SettingsRepository,
 ) : ToolProvider {
 
-    override fun definitions(ctx: GenerationContext): List<ToolDefinition> = listOf(
-        ToolDefinition(
-            function = ToolFunction(
-                name = "get_user_profile",
-                description = "Read the user's personalization profile (nickname, gender, age, height, occupation, other). Use when you need current profile fields.",
-                parameters = ToolParameters(properties = emptyMap()),
-            )
-        ),
+    /**
+     * `get_user_profile` is deliberately NOT advertised.
+     *
+     * Every profile field is already inlined into the system prompt by
+     * [com.newoether.agora.viewmodel.GenerationRequestBuilder.buildUserProfileBlock], so exposing
+     * a tool to read them paid for the same data twice — once as prose the model always sees, and
+     * again as a schema on every request — while inviting a pointless round trip to fetch what was
+     * already in front of it. The executor still answers the call so historical conversations that
+     * recorded one replay cleanly.
+     */
+    override fun definitions(ctx: GenerationContext): List<ToolDefinition> {
+        if (!ctx.personalizationToolsEnabled) return emptyList()
+        return listOf(
         ToolDefinition(
             function = ToolFunction(
                 name = "update_user_profile",
@@ -46,7 +51,8 @@ class PersonalizationToolProvider(
                 ),
             )
         ),
-    )
+        )
+    }
 
     override fun handles(name: String): Boolean =
         name == "get_user_profile" || name == "update_user_profile"

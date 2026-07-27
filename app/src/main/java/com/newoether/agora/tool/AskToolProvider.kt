@@ -27,7 +27,9 @@ class AskToolProvider : ToolProvider {
     /** Set by [com.newoether.agora.viewmodel.GenerationManager]; null = no UI attached. */
     var ask: (suspend (question: String, header: String, mode: AskMode, options: List<String>) -> AskController.AskAnswer?)? = null
 
-    override fun definitions(ctx: GenerationContext): List<ToolDefinition> = listOf(
+    override fun definitions(ctx: GenerationContext): List<ToolDefinition> {
+        if (!ctx.askToolEnabled) return emptyList()
+        return listOf(
         ToolDefinition(
             function = ToolFunction(
                 name = "ask_user",
@@ -61,7 +63,8 @@ class AskToolProvider : ToolProvider {
                 ),
             )
         )
-    )
+        )
+    }
 
     override fun handles(name: String): Boolean = name == "ask_user"
 

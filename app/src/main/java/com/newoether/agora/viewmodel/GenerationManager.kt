@@ -94,6 +94,8 @@ data class GenerationContext(
     val imageGenSize: String = "1024x1024",
     val forceImageGen: Boolean = false,
     val skillsEnabled: Boolean = true,
+    val askToolEnabled: Boolean = true,
+    val personalizationToolsEnabled: Boolean = true,
     val githubEnabled: Boolean = false,
     val githubToken: String = "",
     val todoistEnabled: Boolean = false,
@@ -507,7 +509,10 @@ class GenerationManager(
             thinkingBudgetTokens = config.thinkingBudgetTokens,
             fastEnabled = config.fastEnabled,
             baseUrl = config.baseUrl,
-            tools = allTools,
+            // An empty list still serialises as `"tools":[]` because the field is non-null and the
+            // Json instance has encodeDefaults=true — some upstreams treat that as "tool calling
+            // requested" and answer differently. Collapse to null so the key disappears entirely.
+            tools = allTools.ifEmpty { null },
             userPrepend = config.userPrepend,
             userPostpend = config.userPostpend,
             temperature = config.temperature,
@@ -515,7 +520,10 @@ class GenerationManager(
             topP = config.topP,
             frequencyPenalty = config.frequencyPenalty,
             presencePenalty = config.presencePenalty,
-            alternateApiKeys = config.alternateApiKeys
+            alternateApiKeys = config.alternateApiKeys,
+            // Lets Stop sever exactly this conversation's socket instead of waiting out a read
+            // tick while the upstream keeps generating (and billing).
+            streamTag = conversationId
         )
         return Pair(currentPath, providerConfig)
     }
@@ -544,12 +552,29 @@ class GenerationManager(
         // Pair exactly one FGS.stop with a successful start in finally. User stop/regenerate
         // must only cancel the generation; its finally owns FGS teardown.
         var fgsStarted = false
+        // Recorded INSIDE the Main-thread block: a cancel landing while this call is suspended
+        // resumes with the refcount already incremented but never assigns the return value, so
+        // the local alone cannot tell "claimed" from "never ran".
+        val fgsClaimed = java.util.concurrent.atomic.AtomicBoolean(false)
         try {
-            fgsStarted = withContext(Dispatchers.Main.immediate) {
-                AgoraForegroundService.start(app)
+            withContext(Dispatchers.Main.immediate) {
+                fgsClaimed.set(AgoraForegroundService.start(app))
             }
+            fgsStarted = fgsClaimed.get()
+        } catch (e: CancellationException) {
+            // On the JVM CancellationException extends IllegalStateException, so the generic
+            // catch below silently swallowed the cancel signal: a stopped or retried generation
+            // carried on running and its foreground-service refcount was never balanced, which
+            // on API 35+ eventually trips the dataSync budget. Cancellation must propagate —
+            // and since the terminal finally that owns teardown is not in scope yet, release
+            // the claim here if it actually landed.
+            if (fgsClaimed.get()) {
+                withContext(NonCancellable) { AgoraForegroundService.stop(app) }
+            }
+            throw e
         } catch (e: Exception) {
             // Never let FGS start failure abort generation.
+            fgsStarted = fgsClaimed.get()
             com.newoether.agora.util.CrashReporter.note("generate FGS.start threw ${e.javaClass.simpleName}")
             DebugLog.w("AgoraVM", "FGS start failed", e)
         }
@@ -558,7 +583,12 @@ class GenerationManager(
         var totalThoughts = ""
         val thinkingPlaceholder = context.getString(R.string.thinking_ellipsis)
         var totalThoughtTitle: String? = null
+        // Usage is reported per REQUEST, and a tool-using turn makes several of them. The round
+        // counter holds the in-flight request's figure; it is settled into the running total
+        // after each collect. This used to be a single field that each round OVERWROTE, so the
+        // number shown was the last round only and understated what the turn actually cost.
         var totalTokenCount = 0
+        var roundTokenCount = 0
         var totalThoughtTimeMs: Long? = null
         var cumulativeThoughtMs: Long = 0
         var currentThoughtStartMs: Long? = null
@@ -572,7 +602,17 @@ class GenerationManager(
         var currentAnswerBuf = StringBuilder()
         var currentThoughtBuf = StringBuilder()
         var currentThoughtSignature: String? = null
-        val placeholder = conversations.getMessagesForConversationSnapshot(conversationId).find { it.id == modelMessageId }
+        // This suspending read sits between the FGS claim and the terminal try/finally, so a Stop
+        // landing here used to skip teardown entirely: the refcount leaked and the placeholder row
+        // stayed SENDING forever. Everything from the claim onward has to release it on any exit.
+        val placeholder = try {
+            conversations.getMessagesForConversationSnapshot(conversationId).find { it.id == modelMessageId }
+        } catch (t: Throwable) {
+            if (fgsStarted) {
+                withContext(NonCancellable) { AgoraForegroundService.stop(app) }
+            }
+            throw t
+        }
         val parentId = placeholder?.parentId
         var toolPath = emptyList<ChatMessage>()
 
@@ -633,7 +673,7 @@ class GenerationManager(
             fun modelMessage() = ChatMessage(
                 id = modelMessageId, parentId = parentId,
                 text = totalText, thoughts = totalThoughts.ifBlank { null },
-                thoughtTitle = totalThoughtTitle, tokenCount = totalTokenCount,
+                thoughtTitle = totalThoughtTitle, tokenCount = totalTokenCount + roundTokenCount,
                 status = currentStatus, participant = Participant.MODEL,
                 timestamp = startTime, thoughtTimeMs = totalThoughtTimeMs,
                 modelName = modelName, toolCall = toolCallData,
@@ -706,7 +746,7 @@ class GenerationManager(
                         if (event.signature != null) currentThoughtSignature = event.signature
                     }
                     is StreamEvent.UsageUpdate -> {
-                        if (event.tokenCount > 0) totalTokenCount = event.tokenCount
+                        if (event.tokenCount > 0) roundTokenCount = event.tokenCount
                         if (totalText.isEmpty() && event.thoughtsTokenCount > 0) {
                             currentStatus = MessageStatus.THINKING
                             if (currentThoughtStartMs == null) {
@@ -839,6 +879,9 @@ class GenerationManager(
             provider.generateResponse(apiPath, providerConfig).collect { event ->
                 handleStreamEvent(event)
             }
+            // Settle this request's usage before any tool round issues the next one.
+            totalTokenCount += roundTokenCount
+            roundTokenCount = 0
             finishCurrentThoughtTiming()
             // Always emit final state after collection completes
             if (generationJob?.isCancelled != true) {
@@ -914,6 +957,8 @@ class GenerationManager(
                 provider.generateResponse(apiToolPath, providerConfig).collect { event ->
                     handleStreamEvent(event)
                 }
+                totalTokenCount += roundTokenCount
+                roundTokenCount = 0
                 finishCurrentThoughtTiming()
                 // Always emit final state after tool round completes
                 onStreamUpdate(modelMessage())
@@ -996,7 +1041,7 @@ class GenerationManager(
                                 id = modelMessageId, conversationId = conversationId, parentId = effectiveParentId,
                                 text = totalText, images = generatedImages.toList(),
                                 thoughts = totalThoughts.ifBlank { null },
-                                thoughtTitle = totalThoughtTitle, tokenCount = totalTokenCount,
+                                thoughtTitle = totalThoughtTitle, tokenCount = totalTokenCount + roundTokenCount,
                                 status = currentStatus, participant = Participant.MODEL, timestamp = startTime,
                                 completedAt = finishedAt,
                                 thoughtTimeMs = totalThoughtTimeMs, modelName = modelName, toolCallJson = segmentsJson

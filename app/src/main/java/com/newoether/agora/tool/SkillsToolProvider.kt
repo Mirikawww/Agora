@@ -28,6 +28,7 @@ class SkillsToolProvider(
 ) : ToolProvider {
 
     private val toolNames = setOf(
+        "skills",
         "list_skills",
         "load_skill",
         "create_skill",
@@ -37,105 +38,39 @@ class SkillsToolProvider(
         "install_skill_from_skillsmp",
     )
 
+    /**
+     * One dispatching tool instead of seven.
+     *
+     * The seven skill operations shared almost the same parameter set (`name`, `content`,
+     * `new_name`) but each shipped its own full JSON schema, so a feature most turns never touch
+     * cost ~850 tokens on every request. An `action` selector keeps all seven reachable at roughly
+     * a third of the size, and the legacy names still execute so recorded tool calls replay.
+     */
     override fun definitions(ctx: GenerationContext): List<ToolDefinition> {
         if (!ctx.skillsEnabled) return emptyList()
         return listOf(
             ToolDefinition(
                 function = ToolFunction(
-                    name = "list_skills",
-                    description = "List available local skills (name + short preview). Call when specialized workflows may help, or before create/update/delete to avoid name clashes.",
-                    parameters = ToolParameters(properties = emptyMap()),
-                )
-            ),
-            ToolDefinition(
-                function = ToolFunction(
-                    name = "load_skill",
-                    description = "Load the full markdown content of a local skill by exact name. Use after list_skills when a skill matches the task. Follow the skill instructions carefully.",
+                    name = "skills",
+                    description = "Local skill library — reusable workflow instructions. Choose an operation with 'action':\n" +
+                        "- list — available skills with a short preview; no other parameters. Call this when a specialised workflow might help, and before create/update/delete to avoid name clashes\n" +
+                        "- load — full markdown of one skill; needs 'name'. Follow the loaded instructions carefully\n" +
+                        "- create — save a new skill; needs 'name' (unique, case-insensitive) and 'content' (SKILL.md-style markdown)\n" +
+                        "- update — replace a skill's content; needs 'name' and 'content', optional 'new_name' to rename\n" +
+                        "- delete — remove a skill; needs 'name'. Only when the user clearly asks\n" +
+                        "- search — search the SkillsMP online catalog; needs 'query' (min 2 chars), optional 'limit' (1-50, default 15). Returns catalog id, author, source URL, description, stars\n" +
+                        "- install — install a catalog result locally; needs 'id' from search, optional 'name' to override the local title. Re-installing the same id updates it",
                     parameters = ToolParameters(
                         properties = mapOf(
-                            "name" to ToolProperty("string", "Skill name to load."),
+                            "action" to ToolProperty("string", "One of: list, load, create, update, delete, search, install."),
+                            "name" to ToolProperty("string", "Skill name."),
+                            "content" to ToolProperty("string", "Full skill markdown body."),
+                            "new_name" to ToolProperty("string", "New name, for action=update."),
+                            "query" to ToolProperty("string", "Search query, for action=search."),
+                            "limit" to ToolProperty("integer", "Max results 1-50, for action=search."),
+                            "id" to ToolProperty("string", "Catalog id, for action=install."),
                         ),
-                        required = listOf("name"),
-                    ),
-                )
-            ),
-            ToolDefinition(
-                function = ToolFunction(
-                    name = "create_skill",
-                    description = "Create and save a new local skill as markdown. Use when the user asks you to create/add a skill, or when a reusable workflow should be stored. Name must be unique (case-insensitive).",
-                    parameters = ToolParameters(
-                        properties = mapOf(
-                            "name" to ToolProperty("string", "Unique skill name (human-readable)."),
-                            "content" to ToolProperty(
-                                "string",
-                                "Full skill markdown body (instructions, steps, constraints). Prefer SKILL.md style.",
-                            ),
-                        ),
-                        required = listOf("name", "content"),
-                    ),
-                )
-            ),
-            ToolDefinition(
-                function = ToolFunction(
-                    name = "update_skill",
-                    description = "Replace the full markdown content of an existing local skill by name. Optionally rename with new_name.",
-                    parameters = ToolParameters(
-                        properties = mapOf(
-                            "name" to ToolProperty("string", "Existing skill name."),
-                            "content" to ToolProperty("string", "New full markdown content."),
-                            "new_name" to ToolProperty("string", "Optional new name for the skill."),
-                        ),
-                        required = listOf("name", "content"),
-                    ),
-                )
-            ),
-            ToolDefinition(
-                function = ToolFunction(
-                    name = "delete_skill",
-                    description = "Permanently delete a local skill by exact name. Only when the user clearly asks to remove it.",
-                    parameters = ToolParameters(
-                        properties = mapOf(
-                            "name" to ToolProperty("string", "Skill name to delete."),
-                        ),
-                        required = listOf("name"),
-                    ),
-                )
-            ),
-            ToolDefinition(
-                function = ToolFunction(
-                    name = "search_skillsmp",
-                    description = "Search the SkillsMP catalog for installable agent skills. Use when the user asks to find, browse, or discover skills online. Returns the SkillsMP id, author, GitHub source URL, description, and stars.",
-                    parameters = ToolParameters(
-                        properties = mapOf(
-                            "query" to ToolProperty(
-                                "string",
-                                "Search query (min 2 chars). e.g. \"git commit\", \"react\", \"code review\".",
-                            ),
-                            "limit" to ToolProperty(
-                                "integer",
-                                "Max results 1-50. Default 15.",
-                            ),
-                        ),
-                        required = listOf("query"),
-                    ),
-                )
-            ),
-            ToolDefinition(
-                function = ToolFunction(
-                    name = "install_skill_from_skillsmp",
-                    description = "Download the SKILL.md for a result from SkillsMP's GitHub source and save it to the local skill library. Pass the id returned by search_skillsmp. Re-installing the same catalog id updates the existing entry.",
-                    parameters = ToolParameters(
-                        properties = mapOf(
-                            "id" to ToolProperty(
-                                "string",
-                                "SkillsMP catalog id or skill name from search_skillsmp.",
-                            ),
-                            "name" to ToolProperty(
-                                "string",
-                                "Optional local display name override.",
-                            ),
-                        ),
-                        required = listOf("id"),
+                        required = listOf("action"),
                     ),
                 )
             ),
@@ -151,7 +86,24 @@ class SkillsToolProvider(
         SkillsMpClient.apiToken = settings.skillsApiToken.first()
 
         val args = parseArgs(arguments)
-        return when (name) {
+        // The merged `skills` entry point maps onto the legacy operation names, which stay live
+        // below so tool calls recorded in existing conversations still execute.
+        val op = if (name == "skills") {
+            when (val action = stringArg(args, "action").trim().lowercase()) {
+                "list", "list_skills" -> "list_skills"
+                "load", "load_skill" -> "load_skill"
+                "create", "create_skill" -> "create_skill"
+                "update", "update_skill" -> "update_skill"
+                "delete", "delete_skill" -> "delete_skill"
+                "search", "search_skillsmp" -> "search_skillsmp"
+                "install", "install_skill_from_skillsmp" -> "install_skill_from_skillsmp"
+                "" -> return """{"error":"missing_action","expected":"list|load|create|update|delete|search|install"}"""
+                else -> return """{"error":"unknown_action","action":"$action"}"""
+            }
+        } else {
+            name
+        }
+        return when (op) {
             "list_skills" -> listSkills()
             "load_skill" -> loadSkill(stringArg(args, "name"))
             "create_skill" -> createSkill(stringArg(args, "name"), stringArg(args, "content"))

@@ -11,8 +11,18 @@ import androidx.compose.ui.zIndex
 /**
  * Double-buffered crossfade Markdown composable.
  * Prevents visual "flash" from AST re-parsing during streaming by maintaining
- * two content buffers and crossfading between them over ~180ms.
+ * two content buffers and crossfading between them.
+ *
+ * The fade length is the streaming frame rate. A swap can only start once the previous one has
+ * finished (see the `!fading` guard below), so each fade plus its two priming frames is the floor
+ * on how often text can visibly change — a single 180ms setting capped it near 4.7 updates/s
+ * regardless of how fast tokens arrived, which reads as stuttering rather than streaming. Mid-
+ * stream swaps therefore use a short fade, and only the final settle after the stream ends keeps
+ * the longer, smoother one. No content is dropped either way: the state effect below re-runs when
+ * `fading` clears and picks up whatever the latest value is by then.
  */
+private const val STREAMING_FADE_NS = 50_000_000L  // ~50ms → roughly 12 visible updates/s
+private const val SETTLED_FADE_NS = 180_000_000L   // final swap only; smoothness over rate
 @Composable
 internal fun RecomposeSafeMarkdown(
     content: String,
@@ -72,7 +82,7 @@ internal fun RecomposeSafeMarkdown(
         if (!fading) return@LaunchedEffect
         withFrameNanos { }
         val startNs = withFrameNanos { it }
-        val durationNs = 180_000_000L
+        val durationNs = if (isStreaming) STREAMING_FADE_NS else SETTLED_FADE_NS
         while (true) {
             val nowNs = withFrameNanos { it }
             val p = ((nowNs - startNs).toFloat() / durationNs).coerceAtMost(1f)

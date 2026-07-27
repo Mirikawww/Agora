@@ -126,9 +126,35 @@ object CrashReporter {
         return runCatching { HttpClient.post(ENDPOINT, reportJson) != null }.getOrDefault(false)
     }
 
-    /** Pretty / human extract of the stack from a stored report JSON. */
-    fun extractTrace(reportJson: String): String =
-        runCatching { JSONObject(reportJson).optString("trace", "") }.getOrDefault("")
+    /**
+     * Human-readable extract of a stored report: the stack, then the breadcrumb trail.
+     *
+     * The trail was being recorded and written to disk but never shown, which threw away the
+     * half of the report that actually explains lifecycle crashes — a stack tells you *where*
+     * it died, the preceding `FGS.start` / `FGS.stop` / `generate` sequence tells you *why*.
+     * Timestamps are rendered relative to the crash so the ordering reads at a glance.
+     */
+    fun extractTrace(reportJson: String): String = runCatching {
+        val report = JSONObject(reportJson)
+        val trace = report.optString("trace", "")
+        val crumbs = report.optJSONArray("breadcrumbs")
+        if (crumbs == null || crumbs.length() == 0) return@runCatching trace
+        val crashedAt = report.optLong("ts", 0L)
+        buildString {
+            append(trace)
+            append("\n\n--- breadcrumbs (seconds before crash) ---\n")
+            for (i in 0 until crumbs.length()) {
+                val entry = crumbs.optString(i)
+                val split = entry.indexOf(' ')
+                val at = if (split > 0) entry.substring(0, split).toLongOrNull() else null
+                if (at != null && crashedAt > 0L) {
+                    append("-%.2fs  %s\n".format((crashedAt - at) / 1000.0, entry.substring(split + 1)))
+                } else {
+                    append(entry).append('\n')
+                }
+            }
+        }
+    }.getOrDefault("")
 
     private fun launchCrashUi(context: Context, reportJson: String?) {
         val intent = Intent(context, CrashReportActivity::class.java).apply {

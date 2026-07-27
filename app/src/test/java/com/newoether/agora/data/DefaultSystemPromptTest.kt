@@ -17,7 +17,7 @@ class DefaultSystemPromptTest {
     }
 
     @Test
-    fun create_includesRuntimeContextActiveMemoryAndToolPolicy() {
+    fun create_carriesActiveMemoryAndToolPolicy() {
         val entry = DefaultSystemPrompt.create(Locale.ENGLISH)
         val systemPrompt = PredefinedVariables.compile(
             entry.systemItems,
@@ -28,12 +28,41 @@ class DefaultSystemPromptTest {
             )
         )
 
-        assertTrue(systemPrompt.contains("<current_date>2026-06-17</current_date>"))
-        assertTrue(systemPrompt.contains("<current_time>21:35:10</current_time>"))
         assertTrue(systemPrompt.contains("<active_memory_context>\nUser prefers concise answers.\n</active_memory_context>"))
-        assertTrue(systemPrompt.contains("Shell and device files:"))
-        assertTrue(systemPrompt.contains("configured shell server or the Local Sandbox"))
+        assertTrue(systemPrompt.contains("Tool use:"))
+        assertTrue(systemPrompt.contains("wait for user approval"))
         assertFalse(systemPrompt.contains("generate_image"))
+    }
+
+    /**
+     * The clock must not appear in the system prompt: a value that changes every second at the
+     * front of the prefix makes everything after it — including the tool schemas — uncacheable.
+     * Real-time awareness comes from the per-message `sent_time` stamp instead, which renders
+     * identically on every request.
+     */
+    @Test
+    fun create_keepsVolatileValuesOutOfTheCacheablePrefix() {
+        val entry = DefaultSystemPrompt.create(Locale.ENGLISH)
+        val systemPrompt = PredefinedVariables.compile(
+            entry.systemItems,
+            mapOf(
+                PredefinedVariables.DATE to "2026-06-17",
+                PredefinedVariables.TIME to "21:35:10",
+                PredefinedVariables.ACTIVE_MEMORY to "User prefers concise answers."
+            )
+        )
+
+        assertFalse("system prompt must not embed the wall clock", systemPrompt.contains("21:35:10"))
+        assertFalse("system prompt must not embed the current date", systemPrompt.contains("2026-06-17"))
+        assertTrue("model must be told where the timestamp lives", systemPrompt.contains("sent_time"))
+
+        // The only per-request variable left must sit at the tail, so everything before it caches.
+        val memoryAt = systemPrompt.indexOf("User prefers concise answers.")
+        assertTrue("active memory must appear", memoryAt >= 0)
+        assertTrue(
+            "active memory is the only volatile block and must be near the end",
+            memoryAt > systemPrompt.length / 2,
+        )
     }
 
     @Test

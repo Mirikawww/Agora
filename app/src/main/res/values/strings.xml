@@ -550,6 +550,13 @@
     <string name="memory_title">Memory</string>
     <string name="memory_access_saved">Access Saved Memories</string>
     <string name="memory_access_saved_desc">Allow the model to read, create, and edit memory files</string>
+    <string name="tool_memory">Memory</string>
+    <string name="tool_skills">Skills</string>
+    <string name="tool_personalization_section">Tools</string>
+    <string name="tool_personalization">Let the model update this profile</string>
+    <string name="tool_personalization_desc">Adds a tool so the model can save personal facts you mention. The profile above is sent with every request either way — turning this off only removes the write tool (~300 tokens per request).</string>
+    <string name="settings_tool_ask_user">Let the model ask you questions</string>
+    <string name="settings_tool_ask_user_desc">Adds a tool the model can use to pause and ask you to choose, instead of guessing. Costs about 330 tokens per request.</string>
     <string name="memory_access_active">Access Active Memory</string>
     <string name="memory_access_active_desc">Allow the model to update active memory</string>
     <string name="memory_access_past">Access Past Conversations</string>

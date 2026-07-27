@@ -345,23 +345,33 @@ class GeminiProvider : LlmProvider {
                         while (attempt < maxAttempts && !done) {
                             attempt++
                             applyAuthHeader()
-                            val handle = HttpClient.streamPost(finalUrlString, requestJson, headers)
+                            val handle = HttpClient.streamPost(finalUrlString, requestJson, headers, config.streamTag)
                             try {
                             if (handle.code == 200) {
                                 done = true
                                 var line: String? = null
                                 var currentThoughtSignature: String? = null
                     var inThoughtBlock = false
+                    val liveness = com.newoether.agora.api.util.StreamLiveness()
                     while (currentCoroutineContext().isActive) {
                         try {
                             line = handle.readLine()
                             if (line == null) break
+                            liveness.onLine(line)
                         } catch (e: java.net.SocketTimeoutException) {
                             if (!currentCoroutineContext().isActive) break
+                            val stall = liveness.stalled()
+                            if (stall != null) {
+                                emit(StreamEvent.Error(stall))
+                                break
+                            }
                             continue
                         }
-                        if (line.startsWith("data: ")) {
-                            val jsonStr = line.substring(6).trim()
+                        // The space after "data:" is OPTIONAL in the SSE grammar — matching on
+                        // the 6-char literal dropped every frame from a server emitting the
+                        // compact `data:{...}` form, leaving the turn with no content at all.
+                        if (line.startsWith("data:")) {
+                            val jsonStr = line.removePrefix("data:").trim()
                             if (jsonStr != "[DONE]") {
                                 try {
                                     val response = json.decodeFromString<ApiStreamResponse>(jsonStr)

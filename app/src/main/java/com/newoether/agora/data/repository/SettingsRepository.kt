@@ -114,6 +114,9 @@ class SettingsRepository(
     val notionConnectorEnabled: StateFlow<Boolean> = hot(settingsManager.notionConnectorEnabled, false)
     val notionOAuth: StateFlow<com.newoether.agora.data.McpOAuthState?> = hot(settingsManager.notionOAuth, null)
     val skillsEnabled: StateFlow<Boolean> = hot(settingsManager.skillsEnabled, true)
+    val askToolEnabled: StateFlow<Boolean> = hot(settingsManager.askToolEnabled, true)
+    val personalizationToolsEnabled: StateFlow<Boolean> =
+        hot(settingsManager.personalizationToolsEnabled, true)
     val skillsApiToken: StateFlow<String> = hot(settingsManager.skillsApiToken, "")
     val shellEnabled: StateFlow<Boolean> = hot(settingsManager.shellEnabled, false)
     val proxyEnabled: StateFlow<Boolean> = hot(settingsManager.proxyEnabled, false)
@@ -570,6 +573,9 @@ class SettingsRepository(
     fun setNotionConnectorEnabled(enabled: Boolean) = scope.launch { settingsManager.saveNotionConnectorEnabled(enabled) }
     fun setNotionOAuth(oauth: com.newoether.agora.data.McpOAuthState?) = scope.launch { settingsManager.saveNotionOAuth(oauth) }
     fun setSkillsEnabled(enabled: Boolean) = scope.launch { settingsManager.saveSkillsEnabled(enabled) }
+    fun setAskToolEnabled(enabled: Boolean) = scope.launch { settingsManager.saveAskToolEnabled(enabled) }
+    fun setPersonalizationToolsEnabled(enabled: Boolean) =
+        scope.launch { settingsManager.savePersonalizationToolsEnabled(enabled) }
     fun setSkillsApiToken(token: String) = scope.launch { settingsManager.saveSkillsApiToken(token) }
     fun setShellEnabled(enabled: Boolean) = scope.launch { settingsManager.saveShellEnabled(enabled) }
     fun setMcpEnabled(enabled: Boolean) = scope.launch { settingsManager.saveMcpEnabled(enabled) }

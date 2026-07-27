@@ -345,6 +345,8 @@ class GenerationRequestBuilder(
             imageGenSize = settings.imageGenSize.value,
             forceImageGen = forceImageGen(),
             skillsEnabled = settings.skillsEnabled.value,
+            askToolEnabled = settings.askToolEnabled.value,
+            personalizationToolsEnabled = settings.personalizationToolsEnabled.value,
             githubEnabled = (settings.githubConnectorEnabled.value || forceGithub()) && settings.githubToken.value.isNotBlank(),
             githubToken = settings.githubToken.value,
             todoistEnabled = TodoistConnector.isActive(

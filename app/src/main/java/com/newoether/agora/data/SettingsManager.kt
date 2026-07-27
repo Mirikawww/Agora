@@ -5,14 +5,17 @@ import com.newoether.agora.model.ThinkingLevels
 import com.newoether.agora.model.ToolCallDisplayModes
 import com.newoether.agora.util.Constants
 import com.newoether.agora.util.DebugLog
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
@@ -294,6 +297,11 @@ class SettingsManager(private val context: Context) {
         val NOTION_CONNECTOR_ENABLED = booleanPreferencesKey("notion_connector_enabled")
         val NOTION_OAUTH_JSON = stringPreferencesKey("notion_oauth_json")
         val SKILLS_ENABLED = booleanPreferencesKey("skills_enabled")
+
+        // Two tool groups that used to ship unconditionally — no gate at all — costing ~630
+        // tokens of schema on every request even for users who never wanted either.
+        val ASK_TOOL_ENABLED = booleanPreferencesKey("ask_tool_enabled")
+        val PERSONALIZATION_TOOLS_ENABLED = booleanPreferencesKey("personalization_tools_enabled")
         val SKILLS_API_TOKEN = stringPreferencesKey("skills_api_token")
         val DEFAULT_TEMPERATURE = stringPreferencesKey("default_temperature")
         val DEFAULT_MAX_TOKENS = intPreferencesKey("default_max_tokens")
@@ -312,15 +320,35 @@ class SettingsManager(private val context: Context) {
         val LAST_MODELS_FETCH_FINGERPRINT = stringPreferencesKey("last_models_fetch_fingerprint")
     }
 
-    val selectedModel: Flow<String> = context.dataStore.data.map { it[SELECTED_MODEL] ?: Constants.EXAMPLE_MODEL_ID }
+    /**
+     * Every preference read goes through here instead of `dataStore.data` directly.
+     *
+     * `DataStore.data` propagates IOException — a truncated or corrupt preferences file, a storage
+     * failure — to whoever collects it. On the generation path that collector is a root coroutine
+     * on `GenerationSession.scope`, so one bad read used to travel all the way to the app's own
+     * uncaught handler and kill the process. Falling back to defaults keeps the app usable: a
+     * genuinely broken file then surfaces as "settings look reset", not as a crash. Anything that
+     * is not an IO failure still propagates, because that would be a real bug worth seeing.
+     */
+    private val safeData: Flow<Preferences>
+        get() = context.dataStore.data.catch { e ->
+            if (e is java.io.IOException) {
+                DebugLog.e("SettingsManager", "Preferences read failed; falling back to defaults", e)
+                emit(emptyPreferences())
+            } else {
+                throw e
+            }
+        }
+
+    val selectedModel: Flow<String> = safeData.map { it[SELECTED_MODEL] ?: Constants.EXAMPLE_MODEL_ID }
     
-    val providerBaseUrls: Flow<Map<String, String>> = context.dataStore.data.map { pref ->
+    val providerBaseUrls: Flow<Map<String, String>> = safeData.map { pref ->
         val jsonStr = pref[PROVIDER_BASE_URLS] ?: "{}"
         try { json.decodeFromString<Map<String, String>>(jsonStr) } catch (e: Exception) { DebugLog.e("SettingsManager", "Failed to decode providerBaseUrls", e); emptyMap() }
     }
 
     /** Provider name → its account-balance probe. Absent = never configured. */
-    val providerBalanceConfigs: Flow<Map<String, ProviderBalanceConfig>> = context.dataStore.data.map { pref ->
+    val providerBalanceConfigs: Flow<Map<String, ProviderBalanceConfig>> = safeData.map { pref ->
         val jsonStr = pref[PROVIDER_BALANCE_CONFIGS] ?: "{}"
         try {
             json.decodeFromString<Map<String, ProviderBalanceConfig>>(jsonStr)
@@ -330,13 +358,13 @@ class SettingsManager(private val context: Context) {
         }
     }
 
-    val availableModels: Flow<Map<String, List<String>>> = context.dataStore.data.map { pref ->
+    val availableModels: Flow<Map<String, List<String>>> = safeData.map { pref ->
         val jsonStr = pref[AVAILABLE_MODELS_JSON] ?: "{}"
         try { json.decodeFromString<Map<String, List<String>>>(jsonStr) } catch (e: Exception) { DebugLog.e("SettingsManager", "Failed to decode availableModels", e); emptyMap() }
     }
 
     /** Prefixed model ID → provider API's explicit Fast declaration; absence means unknown. */
-    val modelFastSupport: Flow<Map<String, Boolean>> = context.dataStore.data.map { pref ->
+    val modelFastSupport: Flow<Map<String, Boolean>> = safeData.map { pref ->
         val jsonStr = pref[MODEL_FAST_SUPPORT_JSON] ?: "{}"
         try {
             json.decodeFromString<Map<String, Boolean>>(jsonStr)
@@ -346,7 +374,7 @@ class SettingsManager(private val context: Context) {
         }
     }
 
-    val modelKeyNicknames: Flow<Map<String, List<String>>> = context.dataStore.data.map { pref ->
+    val modelKeyNicknames: Flow<Map<String, List<String>>> = safeData.map { pref ->
         val jsonStr = pref[MODEL_KEY_NICKNAMES_JSON] ?: "{}"
         try {
             json.decodeFromString<Map<String, List<String>>>(jsonStr)
@@ -356,7 +384,7 @@ class SettingsManager(private val context: Context) {
         }
     }
 
-    val modelKeyIds: Flow<Map<String, String>> = context.dataStore.data.map { pref ->
+    val modelKeyIds: Flow<Map<String, String>> = safeData.map { pref ->
         val jsonStr = pref[MODEL_KEY_IDS_JSON] ?: "{}"
         try {
             json.decodeFromString<Map<String, String>>(jsonStr)
@@ -366,188 +394,191 @@ class SettingsManager(private val context: Context) {
         }
     }
 
-    val enabledModels: Flow<Set<String>> = context.dataStore.data.map { it[ENABLED_MODELS] ?: emptySet() }
+    val enabledModels: Flow<Set<String>> = safeData.map { it[ENABLED_MODELS] ?: emptySet() }
     /** Provider names the user has toggled off (Local is never stored here). */
-    val disabledProviders: Flow<Set<String>> = context.dataStore.data.map { it[DISABLED_PROVIDERS] ?: emptySet() }
+    val disabledProviders: Flow<Set<String>> = safeData.map { it[DISABLED_PROVIDERS] ?: emptySet() }
 
-    val modelAliases: Flow<Map<String, String>> = context.dataStore.data.map { pref ->
+    val modelAliases: Flow<Map<String, String>> = safeData.map { pref ->
         val jsonStr = pref[MODEL_ALIASES_JSON] ?: "{}"
         try { json.decodeFromString<Map<String, String>>(jsonStr) } catch (e: Exception) { emptyMap() }
     }
 
-    val apiKeys: Flow<List<ApiKeyEntry>> = context.dataStore.data.map { pref ->
+    val apiKeys: Flow<List<ApiKeyEntry>> = safeData.map { pref ->
         val jsonStr = com.newoether.agora.util.SecretCrypto.decrypt(pref[API_KEYS_JSON] ?: "[]")
         try { json.decodeFromString<List<ApiKeyEntry>>(jsonStr) } catch (e: Exception) { emptyList() }
     }
     
     /** Provider → enabled API-key IDs (multi-select). Legacy single-id maps are migrated on read. */
-    val activeApiKeyIds: Flow<Map<String, List<String>>> = context.dataStore.data.map { pref ->
+    val activeApiKeyIds: Flow<Map<String, List<String>>> = safeData.map { pref ->
         ActiveApiKeyIds.decode(json, pref[ACTIVE_API_KEY_IDS_JSON] ?: "{}")
     }
 
-    val systemPrompts: Flow<List<SystemPromptEntry>> = context.dataStore.data.map { pref ->
+    val systemPrompts: Flow<List<SystemPromptEntry>> = safeData.map { pref ->
         val jsonStr = pref[SYSTEM_PROMPTS_JSON] ?: "[]"
         try { json.decodeFromString<List<SystemPromptEntry>>(jsonStr) } catch (e: Exception) { emptyList() }
     }
     
-    val activeSystemPromptId: Flow<String?> = context.dataStore.data.map { it[ACTIVE_SYSTEM_PROMPT_ID] }
+    val activeSystemPromptId: Flow<String?> = safeData.map { it[ACTIVE_SYSTEM_PROMPT_ID] }
 
-    val maxContextWindow: Flow<Int> = context.dataStore.data.map { it[MAX_CONTEXT_WINDOW]?.toIntOrNull() ?: 20 }
-    val visualizeContextRollout: Flow<Boolean> = context.dataStore.data.map { it[VISUALIZE_CONTEXT_ROLLOUT] ?: false }
-    val codeExecutionEnabled: Flow<Boolean> = context.dataStore.data.map { it[CODE_EXECUTION_ENABLED] ?: false }
-    val googleSearchEnabled: Flow<Boolean> = context.dataStore.data.map { it[GOOGLE_SEARCH_ENABLED] ?: false }
-    val thinkingEnabled: Flow<Boolean> = context.dataStore.data.map { it[THINKING_ENABLED] ?: true }
-    val thinkingLevel: Flow<String> = context.dataStore.data.map { ThinkingLevels.normalize(it[THINKING_LEVEL]) }
-    val thinkingBudgetEnabled: Flow<Boolean> = context.dataStore.data.map { pref ->
+    val maxContextWindow: Flow<Int> = safeData.map { it[MAX_CONTEXT_WINDOW]?.toIntOrNull() ?: 20 }
+    val visualizeContextRollout: Flow<Boolean> = safeData.map { it[VISUALIZE_CONTEXT_ROLLOUT] ?: false }
+    val codeExecutionEnabled: Flow<Boolean> = safeData.map { it[CODE_EXECUTION_ENABLED] ?: false }
+    val googleSearchEnabled: Flow<Boolean> = safeData.map { it[GOOGLE_SEARCH_ENABLED] ?: false }
+    val thinkingEnabled: Flow<Boolean> = safeData.map { it[THINKING_ENABLED] ?: true }
+    val thinkingLevel: Flow<String> = safeData.map { ThinkingLevels.normalize(it[THINKING_LEVEL]) }
+    val thinkingBudgetEnabled: Flow<Boolean> = safeData.map { pref ->
         pref[THINKING_BUDGET_ENABLED] ?: (ThinkingLevels.legacyBudgetTokens(pref[THINKING_LEVEL]) != null)
     }
-    val thinkingBudgetTokens: Flow<Int> = context.dataStore.data.map { pref ->
+    val thinkingBudgetTokens: Flow<Int> = safeData.map { pref ->
         pref[THINKING_BUDGET_TOKENS]
             ?: ThinkingLevels.legacyBudgetTokens(pref[THINKING_LEVEL])
             ?: ThinkingLevels.DefaultBudgetTokens
     }
-    val fastEnabled: Flow<Boolean> = context.dataStore.data.map { it[FAST_ENABLED] ?: false }
+    val fastEnabled: Flow<Boolean> = safeData.map { it[FAST_ENABLED] ?: false }
 
-    val titleGenerationEnabled: Flow<Boolean> = context.dataStore.data.map { it[TITLE_GENERATION_ENABLED] ?: true }
-    val titleGenerationModel: Flow<String?> = context.dataStore.data.map { it[TITLE_GENERATION_MODEL] }
-    val titleGenerationPrompt: Flow<String> = context.dataStore.data.map { pref ->
+    val titleGenerationEnabled: Flow<Boolean> = safeData.map { it[TITLE_GENERATION_ENABLED] ?: true }
+    val titleGenerationModel: Flow<String?> = safeData.map { it[TITLE_GENERATION_MODEL] }
+    val titleGenerationPrompt: Flow<String> = safeData.map { pref ->
         pref[TITLE_GENERATION_PROMPT]?.takeIf { it.isNotBlank() } ?: BuiltInPrompts.TITLE_GENERATION_SYSTEM
     }
-    val imageTranscriptionEnabledModels: Flow<Set<String>> = context.dataStore.data.map { it[IMAGE_TRANSCRIPTION_ENABLED_MODELS] ?: emptySet() }
-    val imageTranscriptionModel: Flow<String?> = context.dataStore.data.map { it[IMAGE_TRANSCRIPTION_MODEL] }
-    val imageTranscriptionBatchSize: Flow<Int> = context.dataStore.data.map { it[IMAGE_TRANSCRIPTION_BATCH_SIZE] ?: 3 }
-    val imageTranscriptionPrompt: Flow<String> = context.dataStore.data.map { pref ->
+    val imageTranscriptionEnabledModels: Flow<Set<String>> = safeData.map { it[IMAGE_TRANSCRIPTION_ENABLED_MODELS] ?: emptySet() }
+    val imageTranscriptionModel: Flow<String?> = safeData.map { it[IMAGE_TRANSCRIPTION_MODEL] }
+    val imageTranscriptionBatchSize: Flow<Int> = safeData.map { it[IMAGE_TRANSCRIPTION_BATCH_SIZE] ?: 3 }
+    val imageTranscriptionPrompt: Flow<String> = safeData.map { pref ->
         pref[IMAGE_TRANSCRIPTION_PROMPT]?.takeIf { it.isNotBlank() } ?: BuiltInPrompts.IMAGE_TRANSCRIPTION_USER
     }
 
-    val accessPastConversations: Flow<Boolean> = context.dataStore.data.map { it[ACCESS_PAST_CONVERSATIONS] ?: true }
-    val accessSavedMemories: Flow<Boolean> = context.dataStore.data.map { it[ACCESS_SAVED_MEMORIES] ?: true }
-    val accessActiveMemory: Flow<Boolean> = context.dataStore.data.map { it[ACCESS_ACTIVE_MEMORY] ?: true }
-    val ragSearchEnabled: Flow<Boolean> = context.dataStore.data.map { it[RAG_SEARCH_ENABLED] ?: false }
-    val modelSearchMethod: Flow<String> = context.dataStore.data.map { it[MODEL_SEARCH_METHOD] ?: "keyword" }
-    val manualSearchMethod: Flow<String> = context.dataStore.data.map { it[MANUAL_SEARCH_METHOD] ?: "keyword" }
-    val embeddingModels: Flow<List<EmbeddingModelConfig>> = context.dataStore.data.map { pref ->
+    val accessPastConversations: Flow<Boolean> = safeData.map { it[ACCESS_PAST_CONVERSATIONS] ?: true }
+    val accessSavedMemories: Flow<Boolean> = safeData.map { it[ACCESS_SAVED_MEMORIES] ?: true }
+    val accessActiveMemory: Flow<Boolean> = safeData.map { it[ACCESS_ACTIVE_MEMORY] ?: true }
+    val ragSearchEnabled: Flow<Boolean> = safeData.map { it[RAG_SEARCH_ENABLED] ?: false }
+    val modelSearchMethod: Flow<String> = safeData.map { it[MODEL_SEARCH_METHOD] ?: "keyword" }
+    val manualSearchMethod: Flow<String> = safeData.map { it[MANUAL_SEARCH_METHOD] ?: "keyword" }
+    val embeddingModels: Flow<List<EmbeddingModelConfig>> = safeData.map { pref ->
         val jsonStr = pref[EMBEDDING_MODELS_JSON] ?: "[]"
         try { json.decodeFromString<List<EmbeddingModelConfig>>(jsonStr) } catch (e: Exception) { emptyList() }
     }
-    val activeEmbeddingModelId: Flow<String> = context.dataStore.data.map { it[ACTIVE_EMBEDDING_MODEL_ID] ?: "" }
+    val activeEmbeddingModelId: Flow<String> = safeData.map { it[ACTIVE_EMBEDDING_MODEL_ID] ?: "" }
 
-    val appLanguage: Flow<String> = context.dataStore.data.map { it[APP_LANGUAGE] ?: "system" }
-    val webSearchEnabled: Flow<Boolean> = context.dataStore.data.map { it[WEB_SEARCH_ENABLED] ?: true }
-    val webSearchProvider: Flow<String> = context.dataStore.data.map { it[WEB_SEARCH_PROVIDER] ?: "duckduckgo" }
-    val webSearchApiKeys: Flow<Map<String, String>> = context.dataStore.data.map { pref ->
+    val appLanguage: Flow<String> = safeData.map { it[APP_LANGUAGE] ?: "system" }
+    val webSearchEnabled: Flow<Boolean> = safeData.map { it[WEB_SEARCH_ENABLED] ?: true }
+    val webSearchProvider: Flow<String> = safeData.map { it[WEB_SEARCH_PROVIDER] ?: "duckduckgo" }
+    val webSearchApiKeys: Flow<Map<String, String>> = safeData.map { pref ->
         val jsonStr = com.newoether.agora.util.SecretCrypto.decrypt(pref[WEB_SEARCH_API_KEYS_JSON] ?: "{}")
         try { json.decodeFromString<Map<String, String>>(jsonStr) } catch (e: Exception) { DebugLog.e("SettingsManager", "Failed to decode webSearchApiKeys", e); emptyMap() }
     }
-    val webSearchNumResults: Flow<Int> = context.dataStore.data.map { it[WEB_SEARCH_NUM_RESULTS] ?: 5 }
-    val webSearchBaseUrl: Flow<String> = context.dataStore.data.map { it[WEB_SEARCH_BASE_URL] ?: "" }
+    val webSearchNumResults: Flow<Int> = safeData.map { it[WEB_SEARCH_NUM_RESULTS] ?: 5 }
+    val webSearchBaseUrl: Flow<String> = safeData.map { it[WEB_SEARCH_BASE_URL] ?: "" }
 
     // ── Image generation ──────────────────────────────────────
-    val imageGenEnabled: Flow<Boolean> = context.dataStore.data.map { it[IMAGE_GEN_ENABLED] ?: false }
+    val imageGenEnabled: Flow<Boolean> = safeData.map { it[IMAGE_GEN_ENABLED] ?: false }
     // Selected image model "Provider:modelId" (null = none chosen). Creds reused from that provider.
-    val imageGenModel: Flow<String?> = context.dataStore.data.map { it[IMAGE_GEN_MODEL] }
-    val imageGenSize: Flow<String> = context.dataStore.data.map { it[IMAGE_GEN_SIZE] ?: "1024x1024" }
-    val searchContextWindow: Flow<Int> = context.dataStore.data.map { it[SEARCH_CONTEXT_WINDOW] ?: 8 }
-    val searchMatchLimit: Flow<Int> = context.dataStore.data.map { it[SEARCH_MATCH_LIMIT] ?: 10 }
-    val ragThreshold: Flow<Float> = context.dataStore.data.map { it[RAG_THRESHOLD]?.toFloatOrNull() ?: 0.5f }
-    val defaultTemperature: Flow<Float?> = context.dataStore.data.map { it[DEFAULT_TEMPERATURE]?.toFloatOrNull() }
-    val defaultMaxTokens: Flow<Int?> = context.dataStore.data.map { it[DEFAULT_MAX_TOKENS] }
-    val defaultTopP: Flow<Float?> = context.dataStore.data.map { it[DEFAULT_TOP_P]?.toFloatOrNull() }
-    val defaultFrequencyPenalty: Flow<Float?> = context.dataStore.data.map { it[DEFAULT_FREQUENCY_PENALTY]?.toFloatOrNull() }
-    val defaultPresencePenalty: Flow<Float?> = context.dataStore.data.map { it[DEFAULT_PRESENCE_PENALTY]?.toFloatOrNull() }
-    val conversationSettings: Flow<Map<String, ConversationSettings>> = context.dataStore.data.map { pref ->
+    val imageGenModel: Flow<String?> = safeData.map { it[IMAGE_GEN_MODEL] }
+    val imageGenSize: Flow<String> = safeData.map { it[IMAGE_GEN_SIZE] ?: "1024x1024" }
+    val searchContextWindow: Flow<Int> = safeData.map { it[SEARCH_CONTEXT_WINDOW] ?: 8 }
+    val searchMatchLimit: Flow<Int> = safeData.map { it[SEARCH_MATCH_LIMIT] ?: 10 }
+    val ragThreshold: Flow<Float> = safeData.map { it[RAG_THRESHOLD]?.toFloatOrNull() ?: 0.5f }
+    val defaultTemperature: Flow<Float?> = safeData.map { it[DEFAULT_TEMPERATURE]?.toFloatOrNull() }
+    val defaultMaxTokens: Flow<Int?> = safeData.map { it[DEFAULT_MAX_TOKENS] }
+    val defaultTopP: Flow<Float?> = safeData.map { it[DEFAULT_TOP_P]?.toFloatOrNull() }
+    val defaultFrequencyPenalty: Flow<Float?> = safeData.map { it[DEFAULT_FREQUENCY_PENALTY]?.toFloatOrNull() }
+    val defaultPresencePenalty: Flow<Float?> = safeData.map { it[DEFAULT_PRESENCE_PENALTY]?.toFloatOrNull() }
+    val conversationSettings: Flow<Map<String, ConversationSettings>> = safeData.map { pref ->
         val jsonStr = pref[CONVERSATION_SETTINGS_JSON] ?: "{}"
         try { json.decodeFromString<Map<String, ConversationSettings>>(jsonStr) } catch (e: Exception) { emptyMap() }
     }
-    val autoCacheEnabled: Flow<Boolean> = context.dataStore.data.map { it[AUTO_CACHE_ENABLED] ?: true }
-    val autoUpdateCheck: Flow<Boolean> = context.dataStore.data.map { it[AUTO_UPDATE_CHECK] ?: true }
+    val autoCacheEnabled: Flow<Boolean> = safeData.map { it[AUTO_CACHE_ENABLED] ?: true }
+    val autoUpdateCheck: Flow<Boolean> = safeData.map { it[AUTO_UPDATE_CHECK] ?: true }
     /** "stable" = published GitHub releases, "ci" = newest successful Actions build. */
-    val updateChannel: Flow<String> = context.dataStore.data.map { it[UPDATE_CHANNEL] ?: "stable" }
-    val lastUpdateCheckTime: Flow<Long> = context.dataStore.data.map { it[LAST_UPDATE_CHECK_TIME] ?: 0L }
-    val localChatModels: Flow<List<LocalChatModelConfig>> = context.dataStore.data.map { pref ->
+    val updateChannel: Flow<String> = safeData.map { it[UPDATE_CHANNEL] ?: "stable" }
+    val lastUpdateCheckTime: Flow<Long> = safeData.map { it[LAST_UPDATE_CHECK_TIME] ?: 0L }
+    val localChatModels: Flow<List<LocalChatModelConfig>> = safeData.map { pref ->
         val jsonStr = pref[LOCAL_CHAT_MODELS_JSON] ?: "[]"
         try { json.decodeFromString<List<LocalChatModelConfig>>(jsonStr) } catch (e: Exception) { emptyList() }
     }
-    val customProviders: Flow<List<CustomProviderConfig>> = context.dataStore.data.map { pref ->
+    val customProviders: Flow<List<CustomProviderConfig>> = safeData.map { pref ->
         val jsonStr = pref[CUSTOM_PROVIDERS_JSON] ?: "[]"
         try { json.decodeFromString<List<CustomProviderConfig>>(jsonStr) } catch (e: Exception) { emptyList() }
     }
 
-    val showComposerExpandButton: Flow<Boolean> = context.dataStore.data.map { it[SHOW_COMPOSER_EXPAND_BUTTON] ?: true }
+    val showComposerExpandButton: Flow<Boolean> = safeData.map { it[SHOW_COMPOSER_EXPAND_BUTTON] ?: true }
 
-    val shellEnabled: Flow<Boolean> = context.dataStore.data.map { it[SHELL_ENABLED] ?: true }
-    val proxyEnabled: Flow<Boolean> = context.dataStore.data.map { it[PROXY_ENABLED] ?: false }
-    val proxyType: Flow<String> = context.dataStore.data.map { it[PROXY_TYPE] ?: "http" }
-    val proxyHost: Flow<String> = context.dataStore.data.map { it[PROXY_HOST] ?: DEFAULT_PROXY_HOST }
-    val proxyPort: Flow<String> = context.dataStore.data.map { it[PROXY_PORT] ?: DEFAULT_PROXY_PORT }
-    val proxyUsername: Flow<String> = context.dataStore.data.map { it[PROXY_USERNAME] ?: "" }
-    val proxyPassword: Flow<String> = context.dataStore.data.map { it[PROXY_PASSWORD] ?: "" }
-    val proxyBypass: Flow<String> = context.dataStore.data.map { it[PROXY_BYPASS] ?: DEFAULT_PROXY_BYPASS }
+    val shellEnabled: Flow<Boolean> = safeData.map { it[SHELL_ENABLED] ?: true }
+    val proxyEnabled: Flow<Boolean> = safeData.map { it[PROXY_ENABLED] ?: false }
+    val proxyType: Flow<String> = safeData.map { it[PROXY_TYPE] ?: "http" }
+    val proxyHost: Flow<String> = safeData.map { it[PROXY_HOST] ?: DEFAULT_PROXY_HOST }
+    val proxyPort: Flow<String> = safeData.map { it[PROXY_PORT] ?: DEFAULT_PROXY_PORT }
+    val proxyUsername: Flow<String> = safeData.map { it[PROXY_USERNAME] ?: "" }
+    val proxyPassword: Flow<String> = safeData.map { it[PROXY_PASSWORD] ?: "" }
+    val proxyBypass: Flow<String> = safeData.map { it[PROXY_BYPASS] ?: DEFAULT_PROXY_BYPASS }
     // Confirm before the model runs state-changing commands on remote shell servers. Default on.
-    val shellConfirmEnabled: Flow<Boolean> = context.dataStore.data.map { it[SHELL_CONFIRM_ENABLED] ?: true }
-    val shellDevices: Flow<List<ShellDeviceConfig>> = context.dataStore.data.map { pref ->
+    val shellConfirmEnabled: Flow<Boolean> = safeData.map { it[SHELL_CONFIRM_ENABLED] ?: true }
+    val shellDevices: Flow<List<ShellDeviceConfig>> = safeData.map { pref ->
         val jsonStr = com.newoether.agora.util.SecretCrypto.decrypt(pref[SHELL_DEVICES_JSON] ?: "[]")
         try { json.decodeFromString<List<ShellDeviceConfig>>(jsonStr) } catch (e: Exception) { emptyList() }
     }
-    val mcpEnabled: Flow<Boolean> = context.dataStore.data.map { it[MCP_ENABLED] ?: false }
-    val mcpServers: Flow<List<McpServerConfig>> = context.dataStore.data.map { pref ->
+    val mcpEnabled: Flow<Boolean> = safeData.map { it[MCP_ENABLED] ?: false }
+    val mcpServers: Flow<List<McpServerConfig>> = safeData.map { pref ->
         val jsonStr = com.newoether.agora.util.SecretCrypto.decrypt(pref[MCP_SERVERS_JSON] ?: "[]")
         try { json.decodeFromString<List<McpServerConfig>>(jsonStr) } catch (e: Exception) {
             DebugLog.e("SettingsManager", "Failed to decode MCP servers", e)
             emptyList()
         }
     }
-    val sandboxEnabled: Flow<Boolean> = context.dataStore.data.map { it[SANDBOX_ENABLED] ?: false }
+    val sandboxEnabled: Flow<Boolean> = safeData.map { it[SANDBOX_ENABLED] ?: false }
 
-    val themeMode: Flow<String> = context.dataStore.data.map { it[THEME_MODE] ?: "FOLLOW_DEVICE" }
-    val colorScheme: Flow<String> = context.dataStore.data.map { it[COLOR_SCHEME] ?: "DEFAULT" }
-    val dynamicColor: Flow<Boolean> = context.dataStore.data.map { it[DYNAMIC_COLOR] ?: true }
-    val blurEffectsEnabled: Flow<Boolean> = context.dataStore.data.map { it[BLUR_EFFECTS_ENABLED] ?: true }
-    val hapticsEnabled: Flow<Boolean> = context.dataStore.data.map { it[HAPTICS_ENABLED] ?: true }
-    val toolCallDisplayMode: Flow<String> = context.dataStore.data.map { ToolCallDisplayModes.normalize(it[TOOL_CALL_DISPLAY_MODE]) }
-    val schemeStyle: Flow<String> = context.dataStore.data.map { it[SCHEME_STYLE] ?: "TONAL_SPOT" }
-    val firstLaunchTime: Flow<Long?> = context.dataStore.data.map { it[FIRST_LAUNCH_TIME] }
-    val onboardingCompleted: Flow<Boolean> = context.dataStore.data.map { it[ONBOARDING_COMPLETED] ?: false }
-    val welcomeMessages: Flow<String> = context.dataStore.data.map { it[WELCOME_MESSAGES] ?: "" }
-    val welcomeDisplayMode: Flow<String> = context.dataStore.data.map {
+    val themeMode: Flow<String> = safeData.map { it[THEME_MODE] ?: "FOLLOW_DEVICE" }
+    val colorScheme: Flow<String> = safeData.map { it[COLOR_SCHEME] ?: "DEFAULT" }
+    val dynamicColor: Flow<Boolean> = safeData.map { it[DYNAMIC_COLOR] ?: true }
+    val blurEffectsEnabled: Flow<Boolean> = safeData.map { it[BLUR_EFFECTS_ENABLED] ?: true }
+    val hapticsEnabled: Flow<Boolean> = safeData.map { it[HAPTICS_ENABLED] ?: true }
+    val toolCallDisplayMode: Flow<String> = safeData.map { ToolCallDisplayModes.normalize(it[TOOL_CALL_DISPLAY_MODE]) }
+    val schemeStyle: Flow<String> = safeData.map { it[SCHEME_STYLE] ?: "TONAL_SPOT" }
+    val firstLaunchTime: Flow<Long?> = safeData.map { it[FIRST_LAUNCH_TIME] }
+    val onboardingCompleted: Flow<Boolean> = safeData.map { it[ONBOARDING_COMPLETED] ?: false }
+    val welcomeMessages: Flow<String> = safeData.map { it[WELCOME_MESSAGES] ?: "" }
+    val welcomeDisplayMode: Flow<String> = safeData.map {
         val mode = it[WELCOME_DISPLAY_MODE] ?: "random"
         if (mode == "sequential") "sequential" else "random"
     }
-    val welcomeEnabled: Flow<Boolean> = context.dataStore.data.map { it[WELCOME_ENABLED] ?: true }
-    val composerDraftsJson: Flow<String> = context.dataStore.data.map { it[COMPOSER_DRAFTS_JSON] ?: "{}" }
-    val messageQueuesJson: Flow<String> = context.dataStore.data.map { it[MESSAGE_QUEUES_JSON] ?: "{}" }
-    val userProfileNickname: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_NICKNAME] ?: "" }
-    val userProfileGender: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_GENDER] ?: "" }
-    val userProfileAge: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_AGE] ?: "" }
-    val userProfileHeight: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_HEIGHT] ?: "" }
-    val userProfileOccupation: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_OCCUPATION] ?: "" }
-    val userProfileOther: Flow<String> = context.dataStore.data.map { it[USER_PROFILE_OTHER] ?: "" }
-    val githubConnectorEnabled: Flow<Boolean> = context.dataStore.data.map { it[GITHUB_CONNECTOR_ENABLED] ?: false }
-    val githubToken: Flow<String> = context.dataStore.data.map { it[GITHUB_TOKEN] ?: "" }
-    val todoistConnectorEnabled: Flow<Boolean> = context.dataStore.data.map { it[TODOIST_CONNECTOR_ENABLED] ?: false }
-    val todoistOAuth: Flow<McpOAuthState?> = context.dataStore.data.map { pref ->
+    val welcomeEnabled: Flow<Boolean> = safeData.map { it[WELCOME_ENABLED] ?: true }
+    val composerDraftsJson: Flow<String> = safeData.map { it[COMPOSER_DRAFTS_JSON] ?: "{}" }
+    val messageQueuesJson: Flow<String> = safeData.map { it[MESSAGE_QUEUES_JSON] ?: "{}" }
+    val userProfileNickname: Flow<String> = safeData.map { it[USER_PROFILE_NICKNAME] ?: "" }
+    val userProfileGender: Flow<String> = safeData.map { it[USER_PROFILE_GENDER] ?: "" }
+    val userProfileAge: Flow<String> = safeData.map { it[USER_PROFILE_AGE] ?: "" }
+    val userProfileHeight: Flow<String> = safeData.map { it[USER_PROFILE_HEIGHT] ?: "" }
+    val userProfileOccupation: Flow<String> = safeData.map { it[USER_PROFILE_OCCUPATION] ?: "" }
+    val userProfileOther: Flow<String> = safeData.map { it[USER_PROFILE_OTHER] ?: "" }
+    val githubConnectorEnabled: Flow<Boolean> = safeData.map { it[GITHUB_CONNECTOR_ENABLED] ?: false }
+    val githubToken: Flow<String> = safeData.map { it[GITHUB_TOKEN] ?: "" }
+    val todoistConnectorEnabled: Flow<Boolean> = safeData.map { it[TODOIST_CONNECTOR_ENABLED] ?: false }
+    val todoistOAuth: Flow<McpOAuthState?> = safeData.map { pref ->
         val raw = pref[TODOIST_OAUTH_JSON].orEmpty()
         if (raw.isBlank()) null
         else runCatching { json.decodeFromString(McpOAuthState.serializer(), raw) }.getOrNull()
     }
-    val notionConnectorEnabled: Flow<Boolean> = context.dataStore.data.map { it[NOTION_CONNECTOR_ENABLED] ?: false }
-    val notionOAuth: Flow<McpOAuthState?> = context.dataStore.data.map { pref ->
+    val notionConnectorEnabled: Flow<Boolean> = safeData.map { it[NOTION_CONNECTOR_ENABLED] ?: false }
+    val notionOAuth: Flow<McpOAuthState?> = safeData.map { pref ->
         val raw = pref[NOTION_OAUTH_JSON].orEmpty()
         if (raw.isBlank()) null
         else runCatching { json.decodeFromString(McpOAuthState.serializer(), raw) }.getOrNull()
     }
-    val skillsEnabled: Flow<Boolean> = context.dataStore.data.map { it[SKILLS_ENABLED] ?: true }
-    val skillsApiToken: Flow<String> = context.dataStore.data.map { it[SKILLS_API_TOKEN] ?: "" }
+    val skillsEnabled: Flow<Boolean> = safeData.map { it[SKILLS_ENABLED] ?: true }
+    val askToolEnabled: Flow<Boolean> = safeData.map { it[ASK_TOOL_ENABLED] ?: true }
+    val personalizationToolsEnabled: Flow<Boolean> =
+        safeData.map { it[PERSONALIZATION_TOOLS_ENABLED] ?: true }
+    val skillsApiToken: Flow<String> = safeData.map { it[SKILLS_API_TOKEN] ?: "" }
 
     // ── Auto Backup ───────────────────────────────────────────
-    val autoBackupEnabled: Flow<Boolean> = context.dataStore.data.map { it[AUTO_BACKUP_ENABLED] ?: true }
-    val autoBackupPeriodHours: Flow<Int> = context.dataStore.data.map { it[AUTO_BACKUP_PERIOD_HOURS] ?: 24 }
-    val autoBackupCategories: Flow<String> = context.dataStore.data.map { it[AUTO_BACKUP_CATEGORIES] ?: "conversations,memories,system_prompts,settings" }
-    val autoBackupDirectory: Flow<String> = context.dataStore.data.map { it[AUTO_BACKUP_DIRECTORY] ?: "Download/Agora/Backup" }
-    val autoDeleteEnabled: Flow<Boolean> = context.dataStore.data.map { it[AUTO_DELETE_ENABLED] ?: true }
-    val autoDeletePeriodHours: Flow<Int> = context.dataStore.data.map { it[AUTO_DELETE_PERIOD_HOURS] ?: 168 }
-    val lastBackupTimestamp: Flow<Long> = context.dataStore.data.map { it[LAST_BACKUP_TIMESTAMP] ?: 0L }
-    val lastModelsFetchFingerprint: Flow<String> = context.dataStore.data.map { it[LAST_MODELS_FETCH_FINGERPRINT] ?: "" }
+    val autoBackupEnabled: Flow<Boolean> = safeData.map { it[AUTO_BACKUP_ENABLED] ?: true }
+    val autoBackupPeriodHours: Flow<Int> = safeData.map { it[AUTO_BACKUP_PERIOD_HOURS] ?: 24 }
+    val autoBackupCategories: Flow<String> = safeData.map { it[AUTO_BACKUP_CATEGORIES] ?: "conversations,memories,system_prompts,settings" }
+    val autoBackupDirectory: Flow<String> = safeData.map { it[AUTO_BACKUP_DIRECTORY] ?: "Download/Agora/Backup" }
+    val autoDeleteEnabled: Flow<Boolean> = safeData.map { it[AUTO_DELETE_ENABLED] ?: true }
+    val autoDeletePeriodHours: Flow<Int> = safeData.map { it[AUTO_DELETE_PERIOD_HOURS] ?: 168 }
+    val lastBackupTimestamp: Flow<Long> = safeData.map { it[LAST_BACKUP_TIMESTAMP] ?: 0L }
+    val lastModelsFetchFingerprint: Flow<String> = safeData.map { it[LAST_MODELS_FETCH_FINGERPRINT] ?: "" }
 
     suspend fun saveProviderBaseUrl(provider: String, url: String) {
         context.dataStore.edit { prefs ->
@@ -1103,6 +1134,12 @@ class SettingsManager(private val context: Context) {
     }
     suspend fun saveSkillsEnabled(enabled: Boolean) {
         context.dataStore.edit { it[SKILLS_ENABLED] = enabled }
+    }
+    suspend fun saveAskToolEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[ASK_TOOL_ENABLED] = enabled }
+    }
+    suspend fun savePersonalizationToolsEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[PERSONALIZATION_TOOLS_ENABLED] = enabled }
     }
     suspend fun saveSkillsApiToken(token: String) {
         context.dataStore.edit { it[SKILLS_API_TOKEN] = token }

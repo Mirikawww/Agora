@@ -244,7 +244,7 @@ class AnthropicProvider : LlmProvider {
                     while (attempt < maxAttempts && !done) {
                         attempt++
                         applyAuthHeader()
-                        val handle = HttpClient.streamPost(url, requestBodyJson, headers)
+                        val handle = HttpClient.streamPost(url, requestBodyJson, headers, config.streamTag)
                         try {
                         if (handle.code == 200) {
                             done = true
@@ -255,19 +255,29 @@ class AnthropicProvider : LlmProvider {
                     var toolUseArgs = StringBuilder()
                     var thinkingSignature: String? = null
                     var messageInputTokens = 0
+                    val liveness = com.newoether.agora.api.util.StreamLiveness()
 
                     while (currentCoroutineContext().isActive) {
                         try {
                             line = handle.readLine()
                             if (line == null) break
+                            liveness.onLine(line)
                         } catch (e: java.net.SocketTimeoutException) {
                             if (!currentCoroutineContext().isActive) break
+                            val stall = liveness.stalled()
+                            if (stall != null) {
+                                emit(StreamEvent.Error(stall))
+                                break
+                            }
                             continue
                         }
-                        if (line.startsWith("event: ")) {
-                            currentType = line.substring(7).trim()
-                        } else if (line.startsWith("data: ")) {
-                            val jsonStr = line.substring(6).trim()
+                        // Match the SSE field name, not a fixed-width literal: the space after
+                        // the colon is optional in the grammar, and requiring it silently
+                        // discarded every frame from servers emitting the compact form.
+                        if (line.startsWith("event:")) {
+                            currentType = line.removePrefix("event:").trim()
+                        } else if (line.startsWith("data:")) {
+                            val jsonStr = line.removePrefix("data:").trim()
                             try {
                                 val event = json.decodeFromString<AnthropicStreamEvent>(jsonStr)
                                 when (event.type) {

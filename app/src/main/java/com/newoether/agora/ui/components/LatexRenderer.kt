@@ -189,6 +189,21 @@ private fun isLikelyLatex(content: String): Boolean {
 
 // ── Markdown escape ────────────────────────────────────────────────────
 
+/**
+ * Index of [needle] relative to [base], searching from `base + from`; -1 when absent.
+ *
+ * The scanners below used to work on `substring(i)` and index into that copy. On prose
+ * with no LaTeX every character falls through to the default branch, so the tail was
+ * copied once per character — O(n^2), on the Main thread, re-run on the full accumulated
+ * text on every stream update. These helpers keep the original relative-offset arithmetic
+ * (so `i += end + 3` and friends read exactly as before) without ever copying.
+ */
+private fun String.relIndexOf(needle: String, base: Int, from: Int): Int =
+    indexOf(needle, base + from).let { if (it < 0) -1 else it - base }
+
+private fun String.relIndexOf(needle: Char, base: Int, from: Int): Int =
+    indexOf(needle, base + from).let { if (it < 0) -1 else it - base }
+
 fun String.escapeDollarForMarkdown(): String = buildString {
     val src = this@escapeDollarForMarkdown
     val protectedRanges = findMarkdownProtectedRanges(src)
@@ -207,21 +222,20 @@ fun String.escapeDollarForMarkdown(): String = buildString {
         }
 
         val ch = src[i]
-        val remaining = src.substring(i)
 
         // ``` fenced code block — pass through
-        if (remaining.startsWith("```")) {
-            val end = remaining.indexOf("```", 3)
+        if (src.startsWith("```", i)) {
+            val end = src.relIndexOf("```", i, 3)
             if (end >= 0) {
-                append(remaining.substring(0, end + 3))
+                append(src, i, i + end + 3)
                 i += end + 3; continue
             }
         }
         // ` inline code — pass through
         if (ch == '`') {
-            val end = remaining.indexOf('`', 1)
+            val end = src.relIndexOf('`', i, 1)
             if (end >= 0) {
-                append(remaining.substring(0, end + 1))
+                append(src, i, i + end + 1)
                 i += end + 1; continue
             }
         }
@@ -254,34 +268,32 @@ fun parseLatexSpans(text: String): List<LatexSpan> {
             continue
         }
 
-        val remaining = text.substring(i)
-
         // ``` fenced code block — skip until closing ```
-        if (remaining.startsWith("```")) {
-            val end = remaining.indexOf("```", 3)
+        if (text.startsWith("```", i)) {
+            val end = text.relIndexOf("```", i, 3)
             if (end >= 0) {
                 if (buf.isNotEmpty()) { spans.add(LatexSpan(false, buf.toString())); buf.clear() }
-                spans.add(LatexSpan(false, remaining.substring(0, end + 3)))
+                spans.add(LatexSpan(false, text.substring(i, i + end + 3)))
                 i += end + 3
                 continue
             }
         }
 
         // ` inline code — skip until closing `
-        if (remaining[0] == '`' && !remaining.startsWith("```")) {
-            val end = remaining.indexOf('`', 1)
+        if (text[i] == '`' && !text.startsWith("```", i)) {
+            val end = text.relIndexOf('`', i, 1)
             if (end >= 0) {
-                buf.append(remaining.substring(0, end + 1))
+                buf.append(text, i, i + end + 1)
                 i += end + 1
                 continue
             }
         }
 
         // $$ display math
-        if (remaining.startsWith("$$")) {
-            val end = remaining.indexOf("$$", 2)
+        if (text.startsWith("$$", i)) {
+            val end = text.relIndexOf("$$", i, 2)
             if (end >= 0) {
-                val latex = remaining.substring(2, end).trim()
+                val latex = text.substring(i + 2, i + end).trim()
                 if (latex.isNotBlank() && nonAsciiInsideBraces(latex)) {
                     if (buf.isNotEmpty()) { spans.add(LatexSpan(false, buf.toString())); buf.clear() }
                     spans.add(LatexSpan(true, latex, true))
@@ -301,10 +313,10 @@ fun parseLatexSpans(text: String): List<LatexSpan> {
         }
 
         // \[ display math
-        if (remaining.startsWith("\\[")) {
-            val end = remaining.indexOf("\\]", 2)
+        if (text.startsWith("\\[", i)) {
+            val end = text.relIndexOf("\\]", i, 2)
             if (end >= 0) {
-                val latex = remaining.substring(2, end).trim()
+                val latex = text.substring(i + 2, i + end).trim()
                 if (latex.isNotBlank() && nonAsciiInsideBraces(latex)) {
                     if (buf.isNotEmpty()) { spans.add(LatexSpan(false, buf.toString())); buf.clear() }
                     spans.add(LatexSpan(true, latex, true))
@@ -322,10 +334,10 @@ fun parseLatexSpans(text: String): List<LatexSpan> {
         }
 
         // \( inline math
-        if (remaining.startsWith("\\(")) {
-            val end = remaining.indexOf("\\)", 2)
+        if (text.startsWith("\\(", i)) {
+            val end = text.relIndexOf("\\)", i, 2)
             if (end >= 0) {
-                val latex = remaining.substring(2, end).trim()
+                val latex = text.substring(i + 2, i + end).trim()
                 if (latex.isNotBlank() && nonAsciiInsideBraces(latex)) {
                     if (buf.isNotEmpty()) { spans.add(LatexSpan(false, buf.toString())); buf.clear() }
                     spans.add(LatexSpan(true, latex, false))
@@ -343,17 +355,17 @@ fun parseLatexSpans(text: String): List<LatexSpan> {
         }
 
         // $ inline math — skip if preceded by \ (escaped)
-        if (remaining[0] == '$' && !remaining.startsWith("$$")) {
+        if (text[i] == '$' && !text.startsWith("$$", i)) {
             val prevChar = if (i > 0) text[i - 1] else ' '
             if (prevChar != '\\') {
                 // Find real closing $ on the same line (skip escaped \$)
-                val lineEnd = remaining.indexOf('\n').let { if (it < 0) remaining.length else it }
-                var end = remaining.indexOf('$', 1)
-                while (end in 1..<lineEnd && remaining[end - 1] == '\\') {
-                    end = remaining.indexOf('$', end + 1)
+                val lineEnd = text.relIndexOf('\n', i, 0).let { if (it < 0) text.length - i else it }
+                var end = text.relIndexOf('$', i, 1)
+                while (end in 1..<lineEnd && text[i + end - 1] == '\\') {
+                    end = text.relIndexOf('$', i, end + 1)
                 }
                 if (end in 1..<lineEnd) {
-                    val latex = remaining.substring(1, end).trim()
+                    val latex = text.substring(i + 1, i + end).trim()
                     if (latex.isNotEmpty() && isLikelyLatex(latex)) {
                         if (buf.isNotEmpty()) { spans.add(LatexSpan(false, buf.toString())); buf.clear() }
                         spans.add(LatexSpan(true, latex, false))
@@ -374,13 +386,13 @@ fun parseLatexSpans(text: String): List<LatexSpan> {
         }
 
         // Escaped \$ → literal $
-        if (remaining.startsWith("\\$")) {
+        if (text.startsWith("\\$", i)) {
             buf.append('$')
             i += 2
             continue
         }
 
-        buf.append(remaining[0])
+        buf.append(text[i])
         i++
     }
     if (buf.isNotEmpty()) spans.add(LatexSpan(false, buf.toString()))

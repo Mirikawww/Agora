@@ -15,6 +15,7 @@ import com.newoether.agora.R
 import com.newoether.agora.model.MessageSegment
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 
@@ -58,6 +59,10 @@ internal fun ToolTypeIcon(
 @Composable
 internal fun toolDisplayName(toolName: String?): String {
     return when (toolName) {
+        // The merged dispatching tools. The specific operation shows up in the summary line
+        // below, which has access to the `action` argument; the label stays generic.
+        "memory" -> stringResource(R.string.tool_memory)
+        "skills" -> stringResource(R.string.tool_skills)
         "list_memory_files" -> stringResource(R.string.tool_look_up_memories)
         "read_memory_file" -> stringResource(R.string.tool_read_memory)
         "create_memory_file" -> stringResource(R.string.tool_add_memory)
@@ -115,8 +120,27 @@ internal fun toolDisplayName(toolName: String?): String {
 
 @Composable
 internal fun toolSummary(seg: MessageSegment): String {
-    val name = seg.toolName ?: ""
+    val rawName = seg.toolName ?: ""
     val argsJson = try { Json.parseToJsonElement(seg.toolArgs ?: "{}").jsonObject } catch (_: Exception) { null }
+    // `memory` and `skills` dispatch on an `action` argument. Map it back to the per-operation
+    // name every branch below is written against, so merging those tools did not silently
+    // downgrade every memory/skill row to the generic fallback label.
+    val name = when (rawName) {
+        "memory", "skills" -> when ((argsJson?.get("action") as? JsonPrimitive)?.content?.lowercase()) {
+            "list" -> if (rawName == "memory") "list_memory_files" else "list_skills"
+            "read" -> "read_memory_file"
+            "create" -> if (rawName == "memory") "create_memory_file" else "create_skill"
+            "edit" -> "edit_memory_file"
+            "delete" -> if (rawName == "memory") "delete_memory_file" else "delete_skill"
+            "update_active" -> "update_active_memory"
+            "load" -> "load_skill"
+            "update" -> "update_skill"
+            "search" -> "search_skillsmp"
+            "install" -> "install_skill_from_skillsmp"
+            else -> rawName
+        }
+        else -> rawName
+    }
     val fileName = argsJson?.get("name")?.let { (it as? JsonPrimitive)?.content }
         ?: argsJson?.get("names")?.let { names ->
             val arr = names as? kotlinx.serialization.json.JsonArray
@@ -310,7 +334,13 @@ internal fun toolSummary(seg: MessageSegment): String {
             // into the transcript so the decision is visible without opening the tool detail.
             val payload = try { Json.parseToJsonElement(content).jsonObject } catch (_: Exception) { null }
             val status = (payload?.get("status") as? JsonPrimitive)?.content
-            val answers = payload?.get("answers")?.jsonArray
+            // `as?`, not `.jsonArray`: the extension THROWS IllegalArgumentException on anything
+            // that is not an array, and this runs during composition on the Main thread — where
+            // no CoroutineExceptionHandler applies and an escape goes straight to CrashReporter,
+            // i.e. process death. The app's own writer can't produce a bad shape, but
+            // DataImporter copies toolCallJson out of a backup archive verbatim, so a hand-edited
+            // or older backup can. Rendering a label is never worth crashing over.
+            val answers = (payload?.get("answers") as? JsonArray)
                 ?.mapNotNull { (it as? JsonPrimitive)?.content }
                 ?.filter { it.isNotBlank() }
             when {

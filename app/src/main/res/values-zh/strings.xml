@@ -429,6 +429,13 @@
     <string name="memory_title">记忆</string>
     <string name="memory_access_saved">访问已保存的记忆</string>
     <string name="memory_access_saved_desc">允许模型读取、创建和编辑记忆文件</string>
+    <string name="tool_memory">记忆</string>
+    <string name="tool_skills">技能</string>
+    <string name="tool_personalization_section">工具</string>
+    <string name="tool_personalization">允许模型更新此资料</string>
+    <string name="tool_personalization_desc">提供一个工具，让模型把你提到的个人信息保存进资料。无论开关与否，上面的资料都会随每次请求发送——关闭只是移除写入工具（每次请求约 300 tokens）。</string>
+    <string name="settings_tool_ask_user">允许模型向你提问</string>
+    <string name="settings_tool_ask_user_desc">提供一个工具，让模型在需要你做决定时暂停提问，而不是自行猜测。每次请求约 330 tokens。</string>
     <string name="memory_access_active">访问活跃记忆</string>
     <string name="memory_access_active_desc">允许模型更新活跃记忆</string>
     <string name="memory_access_past">访问过去的对话</string>

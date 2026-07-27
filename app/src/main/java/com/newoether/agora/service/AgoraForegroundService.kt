@@ -58,6 +58,18 @@ class AgoraForegroundService : Service() {
          */
         private val stopAfterPromote = AtomicBoolean(false)
 
+        /**
+         * True between issuing `stopService()` and the service actually being destroyed.
+         *
+         * `stopService()` is asynchronous: during that window `instance` is still set and
+         * [foregroundReady] is still true, so [start]'s fast path would hand back a service that
+         * is about to disappear. The generation count would then claim a live foreground service
+         * while the process quietly loses its foreground protection and becomes eligible for
+         * background eviction — which looks exactly like a crash to the user, except no exception
+         * is ever thrown and no crash report is written.
+         */
+        private val teardownInFlight = AtomicBoolean(false)
+
         fun start(context: Context): Boolean {
             val appContext = context.applicationContext
             val count = activeGenerations.incrementAndGet()
@@ -65,7 +77,9 @@ class AgoraForegroundService : Service() {
             val state = processState()
             CrashReporter.note("FGS.start count=$count api=${Build.VERSION.SDK_INT} $state ready=${foregroundReady.get()}")
             // Already promoted and running — just refresh the notification text.
-            if (foregroundReady.get() && instance != null) {
+            // Skipped while a teardown is in flight: the service still looks alive but is on its
+            // way out, and returning true here would leave us with no foreground service at all.
+            if (foregroundReady.get() && instance != null && !teardownInFlight.get()) {
                 instance?.updateNotificationText(instance?.currentText ?: "Generating response...")
                 return true
             }
@@ -102,11 +116,13 @@ class AgoraForegroundService : Service() {
             val svc = instance
             if (svc != null && foregroundReady.get()) {
                 // Safe: already promoted. Stop normally.
+                teardownInFlight.set(true)
                 try {
                     context.applicationContext.stopService(
                         Intent(context.applicationContext, AgoraForegroundService::class.java),
                     )
                 } catch (e: RuntimeException) {
+                    teardownInFlight.set(false)
                     DebugLog.w(TAG, "stopService failed", e)
                 }
             } else {
@@ -199,6 +215,8 @@ class AgoraForegroundService : Service() {
         super.onCreate()
         instance = this
         CrashReporter.note("FGS.onCreate count=${activeGenerations.get()}")
+        // A fresh instance is coming up; any previous teardown is over.
+        teardownInFlight.set(false)
         createChannel(this)
         promoteToForeground("onCreate")
     }
@@ -218,6 +236,7 @@ class AgoraForegroundService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         CrashReporter.note("FGS.onDestroy")
+        teardownInFlight.set(false)
         if (instance === this) instance = null
         foregroundStarted = false
         foregroundReady.set(false)
@@ -241,6 +260,7 @@ class AgoraForegroundService : Service() {
             foregroundStarted = true
             foregroundReady.set(true)
             CrashReporter.note("FGS.startForeground ok from=$from count=${activeGenerations.get()}")
+            teardownInFlight.set(false)
         } catch (e: Exception) {
             // Promote failed (permission / background start denied / etc.). Stop cleanly
             // so the system does not wait out the 5s timeout and crash the process with a

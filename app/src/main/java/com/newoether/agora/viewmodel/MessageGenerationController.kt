@@ -189,6 +189,9 @@ class MessageGenerationController(
         val modelId = currentActiveModel.value
         val (providerName, activeKey) = requestBuilder.resolveProviderKey(modelId) ?: return
 
+        com.newoether.agora.util.CrashReporter.note(
+            "regenerate msg=${messageId.take(8)} conv=${currentId.take(8)}"
+        )
         // Only stop THIS conversation's generation; other chats keep running.
         val stopFinalization = session.stopConversation(currentId, releaseSendGate = false)
         val myUiToken = session.captureUiToken(currentId)
@@ -222,11 +225,16 @@ class MessageGenerationController(
         session.markGenerating(myUiToken, currentId)
 
         val regenJob = session.scope.launch {
+            // Register BEFORE the first suspension point. Until the job is in
+            // jobsByConversation, stopConversation() cannot see it — so a Stop pressed during
+            // the join below was silently ignored and this generation carried on anyway.
+            // Safe to do this early: stopConversation() above already cancelled the previous
+            // job, so attachJob's "cancel the one being replaced" branch is a no-op here.
+            session.attachJob(currentId, coroutineContext[kotlinx.coroutines.Job]!!)
             // Wait only for the short STOPPED DB finalization. The cancelled provider
             // may still be unwinding, but it no longer owns the next generation path.
             stopFinalization?.join()
             val myPersistId = session.nextPersistId(currentId)
-            session.attachJob(currentId, coroutineContext[kotlinx.coroutines.Job]!!)
             try {
                 allMessages.value.find { it.id == parentId } ?: return@launch
 
@@ -268,6 +276,16 @@ class MessageGenerationController(
                     providerName, modelId, activeKey, myUiToken, myPersistId,
                     callerTag = "regenerate"
                 )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Root coroutine on session.scope: without this, any Room / DataStore / file
+                // failure here walks straight to the thread's default handler, which is
+                // CrashReporter — i.e. the app kills its own process. The scope-level handler is
+                // the net; this is not falling off the edge, and it keeps the failure attributable
+                // to a specific entry point.
+                com.newoether.agora.util.CrashReporter.note("regenerate body ${e.javaClass.simpleName}: ${e.message?.take(120)}")
+                com.newoether.agora.util.DebugLog.e("AgoraVM", "regenerate body failed", e)
             } finally {
                 session.loadingChange(myUiToken, currentId, false)
             }
@@ -300,20 +318,24 @@ class MessageGenerationController(
         persistId: Long,
         callerTag: String
     ) {
-        val resolved = requestBuilder.buildEffectiveSystemPrompt(currentId)
-        val effectiveSettings = requestBuilder.buildEffectiveConversationSettings(currentId)
-        // Re-resolve the key against on-disk settings here (the suspend convergence
-        // point for all entry paths). The synchronous [activeKey] resolved by the
-        // callers can be blank if DataStore had not finished loading when Send was
-        // tapped, which would build the request with an empty key → 401.
-        // Model-bound key only — never fall across sibling keys on the same provider.
-        val freshKey = settings.awaitApiKeyForModel(modelId, providerName)?.takeIf { it.isNotBlank() } ?: activeKey
-        val (config, genCtx) = requestBuilder.buildGenerationPair(
-            providerName, modelId, freshKey,
-            resolved.systemPrompt, resolved.userPrepend, resolved.userPostpend,
-            effectiveSettings, currentId
-        )
+        // These four suspends run on EVERY generation and each can throw — a corrupt DataStore
+        // file, a memory file that vanished between exists() and readText(), a Room read on a
+        // conversation deleted mid-flight. They used to sit outside the try, so those failures
+        // escaped the root coroutine and killed the process instead of failing this one turn.
         try {
+            val resolved = requestBuilder.buildEffectiveSystemPrompt(currentId)
+            val effectiveSettings = requestBuilder.buildEffectiveConversationSettings(currentId)
+            // Re-resolve the key against on-disk settings here (the suspend convergence
+            // point for all entry paths). The synchronous [activeKey] resolved by the
+            // callers can be blank if DataStore had not finished loading when Send was
+            // tapped, which would build the request with an empty key → 401.
+            // Model-bound key only — never fall across sibling keys on the same provider.
+            val freshKey = settings.awaitApiKeyForModel(modelId, providerName)?.takeIf { it.isNotBlank() } ?: activeKey
+            val (config, genCtx) = requestBuilder.buildGenerationPair(
+                providerName, modelId, freshKey,
+                resolved.systemPrompt, resolved.userPrepend, resolved.userPostpend,
+                effectiveSettings, currentId
+            )
             generationManager.generate(
                 conversationId = currentId,
                 modelMessageId = modelMessageId,
@@ -349,9 +371,11 @@ class MessageGenerationController(
         isLoading.value = true
         session.markGenerating(myUiToken, currentId)
         val editJob = session.scope.launch {
+            // Same as regenerate: register before the first suspension point so Stop can
+            // actually reach this job while it waits.
+            session.attachJob(currentId, coroutineContext[kotlinx.coroutines.Job]!!)
             stopFinalization?.join()
             val myPersistId = session.nextPersistId(currentId)
-            session.attachJob(currentId, coroutineContext[kotlinx.coroutines.Job]!!)
             try {
             val messageToEdit = allMessages.value.find { it.id == messageId } ?: return@launch
             val newUserMessageId = UUID.randomUUID().toString()
@@ -393,6 +417,11 @@ class MessageGenerationController(
                 providerName, modelId, activeKey, myUiToken, myPersistId,
                 callerTag = "editMessage"
             )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                com.newoether.agora.util.CrashReporter.note("editMessage body ${e.javaClass.simpleName}: ${e.message?.take(120)}")
+                com.newoether.agora.util.DebugLog.e("AgoraVM", "editMessage body failed", e)
             } finally {
                 session.loadingChange(myUiToken, currentId, false)
             }
@@ -438,6 +467,11 @@ class MessageGenerationController(
             // Set loading immediately so UI shows sending state during attachment processing
             isLoading.value = true
             val provisionalId = activeConv
+            // Pre-attach target for the coroutine below. Only valid when this send goes to an
+            // EXISTING conversation: a new chat mints its id inside the coroutine, and attaching
+            // to the previously-open conversation would let a Stop pressed there cancel a
+            // generation that no longer belongs to it.
+            val preAttachId = provisionalId?.takeIf { !isNewChatMode.value }
             var myUiToken = if (provisionalId != null) {
                 session.captureUiToken(provisionalId).also { session.markGenerating(it, provisionalId) }
             } else {
@@ -450,6 +484,14 @@ class MessageGenerationController(
                             var finishedConversationId: String? = null
                             var currentId: String? = null
                             try {
+                            // Register before the first suspension point when the target is known.
+                            // buildMessagePayload below can take seconds on a large attachment, and
+                            // until this job is in jobsByConversation a Stop cannot reach it — that
+                            // window is also what let a "delete all chats" land between here and the
+                            // first insert. A new chat re-attaches under its real id further down.
+                                                        if (preAttachId != null) {
+                                                            session.attachJob(preAttachId, coroutineContext[Job]!!)
+                                                        }
                             // Wait only for the short STOPPED DB finalization. The cancelled provider
                                                         // may still be unwinding, but it no longer owns the next generation path.
                                                         stopFinalization?.join()
@@ -487,6 +529,18 @@ class MessageGenerationController(
                             if (pendingSettings != null) {
                                 settings.setConversationSettings(boundConversationId, pendingSettings)
                                 pendingConversationSettings.value = null
+                            }
+                            // Building the payload above can take seconds on a large attachment,
+                            // and this coroutine is not in jobsByConversation yet — so a
+                            // "delete all chats" landing in that window leaves us about to insert
+                            // a message whose conversation row no longer exists. That is an
+                            // immediate FOREIGN KEY violation from Room, which Room rethrows.
+                            // Bail out quietly instead; the user already asked for this to be gone.
+                            if (convRepo.getConversation(boundConversationId) == null) {
+                                com.newoether.agora.util.CrashReporter.note(
+                                    "sendMessage aborted: conversation ${boundConversationId.take(8)} vanished"
+                                )
+                                return@launch
                             }
                             val currentPath = messages.value
                             val lastMessageId = currentPath.lastOrNull()?.id
@@ -531,6 +585,11 @@ class MessageGenerationController(
                                                         if (wasNewChat && settings.titleGenerationEnabled.value && session.generationJob?.isActive == true && lastMsg?.status != MessageStatus.ERROR) {
                                                             generateTitle(boundConversationId)
                                                         }
+                                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                                        throw e
+                                                    } catch (e: Exception) {
+                                                        com.newoether.agora.util.CrashReporter.note("sendMessage body ${e.javaClass.simpleName}: ${e.message?.take(120)}")
+                                                        com.newoether.agora.util.DebugLog.e("AgoraVM", "sendMessage body failed", e)
                                                     } finally {
                                                                                                             // Token-gated: only the still-current generation clears the button, so a
                                                                                                             // cancelled/superseded coroutine can't revert the icon mid-generation.

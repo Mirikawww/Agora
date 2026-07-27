@@ -467,12 +467,38 @@ internal fun TimelineSegmentsContent(
                                 .padding(top = if (index == 0) 0.dp else 6.dp)
                         ) {
                             SelectionContainer(modifier = Modifier.noOpBringIntoView()) {
-                                RecomposeSafeMarkdown(
-                                    content = seg.content,
-                                    isStreaming = isStreaming && index == segments.lastIndex,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { text ->
-                                    MarkdownTextContent(text = text, renderContext = renderContext)
+                                val isStreamingTail = isStreaming && index == segments.lastIndex
+                                // key() pins the slot: this runs inside a while-loop over a list
+                                // that grows during streaming, and both branches below hold
+                                // remember{} state that must not be reused across a different
+                                // segment or across the streaming→settled switch.
+                                key(index, isStreamingTail) {
+                                    if (isStreamingTail) {
+                                        // Only the growing tail needs incremental treatment, and
+                                        // it is the one that used to re-parse the whole reply on
+                                        // the Main thread every update. rememberStreamingMarkdownBlocks
+                                        // parses on Dispatchers.Default and appends only new blocks.
+                                        val blocks = rememberStreamingMarkdownBlocks(
+                                            content = seg.content,
+                                            flavour = renderContext.flavour,
+                                            active = true,
+                                        )
+                                        StreamingMarkdownBlockContent(
+                                            blocks = blocks,
+                                            renderContext = renderContext,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            tailIsStreaming = true,
+                                        )
+                                    } else {
+                                        // Settled text: one parse, no incremental bookkeeping.
+                                        RecomposeSafeMarkdown(
+                                            content = seg.content,
+                                            isStreaming = false,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) { text ->
+                                            MarkdownTextContent(text = text, renderContext = renderContext)
+                                        }
+                                    }
                                 }
                             }
                             if (isStreaming) {

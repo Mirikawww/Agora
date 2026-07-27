@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.ui.res.painterResource
 import androidx.compose.material.icons.filled.Tune
@@ -36,6 +37,7 @@ import java.util.Locale
 fun SettingsGenerationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     val maxContextWindow by viewModel.settings.maxContextWindow.collectAsState()
     val visualizeContextRollout by viewModel.settings.visualizeContextRollout.collectAsState()
+    val askToolEnabled by viewModel.settings.askToolEnabled.collectAsState()
     val defaultTemperature by viewModel.settings.defaultTemperature.collectAsState()
     val defaultMaxTokens by viewModel.settings.defaultMaxTokens.collectAsState()
     val defaultTopP by viewModel.settings.defaultTopP.collectAsState()
@@ -119,6 +121,19 @@ fun SettingsGenerationPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                     Switch(checked = visualizeContextRollout, onCheckedChange = { viewModel.settings.setVisualizeContextRollout(it) })
                                 },
                                 modifier = Modifier.clickable { viewModel.settings.setVisualizeContextRollout(!visualizeContextRollout) }
+                            )
+                        },
+                        {
+                            SettingsItem(
+                                headlineContent = { Text(stringResource(R.string.settings_tool_ask_user)) },
+                                supportingContent = { Text(stringResource(R.string.settings_tool_ask_user_desc)) },
+                                leadingContent = {
+                                    Icon(Icons.Default.HelpOutline, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                },
+                                trailingContent = {
+                                    Switch(checked = askToolEnabled, onCheckedChange = { viewModel.settings.setAskToolEnabled(it) })
+                                },
+                                modifier = Modifier.clickable { viewModel.settings.setAskToolEnabled(!askToolEnabled) }
                             )
                         }
                     )

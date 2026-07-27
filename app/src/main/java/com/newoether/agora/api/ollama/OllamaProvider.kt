@@ -183,20 +183,27 @@ class OllamaProvider : LlmProvider {
 
             while (attempt < maxAttempts && !done) {
                 attempt++
-                val handle = HttpClient.streamPost(url, requestBodyJson, headers)
+                val handle = HttpClient.streamPost(url, requestBodyJson, headers, config.streamTag)
                 try {
                 if (handle.code == 200) {
                     done = true
                     var line: String? = null
                     val thinkParser = StreamingThinkTagParser()
                     var receivedStructuredThinking = false
+                    val liveness = com.newoether.agora.api.util.StreamLiveness()
 
                     while (currentCoroutineContext().isActive) {
                         try {
                             line = handle.readLine()
                             if (line == null) break
+                            liveness.onLine(line)
                         } catch (e: java.net.SocketTimeoutException) {
                             if (!currentCoroutineContext().isActive) break
+                            val stall = liveness.stalled()
+                            if (stall != null) {
+                                emit(StreamEvent.Error(stall))
+                                break
+                            }
                             continue
                         }
                         try {

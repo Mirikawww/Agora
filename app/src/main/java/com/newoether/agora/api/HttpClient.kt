@@ -145,13 +145,38 @@ object HttpClient {
         .proxyAuthenticator(proxyAuthenticator)
         .build()
 
+    /**
+     * Streaming reads use a short socket timeout as a **liveness tick**, not a deadline.
+     * Each expiry hands control back to the read loop, which decides whether the stream is
+     * merely quiet (a reasoning model can think for a while before the first token) or
+     * genuinely dead. With the 5-minute timeout of [client] a stalled upstream left the user
+     * staring at a spinner for five minutes and then surfaced a bogus "Unknown error";
+     * the connection pool is shared, so this costs nothing extra.
+     */
+    val streamClient: OkHttpClient = client.newBuilder()
+        .readTimeout(STREAM_TICK_SECONDS, TimeUnit.SECONDS)
+        .build()
+
+    /** Socket read tick for streaming responses. Callers aggregate ticks into a real timeout. */
+    const val STREAM_TICK_SECONDS = 20L
+
     /** Active streaming handles (one per concurrent generation). */
         private val activeStreamHandles = ConcurrentHashMap.newKeySet<StreamHandle>()
 
         /** The most recently started stream (legacy single-slot). Prefer cancel by conversation. */
         @Volatile var activeStreamHandle: StreamHandle? = null
 
-        class StreamHandle(private val call: okhttp3.Call, private val response: okhttp3.Response) {
+        /**
+         * @param tag conversation id that owns this stream, so Stop can cut exactly one
+         *   conversation's socket. Without it the only options were "cancel every in-flight
+         *   stream" or "wait for the read tick", and the latter left the upstream generating
+         *   (and billing) for up to [STREAM_TICK_SECONDS] after the user pressed Stop.
+         */
+        class StreamHandle(
+            private val call: okhttp3.Call,
+            private val response: okhttp3.Response,
+            val tag: String? = null,
+        ) {
             val code: Int get() = response.code
             val source: BufferedSource? get() = response.body?.source()
             val errorBody: String? by lazy {
@@ -164,21 +189,39 @@ object HttpClient {
                 }
                 response.close()
             }
-            fun readLine(): String? = source?.readUtf8Line()
+            /** Bytes handed to [readLine] so far — used to tell "sent nothing" from "sent junk". */
+            @Volatile var bytesRead: Long = 0L
+                private set
+
+            fun readLine(): String? = source?.readUtf8Line()?.also { bytesRead += it.length + 1L }
             /** Cancel the underlying HTTP call immediately — unblocks [readLine]. */
             fun cancel() = call.cancel()
         }
 
-        fun streamPost(url: String, jsonBody: String, headers: Map<String, String> = emptyMap()): StreamHandle {
+        fun streamPost(
+            url: String,
+            jsonBody: String,
+            headers: Map<String, String> = emptyMap(),
+            tag: String? = null,
+        ): StreamHandle {
             guardCleartextCredentials(url, headers)
             val body = jsonBody.toRequestBody(JSON)
             val requestBuilder = Request.Builder().url(url).post(body)
             headers.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
-            val call = client.newCall(requestBuilder.build())
-            val handle = StreamHandle(call, call.execute())
+            val call = streamClient.newCall(requestBuilder.build())
+            val handle = StreamHandle(call, call.execute(), tag)
             activeStreamHandles.add(handle)
             activeStreamHandle = handle
             return handle
+        }
+
+        /**
+         * Cancel the in-flight streams belonging to one conversation. `call.cancel()` interrupts
+         * the blocking `readLine()` immediately, so Stop actually severs the upstream connection
+         * instead of letting it run until the next read tick.
+         */
+        fun cancelStreamsForTag(tag: String) {
+            activeStreamHandles.filter { it.tag == tag }.forEach { runCatching { it.cancel() } }
         }
 
         /** Cancel every in-flight streaming call (used when tearing down all generations). */

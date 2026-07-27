@@ -16,9 +16,9 @@ sealed class GenerationError {
 
     val origin: Origin
         get() = when (this) {
-            is Api, is SseParse -> Origin.API
+            is Api, is SseParse, is EmptyStream -> Origin.API
             is Network -> if (statusCode == 0) Origin.NETWORK else Origin.API
-            Timeout -> Origin.NETWORK
+            Timeout, is StreamStalled -> Origin.NETWORK
             is ToolExecution, is Transcription, is Embedding -> Origin.TOOL
             is Configuration -> Origin.CONFIGURATION
             is LocalModel, is Unknown, Cancelled -> Origin.APP
@@ -41,6 +41,29 @@ sealed class GenerationError {
     data class SseParse(
         val rawLine: String,
         val cause: String
+    ) : GenerationError()
+
+    /**
+     * The upstream accepted the request (HTTP 200) but the stream carried no displayable
+     * content. Carries what the reader actually saw so the user gets a real diagnosis
+     * instead of "the stream ended without a response" — the distinction between a relay
+     * that sent nothing, one that sent unparseable frames, and one that stopped early for
+     * a stated reason is exactly what makes this debuggable.
+     */
+    data class EmptyStream(
+        val bytesRead: Long,
+        val totalLines: Int,
+        val dataLines: Int,
+        val parseFailures: Int,
+        val finishReason: String?,
+        val elapsedMs: Long,
+        val sampleLine: String? = null
+    ) : GenerationError()
+
+    /** The stream went silent mid-flight (or never produced a first token) and was abandoned. */
+    data class StreamStalled(
+        val afterMs: Long,
+        val producedContent: Boolean
     ) : GenerationError()
 
     /** A tool execution failed (memory, web search, shell, RAG). */
@@ -98,6 +121,26 @@ sealed class GenerationError {
             append(message)
         }
         is SseParse -> "Failed to parse server response."
+        is EmptyStream -> buildString {
+            append("The upstream accepted the request (HTTP 200) but returned no content.\n")
+            append("Read $bytesRead bytes / $totalLines lines in ${elapsedMs}ms")
+            if (dataLines > 0) append(", $dataLines SSE data frames") else append(", no SSE data frames")
+            if (parseFailures > 0) append(", $parseFailures unparseable")
+            append(".")
+            if (finishReason != null) append("\nfinish_reason: \"$finishReason\"")
+            when {
+                bytesRead == 0L ->
+                    append("\nThe response body was empty — the relay or upstream model is likely unavailable.")
+                dataLines == 0 ->
+                    append("\nNothing matched the SSE \"data:\" format — the endpoint may not be streaming.")
+                parseFailures > 0 ->
+                    append("\nFrames arrived but could not be decoded — the response shape is unexpected.")
+            }
+            if (sampleLine != null) append("\nFirst unrecognised line: ${sampleLine.take(300)}")
+        }
+        is StreamStalled ->
+            if (producedContent) "The response stopped partway through and went silent for ${afterMs / 1000}s."
+            else "No response after ${afterMs / 1000}s. The upstream accepted the request but never started replying."
         is ToolExecution -> "Tool '$toolName' failed: $message"
         is Transcription -> "Image transcription failed: $message"
         is Embedding -> "Embedding failed: $message"

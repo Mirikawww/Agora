@@ -32,24 +32,43 @@ class MemoryToolProviderTest {
     )
 
     @Test
-    fun definitions_whenEnabled_returnsSixMemoryTools() {
+    fun definitions_whenEnabled_advertisesOneToolCoveringEveryAction() {
         val defs = provider.definitions(ctx)
-        assertEquals(6, defs.size)
-        val names = defs.map { it.function.name }.toSet()
-        assertTrue(names.contains("list_memory_files"))
-        assertTrue(names.contains("read_memory_file"))
-        assertTrue(names.contains("create_memory_file"))
-        assertTrue(names.contains("edit_memory_file"))
-        assertTrue(names.contains("delete_memory_file"))
-        assertTrue(names.contains("update_active_memory"))
+        assertEquals("six sibling tools were merged behind an action selector", 1, defs.size)
+        assertEquals("memory", defs[0].function.name)
+
+        val description = defs[0].function.description
+        for (action in listOf("list", "read", "create", "edit", "delete", "update_active")) {
+            assertTrue("action '$action' must stay discoverable", description.contains(action))
+        }
+        assertEquals(listOf("action"), defs[0].function.parameters?.required)
     }
 
+    /** Access flags gate which actions exist, not merely which are mentioned. */
     @Test
-    fun definitions_whenMemoryDisabled_returnsOnlyActiveMemoryTool() {
+    fun definitions_whenSavedMemoriesDisabled_advertisesOnlyActiveMemoryAction() {
         val disabledCtx = ctx.copy(accessSavedMemories = false, accessActiveMemory = true)
         val defs = provider.definitions(disabledCtx)
         assertEquals(1, defs.size)
-        assertEquals("update_active_memory", defs[0].function.name)
+
+        val description = defs[0].function.description
+        assertTrue(description.contains("update_active"))
+        assertFalse("file access must be genuinely withdrawn", description.contains("- delete —"))
+        assertFalse(description.contains("- create —"))
+        assertFalse(defs[0].function.parameters?.properties.orEmpty().containsKey("new_name"))
+    }
+
+    @Test
+    fun execute_mergedTool_dispatchesOnAction() = runTest {
+        assertEquals("Created", provider.execute("memory", """{"action":"create","name":"a.md","content":"x"}""", ctx))
+        assertEquals("file content", provider.execute("memory", """{"action":"read","name":"a.md"}""", ctx))
+        assertTrue(provider.execute("memory", """{"action":"list"}""", ctx).contains("notes.md"))
+    }
+
+    @Test
+    fun execute_mergedTool_rejectsMissingOrUnknownAction() = runTest {
+        assertTrue(provider.execute("memory", "{}", ctx).contains("'action' is required"))
+        assertTrue(provider.execute("memory", """{"action":"frobnicate"}""", ctx).contains("unknown action"))
     }
 
     @Test
@@ -59,8 +78,10 @@ class MemoryToolProviderTest {
         assertTrue(defs.isEmpty())
     }
 
+    /** Legacy names stay executable so tool calls recorded before the merge still replay. */
     @Test
-    fun handles_returnsTrueForMemoryTools() {
+    fun handles_acceptsMergedNameAndLegacyNames() {
+        assertTrue(provider.handles("memory"))
         assertTrue(provider.handles("list_memory_files"))
         assertTrue(provider.handles("read_memory_file"))
         assertTrue(provider.handles("update_active_memory"))

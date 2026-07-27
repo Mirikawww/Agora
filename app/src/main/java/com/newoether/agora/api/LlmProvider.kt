@@ -51,7 +51,12 @@ data class ProviderConfig(
     val frequencyPenalty: Float? = null,
     val presencePenalty: Float? = null,
     /** Additional enabled keys to try after a 401/invalid-key failure. */
-    val alternateApiKeys: List<String> = emptyList()
+    val alternateApiKeys: List<String> = emptyList(),
+    /**
+     * Conversation id, passed through to [HttpClient.streamPost] so Stop can cut this
+     * conversation's socket immediately instead of waiting out a read tick.
+     */
+    val streamTag: String? = null
 )
 
 @Serializable

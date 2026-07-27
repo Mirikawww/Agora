@@ -1386,6 +1386,7 @@ class ChatViewModel(
     // Also drain when user manually stops generation for this conversation.
     fun stopGeneration() {
         val convId = _currentConversationId.value
+        com.newoether.agora.util.CrashReporter.note("stopGeneration conv=${convId?.take(8)}")
         session.stop()
         // After user stops the current reply, immediately send the next queued message.
         if (convId != null) {
