@@ -4,6 +4,7 @@ import com.newoether.agora.model.ChatMessage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
@@ -68,10 +69,32 @@ data class ProviderConfig(
     val streamTag: String? = null
 )
 
+/**
+ * Whether a tool's full schema may be withheld from the request and reached through the
+ * deferred-discovery meta-tools instead.
+ *
+ * Deferring is not disabling: a deferred tool stays discoverable via `mcp_tool_search` and
+ * callable via `mcp_tool_invoke`, so model capability is unchanged — only the per-request
+ * schema cost goes away.
+ */
+enum class DeferPolicy {
+    /** Always inline. Reserved for tools that must be visible to a native provider gate
+     *  (e.g. a future approval flow), where deferring would bypass that gate. */
+    NEVER,
+
+    /** Eligible for deferral when the schema budget is exceeded. */
+    AUTO,
+
+    /** Always deferred regardless of budget. */
+    ALWAYS,
+}
+
 @Serializable
 data class ToolDefinition(
     val type: String = "function",
-    val function: ToolFunction
+    val function: ToolFunction,
+    /** Not serialised: request-shaping metadata, never part of the wire format. */
+    @Transient val defer: DeferPolicy = DeferPolicy.AUTO,
 )
 
 @Serializable

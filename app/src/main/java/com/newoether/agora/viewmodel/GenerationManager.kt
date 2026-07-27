@@ -69,7 +69,14 @@ data class GenerationConfig(
     val topP: Float? = null,
     val frequencyPenalty: Float? = null,
     val presencePenalty: Float? = null,
-    val alternateApiKeys: List<String> = emptyList()
+    val alternateApiKeys: List<String> = emptyList(),
+    /** Model supports tool calling; when false no `tools` field is sent at all. */
+    val toolsSupported: Boolean = true,
+    /**
+     * Real context window in tokens (models.dev `limit.context`), 0 when unknown.
+     * Do not confuse with [maxContextWindow], which is a message count.
+     */
+    val contextTokens: Int = 0,
 )
 
 data class GenerationContext(
@@ -255,7 +262,7 @@ class GenerationManager(
         )
     }
     private val mcpDeferredToolProvider = McpDeferredToolProvider(
-        mcpExecute = { name: String, arguments: String, ctx: GenerationContext -> executeTool(name, arguments, ctx) }
+        deferredExecute = { name: String, arguments: String, ctx: GenerationContext -> executeTool(name, arguments, ctx) }
     )
     private val toolProviders: List<ToolProvider> = listOf(
         memoryToolProvider, webSearchToolProvider, ragToolProvider, imageGenToolProvider,
@@ -508,19 +515,27 @@ class GenerationManager(
         val builtinTools = memoryTools + webSearchTool + ragTool + imageGenTool +
             personalizationTools + balanceTools + askTools + skillsTools + githubTools +
             shellTool + fileTool
-        // Defer MCP tools behind 3 meta-tools when the total schema would exceed the
-        // provider's tool limit (64) or the context-window token budget (10%).
+        // Budget the whole pool, built-ins included — the previous version only ever gated the
+        // MCP list, so seven verbose built-in schemas shipped in full on every request no matter
+        // how small the turn. Deferral hides a schema, it never removes a capability: anything
+        // deferred stays reachable through mcp_tool_search / mcp_tool_invoke.
+        val toolPool = builtinTools + mcpTools
         val deferred = mcpDeferredToolProvider.prepare(
-            mcpTools = mcpTools,
-            builtinToolCount = builtinTools.size,
-            maxContextWindow = config.maxContextWindow,
+            allTools = toolPool,
+            contextTokens = config.contextTokens,
         )
-        val allTools = if (deferred) {
-            builtinTools + mcpDeferredToolProvider.definitions(ctx)
-        } else {
-            builtinTools + mcpTools
+        val allTools = when {
+            // Model cannot call tools at all — send no `tools` field (models.dev tool_call=false).
+            !config.toolsSupported -> emptyList()
+            deferred -> mcpDeferredToolProvider.inlineTools() + mcpDeferredToolProvider.definitions(ctx)
+            else -> toolPool
         }
-        DebugLog.d("AgoraTiming", "tools: builtin=${builtinTools.size} mcp=${mcpTools.size} deferred=$deferred total=${allTools.size}")
+        DebugLog.d(
+            "AgoraTiming",
+            "tools: builtin=${builtinTools.size} mcp=${mcpTools.size} deferred=$deferred " +
+                "supported=${config.toolsSupported} total=${allTools.size} " +
+                "(~${McpDeferredToolProvider.estimateSchemaTokens(allTools)} tok)"
+        )
         val providerConfig = ProviderConfig(
             apiKey = config.apiKey,
             modelId = config.modelId,

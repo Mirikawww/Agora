@@ -31,6 +31,71 @@ class ModelsDevRepositoryTest {
     }
 
     @Test
+    fun `absent tool_call stays permissive so unlisted models keep their tools`() {
+        val catalog = """
+            {
+              "providers": {
+                "openai": {
+                  "models": {
+                    "gpt-5.4": { "reasoning": true }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val parsed = parseModelsDevCapabilities(catalog)
+
+        // No `tool_call` key means "unknown", which must NOT strip tool support.
+        assertEquals(true, parsed["*:gpt-5.4"]?.tools)
+    }
+
+    @Test
+    fun `explicit tool_call false is recorded and survives alias merging`() {
+        val catalog = """
+            {
+              "providers": {
+                "a": {
+                  "models": {
+                    "embed-1": { "tool_call": false, "name": "Embed One" }
+                  }
+                },
+                "b": {
+                  "models": {
+                    "embed-1": { "reasoning": true }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val parsed = parseModelsDevCapabilities(catalog)
+
+        // Provider "b" lists the same id without tool_call (permissive default). The AND merge
+        // must keep the restriction from "a" rather than letting the sibling re-enable tools.
+        assertEquals(false, parsed["*:embed-1"]?.tools)
+    }
+
+    @Test
+    fun `context token limit is parsed for the defer budget`() {
+        val catalog = """
+            {
+              "providers": {
+                "openai": {
+                  "models": {
+                    "gpt-5.4": { "limit": { "context": 200000, "output": 8192 } }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val parsed = parseModelsDevCapabilities(catalog)
+
+        assertEquals(200000, parsed["*:gpt-5.4"]?.contextTokens)
+    }
+
+    @Test
     fun `catalog parser indexes display name for normalized API model lookup`() {
         val catalog = """
             {

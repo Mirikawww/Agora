@@ -1,10 +1,12 @@
 package com.newoether.agora.tool
 
+import com.newoether.agora.api.DeferPolicy
 import com.newoether.agora.api.ToolDefinition
 import com.newoether.agora.api.ToolFunction
 import com.newoether.agora.api.ToolParameters
 import com.newoether.agora.api.ToolProperty
 import com.newoether.agora.util.DebugLog
+import com.newoether.agora.util.TokenEstimator
 import com.newoether.agora.viewmodel.GenerationContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -40,20 +42,27 @@ import kotlinx.serialization.json.putJsonArray
  * tools, deferral costs it one discovery round-trip.
  *
  * Deferral triggers when either:
- *   • total tools (built-ins + MCP) would exceed [MAX_INLINE_TOOLS], or
- *   • the MCP pool alone exceeds [MAX_INLINE_MCP_TOOLS].
+ *   • total tools would exceed [MAX_INLINE_TOOLS] (provider cap), or
+ *   • the estimated schema cost of deferrable tools exceeds 10% of the model's real token
+ *     window, and the pool is big enough for the meta-tools to pay for themselves.
  *
  * When deferral is NOT triggered the provider returns an empty definitions list
  * and [McpToolProvider] keeps serving the full tool schemas as usual.
  */
 class McpDeferredToolProvider(
-    /** Executes the actual MCP call once the model picks a tool via mcp_tool_invoke. */
-    private val mcpExecute: suspend (name: String, arguments: String, ctx: GenerationContext) -> String,
+    /**
+     * Executes a tool once the model picks it via mcp_tool_invoke.
+     *
+     * Routes across *every* tool provider, not just MCP: built-in tools are deferrable too,
+     * and they must stay executable while their schema is withheld.
+     */
+    private val deferredExecute: suspend (name: String, arguments: String, ctx: GenerationContext) -> String,
 ) : ToolProvider {
 
     // ── State set once per buildApiPath call ─────────────────────────────────
 
     @Volatile private var deferredTools: List<ToolDefinition> = emptyList()
+    @Volatile private var inlineTools: List<ToolDefinition> = emptyList()
     @Volatile private var deferred: Boolean = false
 
     /**
@@ -62,21 +71,28 @@ class McpDeferredToolProvider(
      * and use [definitions] instead), false if everything fits inline.
      */
     fun prepare(
-        mcpTools: List<ToolDefinition>,
-        builtinToolCount: Int,
-        maxContextWindow: Int,
+        allTools: List<ToolDefinition>,
+        contextTokens: Int,
     ): Boolean {
-        deferredTools = mcpTools
-        deferred = shouldDefer(mcpTools, builtinToolCount, maxContextWindow)
+        val deferredNames = selectDeferred(allTools, contextTokens)
+        // Keep the full pool addressable by mcp_tool_invoke: a tool that stayed inline is
+        // still a legal invoke target, so callers can reach anything either way.
+        deferredTools = allTools.filter { it.function.name in deferredNames }
+        inlineTools = allTools.filter { it.function.name !in deferredNames }
+        deferred = deferredTools.isNotEmpty()
         if (deferred) {
             DebugLog.d(
                 "AgoraTiming",
-                "MCP deferred: ${mcpTools.size} tools -> 3 meta-tools " +
-                    "(builtins=$builtinToolCount total=${builtinToolCount + mcpTools.size})"
+                "tools deferred: ${deferredTools.size}/${allTools.size} " +
+                    "(~${estimateSchemaTokens(deferredTools)} tok saved, " +
+                    "inline=${inlineTools.size} ctx=$contextTokens)"
             )
         }
         return deferred
     }
+
+    /** The tools that stayed inline for this request. */
+    fun inlineTools(): List<ToolDefinition> = inlineTools
 
     fun isDeferred(): Boolean = deferred
 
@@ -173,7 +189,7 @@ class McpDeferredToolProvider(
             }.toString()
         }
         val toolArgs = (args["arguments"] as? JsonPrimitive)?.content?.trim() ?: "{}"
-        return mcpExecute(toolName, toolArgs, ctx)
+        return deferredExecute(toolName, toolArgs, ctx)
     }
 
     // ── Threshold logic ───────────────────────────────────────────────────────
@@ -182,17 +198,20 @@ class McpDeferredToolProvider(
         /** Hard cap on total inline tools (Anthropic and most providers limit to 64). */
         const val MAX_INLINE_TOOLS = 64
 
+        /** Share of the model's real token window that inline tool schemas may occupy. */
+        private const val DEFER_THRESHOLD_PCT = 10
+
+        /** Used when models.dev has no `limit.context` for the model. */
+        private const val FALLBACK_CONTEXT_TOKENS = 32_000
+
         /**
-         * Maximum MCP tools to send inline before switching to meta-tool discovery.
-         *
-         * Above this the pool is deferred even when the total stays under [MAX_INLINE_TOOLS].
-         * 8 gives room for 16 built-in tools (8 + 16 = 24, well under 64) while still
-         * triggering on any moderately-sized Notion/Todoist connector deployment.
-         * Keeping this low caps the per-request token cost from MCP schemas regardless of
-         * provider limit — a 40-tool pool at ~200 tokens each is 8 000 tokens for tools the
-         * model will almost certainly never call in a single turn.
+         * Below this many deferrable tools, inlining beats the discovery round-trip.
+         * Guards against paying meta-tool overhead to hide a handful of small schemas.
          */
-        private const val MAX_INLINE_MCP_TOOLS = 8
+        private const val MIN_AUTO_DEFER_COUNT = 5
+
+        /** Static cost of the three meta-tools; deferral must save at least this much. */
+        private const val META_TOOLS_OVERHEAD_TOKENS = 500
 
         const val TOOL_SEARCH  = "mcp_tool_search"
         const val TOOL_INSPECT = "mcp_tool_inspect"
@@ -212,7 +231,7 @@ class McpDeferredToolProvider(
                     ),
                     required = emptyList()
                 )
-            )),
+            ), defer = DeferPolicy.NEVER),
             ToolDefinition(function = ToolFunction(
                 name = TOOL_INSPECT,
                 description = "Get the full input schema for a specific MCP tool. " +
@@ -223,7 +242,7 @@ class McpDeferredToolProvider(
                     ),
                     required = listOf("name")
                 )
-            )),
+            ), defer = DeferPolicy.NEVER),
             ToolDefinition(function = ToolFunction(
                 name = TOOL_INVOKE,
                 description = "Execute an MCP tool by name. " +
@@ -235,29 +254,68 @@ class McpDeferredToolProvider(
                     ),
                     required = listOf("name", "arguments")
                 )
-            )),
+            ), defer = DeferPolicy.NEVER),
         )
 
         /**
-         * Whether to hide the MCP pool behind the meta-tools.
+         * Estimated prompt-token cost of shipping [tools] inline.
          *
-         * The previous token-budget branch was broken: it read [maxContextWindow] as a token
-         * count and multiplied it by 4000, but that setting is a **message count** (default 20).
-         * The resulting threshold (~8000 tokens) sat right around what a trimmed 70-tool pool
-         * actually costs, so deferral silently never fired and every request still shipped the
-         * full schema list. Tool *count* is the honest signal here and needs no estimation.
+         * Counts what the model actually sees — name + description + serialised schema — via
+         * the same [TokenEstimator] the UI uses, so the gate and the reported figures agree.
          */
-        fun shouldDefer(
-            mcpTools: List<ToolDefinition>,
-            builtinToolCount: Int,
-            @Suppress("UNUSED_PARAMETER") maxContextWindow: Int,
-        ): Boolean {
-            if (mcpTools.isEmpty()) return false
-            // Hard cap: total tools exceed the provider limit (Anthropic and most relays cap at 64).
-            if (builtinToolCount + mcpTools.size > MAX_INLINE_TOOLS) return true
-            // Schema volume: MCP schemas run hundreds of tokens each (Notion, Todoist), so a
-            // pool past this size is not worth shipping inline on a turn that may never call it.
-            return mcpTools.size > MAX_INLINE_MCP_TOOLS
+        fun estimateSchemaTokens(tools: List<ToolDefinition>): Int {
+            var total = 0
+            for (tool in tools) {
+                total += TokenEstimator.estimate(tool.function.name)
+                total += TokenEstimator.estimate(tool.function.description)
+                total += TokenEstimator.estimate(tool.function.parameters.asJsonObject().toString())
+            }
+            return total
+        }
+
+        /**
+         * Which tools to withhold from the request, keyed by token budget rather than count.
+         *
+         * Counting tools was the original bug: seven built-in providers with verbose schemas
+         * cost far more than a dozen terse MCP entries, yet only the MCP pool was ever gated
+         * and `maxContextWindow` was accepted and ignored. The budget is now the real one —
+         * [DEFER_THRESHOLD_PCT] of the context window, measured over *all* eligible tools.
+         *
+         * Two gates guard against a net-negative deferral, mirroring Cherry Studio:
+         *   • [MIN_AUTO_DEFER_COUNT] — below this the discovery round-trip costs more than
+         *     inlining would have.
+         *   • [META_TOOLS_OVERHEAD_TOKENS] — the savings must at least pay for the three
+         *     meta-tools' own schemas.
+         *
+         * [DeferPolicy.NEVER] tools are always inline; [DeferPolicy.ALWAYS] always deferred.
+         */
+        fun selectDeferred(
+            tools: List<ToolDefinition>,
+            contextTokens: Int,
+        ): Set<String> {
+            val always = tools.filter { it.defer == DeferPolicy.ALWAYS }
+            val candidates = tools.filter { it.defer == DeferPolicy.AUTO }
+
+            // Real token window from the models.dev catalog. NOT the `maxContextWindow`
+            // setting — that one counts messages, and reading it as tokens is exactly the
+            // bug that made the previous budget branch dead code.
+            val ctx = if (contextTokens > 0) contextTokens else FALLBACK_CONTEXT_TOKENS
+            val threshold = ctx * DEFER_THRESHOLD_PCT / 100
+            val cost = estimateSchemaTokens(candidates)
+
+            // Hard provider cap (Anthropic and most relays stop at 64) still forces deferral
+            // even when the token budget alone would have allowed the pool through.
+            val overProviderCap = tools.count { it.defer != DeferPolicy.ALWAYS } > MAX_INLINE_TOOLS
+
+            val autoDeferred = when {
+                overProviderCap -> candidates
+                cost <= threshold -> emptyList()
+                candidates.size < MIN_AUTO_DEFER_COUNT -> emptyList()
+                cost <= META_TOOLS_OVERHEAD_TOKENS -> emptyList()
+                else -> candidates
+            }
+
+            return (always + autoDeferred).map { it.function.name }.toSet()
         }
     }
 }

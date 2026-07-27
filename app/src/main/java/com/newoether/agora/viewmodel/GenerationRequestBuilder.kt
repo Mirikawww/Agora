@@ -302,7 +302,11 @@ class GenerationRequestBuilder(
 
             frequencyPenalty = effectiveSettings.frequencyPenalty,
 
-            presencePenalty = effectiveSettings.presencePenalty
+            presencePenalty = effectiveSettings.presencePenalty,
+
+            toolsSupported = capabilities.tools,
+
+            contextTokens = capabilities.contextTokens
 
         )
 

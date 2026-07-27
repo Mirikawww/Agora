@@ -17,6 +17,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
@@ -25,10 +26,26 @@ import java.io.File
 data class ModelCapabilities(
     val reasoning: Boolean = false,
     val fast: Boolean = false,
+    /**
+     * Model supports function/tool calling (models.dev `tool_call`).
+     *
+     * Defaults to `true`: the catalog is a best-effort overlay, and a cache miss or an
+     * unlisted model must not silently strip tools from a model that in fact supports them.
+     * Only an explicit `"tool_call": false` turns the gate off.
+     */
+    val tools: Boolean = true,
+    /**
+     * Real context window in **tokens** (models.dev `limit.context`), 0 when unknown.
+     *
+     * Distinct from the `maxContextWindow` setting, which is a *message count* used to trim
+     * history. Anything reasoning about token budgets must use this field.
+     */
+    val contextTokens: Int = 0,
 )
 
 private const val MODELS_DEV_CATALOG_URL = "https://models.dev/catalog.json"
-private const val MODELS_DEV_CACHE_FILE = "models_dev_capabilities_v4.json"
+// v5: added `tools` (tool_call) and `contextTokens` (limit.context) to ModelCapabilities.
+private const val MODELS_DEV_CACHE_FILE = "models_dev_capabilities_v5.json"
 private const val MODELS_DEV_CACHE_TTL_MS = 24 * 60 * 60 * 1000L
 private const val ALL_PROVIDERS = "*"
 
@@ -60,8 +77,14 @@ internal fun parseModelsDevCapabilities(raw: String): Map<String, ModelCapabilit
                 val experimental = model["experimental"] as? JsonObject
                 val modes = experimental?.get("modes") as? JsonObject
                 val fast = modes?.containsKey("fast") == true
-                val capabilities = ModelCapabilities(reasoning, fast)
-                if (!reasoning && !fast) return@modelLoop
+                // Absent `tool_call` means "unknown", which must stay permissive (see
+                // ModelCapabilities.tools). Only an explicit false records a restriction.
+                val tools = model["tool_call"]?.jsonPrimitive?.booleanOrNull != false
+                val contextTokens = (model["limit"] as? JsonObject)
+                    ?.get("context")?.jsonPrimitive?.intOrNull ?: 0
+                val capabilities = ModelCapabilities(reasoning, fast, tools, contextTokens)
+                // Nothing worth caching when every field is at its default.
+                if (!reasoning && !fast && tools && contextTokens == 0) return@modelLoop
                 val displayName = model["name"]?.jsonPrimitive?.content.orEmpty()
                 val aliases = buildSet {
                     add(modelId.lowercase())
@@ -76,7 +99,13 @@ internal fun parseModelsDevCapabilities(raw: String): Map<String, ModelCapabilit
                         key,
                         if (previous == null) capabilities else ModelCapabilities(
                             reasoning = previous.reasoning || capabilities.reasoning,
-                            fast = previous.fast || capabilities.fast
+                            fast = previous.fast || capabilities.fast,
+                            // AND, unlike the OR above: aliases collide across providers, and a
+                            // model listed anywhere as tool-incapable must not be re-enabled by a
+                            // permissive sibling entry.
+                            tools = previous.tools && capabilities.tools,
+                            // 0 means unknown, so any real figure wins over it.
+                            contextTokens = maxOf(previous.contextTokens, capabilities.contextTokens)
                         )
                     )
                 }
