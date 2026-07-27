@@ -42,7 +42,21 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     var changelogLoading by remember { mutableStateOf(false) }
     var changelog by remember { mutableStateOf<List<com.newoether.agora.util.ReleaseNotes>>(emptyList()) }
     var changelogError by remember { mutableStateOf<String?>(null) }
+    var ciStatus by remember { mutableStateOf<com.newoether.agora.util.UpdateChecker.CiRunStatus?>(null) }
     val scope = rememberCoroutineScope()
+
+    // Poll the live CI status. A running build is polled every 15s so the row
+    // reflects progress without a manual refresh; once the run settles the poll
+    // backs off to 60s (a new push is the only thing that can change it).
+    LaunchedEffect(Unit) {
+        while (true) {
+            val fresh = withContext(Dispatchers.IO) {
+                com.newoether.agora.util.UpdateChecker.fetchCiStatus()
+            }
+            ciStatus = fresh
+            kotlinx.coroutines.delay(if (fresh?.isRunning == true) 15_000L else 60_000L)
+        }
+    }
 
     fun openUrl(url: String) {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
@@ -58,19 +72,19 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 SettingsItem(
                     headlineContent = { Text(stringResource(R.string.about_original_developer)) },
                     supportingContent = { Text(stringResource(R.string.about_developer_name)) },
-                    leadingContent = { Icon(Icons.Default.Person, contentDescription = null) }
+                    leadingContent = { Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
                 )
             }, {
                 SettingsItem(
                     headlineContent = { Text(stringResource(R.string.about_current_developer)) },
                     supportingContent = { Text(stringResource(R.string.about_current_developer_name)) },
-                    leadingContent = { Icon(Icons.Default.Person, contentDescription = null) }
+                    leadingContent = { Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
                 )
             }, {
                 SettingsItem(
                     headlineContent = { Text(stringResource(R.string.about_version)) },
                     supportingContent = { Text("v$versionName ($versionCode)") },
-                    leadingContent = { Icon(Icons.Default.Info, contentDescription = null) }
+                    leadingContent = { Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
                 )
             }))
 
@@ -177,6 +191,61 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         modifier = Modifier.clickable { channelMenuOpen = true },
                     )
                 }
+                // Live CI build status — only meaningful on the CI channel.
+                if (updateChannel == "ci") {
+                    add {
+                        val s = ciStatus
+                        SettingsItem(
+                            headlineContent = { Text(stringResource(R.string.about_ci_status)) },
+                            supportingContent = {
+                                Text(
+                                    when {
+                                        s == null -> stringResource(R.string.about_ci_unavailable)
+                                        s.status == "queued" -> stringResource(R.string.about_ci_queued, s.run_number)
+                                        s.isRunning -> stringResource(R.string.about_ci_running, s.run_number)
+                                        s.isSuccess -> stringResource(R.string.about_ci_success, s.run_number)
+                                        s.conclusion == "cancelled" -> stringResource(R.string.about_ci_cancelled, s.run_number)
+                                        s.isFailure -> stringResource(R.string.about_ci_failed, s.run_number)
+                                        else -> stringResource(R.string.about_ci_unavailable)
+                                    } + if (s != null && s.title.isNotBlank()) "\n${s.title}" else ""
+                                )
+                            },
+                            leadingContent = {
+                                if (s?.isRunning == true) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                } else {
+                                    Icon(
+                                        when {
+                                            s == null -> Icons.Default.CloudOff
+                                            s.isSuccess -> Icons.Default.CheckCircle
+                                            s.isFailure -> Icons.Default.ErrorOutline
+                                            else -> Icons.Default.Pending
+                                        },
+                                        null,
+                                        tint = when {
+                                            s == null -> MaterialTheme.colorScheme.onSurfaceVariant
+                                            s.isSuccess -> MaterialTheme.colorScheme.primary
+                                            s.isFailure -> MaterialTheme.colorScheme.error
+                                            else -> MaterialTheme.colorScheme.primary
+                                        },
+                                    )
+                                }
+                            },
+                            trailingContent = {
+                                if (s != null) {
+                                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+                                }
+                            },
+                            modifier = if (s != null && s.html_url.isNotBlank()) {
+                                Modifier.clickable { openUrl(s.html_url) }
+                            } else Modifier,
+                        )
+                    }
+                }
                 add {
                     SettingsItem(
                         headlineContent = { Text(stringResource(R.string.about_view_changelog)) },
@@ -217,28 +286,28 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
             SettingsGroup(title = stringResource(R.string.about_links), items = listOf({
                 SettingsItem(
                     headlineContent = { Text(stringResource(R.string.about_github), modifier = Modifier.padding(vertical = 6.dp)) },
-                    leadingContent = { Icon(Icons.Default.Code, contentDescription = null) },
+                    leadingContent = { Icon(Icons.Default.Code, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                     trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
                     modifier = Modifier.clickable { openUrl("https://github.com/Mirikawww/Agora") }
                 )
             }, {
                 SettingsItem(
                     headlineContent = { Text(stringResource(R.string.about_issue_tracker), modifier = Modifier.padding(vertical = 6.dp)) },
-                    leadingContent = { Icon(Icons.Default.BugReport, contentDescription = null) },
+                    leadingContent = { Icon(Icons.Default.BugReport, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                     trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
                     modifier = Modifier.clickable { openUrl("https://github.com/Mirikawww/Agora/issues") }
                 )
             }, {
                 SettingsItem(
                     headlineContent = { Text(stringResource(R.string.about_contribute), modifier = Modifier.padding(vertical = 6.dp)) },
-                    leadingContent = { Icon(Icons.Default.VolunteerActivism, contentDescription = null) },
+                    leadingContent = { Icon(Icons.Default.VolunteerActivism, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                     trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
                     modifier = Modifier.clickable { openUrl("https://github.com/Mirikawww/Agora/pulls") }
                 )
             }, {
                 SettingsItem(
                     headlineContent = { Text(stringResource(R.string.about_privacy_policy), modifier = Modifier.padding(vertical = 6.dp)) },
-                    leadingContent = { Icon(Icons.Default.VerifiedUser, contentDescription = null) },
+                    leadingContent = { Icon(Icons.Default.VerifiedUser, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                     trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
                     modifier = Modifier.clickable { openUrl("https://github.com/Mirikawww/Agora/blob/main/PRIVACY.md") }
                 )

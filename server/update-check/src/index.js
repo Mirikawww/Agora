@@ -92,6 +92,13 @@ export default {
         return await handleCiDownload(env);
       }
 
+      // Live build status — unlike /ci/latest this reports the newest run of any
+      // conclusion, including queued / in_progress, so the app can show whether a
+      // build is currently running rather than only the last successful artifact.
+      if (path === "/ci/status") {
+        return await handleCiStatus(env);
+      }
+
       return json({ error: "not_found" }, 404);
     } catch (err) {
       return json(
@@ -418,6 +425,54 @@ async function fetchRunArtifact(env, run) {
     artifacts.find((a) => /\.apk|apk/i.test(a.name)) ||
     artifacts[0] ||
     null
+  );
+}
+
+/**
+ * Newest build run regardless of conclusion — the live view of CI.
+ *
+ * `/ci/latest` deliberately filters to `status=success` because it has to hand back
+ * a downloadable artifact. This endpoint drops that filter so the app can show a
+ * build that is queued or still running, which is exactly what you want when you
+ * just pushed and are waiting on it.
+ */
+async function handleCiStatus(env) {
+  const apiUrl =
+    `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}` +
+    `/actions/workflows/${CI_WORKFLOW_FILE}/runs` +
+    `?branch=${CI_WORKFLOW_BRANCH}&event=push&per_page=1`;
+  const res = await fetch(apiUrl, {
+    headers: githubHeaders(env, "application/vnd.github+json"),
+  });
+  if (!res.ok) {
+    return json({ error: "github_error", status: res.status }, 502);
+  }
+  const data = await res.json();
+  const run = (data.workflow_runs || [])[0];
+  if (!run) {
+    return new Response(null, {
+      status: 204,
+      headers: { ...CORS, "Cache-Control": "public, max-age=30" },
+    });
+  }
+  return json(
+    {
+      run_number: run.run_number,
+      run_id: run.id,
+      // queued | in_progress | completed
+      status: run.status,
+      // success | failure | cancelled | null (null while not completed)
+      conclusion: run.conclusion,
+      title: run.display_title || run.head_commit?.message?.split("\n")[0] || "",
+      commit_sha: (run.head_sha || "").slice(0, 7),
+      created_at: run.created_at,
+      updated_at: run.updated_at,
+      html_url: run.html_url,
+    },
+    200,
+    // Short TTL: this is a live status, but still cache briefly so opening the
+    // About page repeatedly does not burn the GitHub API rate limit.
+    { "Cache-Control": "public, max-age=30" },
   );
 }
 

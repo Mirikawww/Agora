@@ -90,6 +90,7 @@ object UpdateChecker {
     private const val UPDATE_ENDPOINT = "$WORKER_BASE/latest"
     private const val RELEASES_ENDPOINT = "$WORKER_BASE/releases"
     private const val CI_ENDPOINT = "$WORKER_BASE/ci/latest"
+    private const val CI_STATUS_ENDPOINT = "$WORKER_BASE/ci/status"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -122,6 +123,51 @@ object UpdateChecker {
         val is_zip: Boolean = true,
         val size_bytes: Long = 0,
     )
+
+    /**
+     * `/ci/status` payload — the newest build run of ANY conclusion, so a queued or
+     * in-progress build is visible. [conclusion] stays null until the run completes.
+     */
+    @Serializable
+    data class CiRunStatus(
+        val run_number: Int = 0,
+        val run_id: Long = 0,
+        /** queued | in_progress | completed */
+        val status: String = "",
+        /** success | failure | cancelled | null while running */
+        val conclusion: String? = null,
+        val title: String = "",
+        val commit_sha: String = "",
+        val created_at: String = "",
+        val updated_at: String = "",
+        val html_url: String = "",
+    ) {
+        val isRunning: Boolean get() = status == "queued" || status == "in_progress"
+        val isSuccess: Boolean get() = conclusion == "success"
+        val isFailure: Boolean get() = conclusion == "failure" || conclusion == "cancelled" ||
+            conclusion == "timed_out"
+    }
+
+    /** Live CI build status, or null when unavailable (network error / no runs yet). */
+    fun fetchCiStatus(): CiRunStatus? {
+        return try {
+            val request = Request.Builder()
+                .url(CI_STATUS_ENDPOINT)
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            client.newCall(request).execute().use { response ->
+                // 204 = workflow exists but has no runs yet.
+                if (response.code == 204 || !response.isSuccessful) return null
+                val body = response.body?.string().orEmpty()
+                if (body.isBlank()) return null
+                json.decodeFromString<CiRunStatus>(body)
+            }
+        } catch (e: Exception) {
+            DebugLog.w("UpdateChecker", "CI status fetch failed: ${e.message}")
+            null
+        }
+    }
 
     /**
      * CI-channel check. Compares **run numbers**, not versions: every CI build
