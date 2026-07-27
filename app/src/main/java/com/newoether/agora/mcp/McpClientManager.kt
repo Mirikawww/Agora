@@ -146,9 +146,22 @@ class McpClientManager(
         val active = servers.filter { it.enabled && it.url.isNotBlank() }
         active.forEach { desiredServers[it.id] = it }
         closeRemoved(active.mapTo(mutableSetOf()) { it.id })
+        // Use the cached connection's tool list immediately — zero network latency on the
+        // critical path before the LLM request. If a connection already exists we return
+        // its known definitions right away and kick off a background refresh so the *next*
+        // generation sees fresh tools. If no connection exists yet (first launch or after
+        // a reconnect) we connect synchronously as before — that cost is paid once.
         val remote = active.map { server ->
             async {
-                runCatching { refreshTools(connection(server)).let(::remoteDefinitions) }.getOrDefault(emptyList())
+                val existing = connections[server.id]
+                if (existing != null) {
+                    // Fast path: return cached definitions now, refresh in background.
+                    scope.launch { runCatching { refreshTools(existing) } }
+                    remoteDefinitions(existing)
+                } else {
+                    // Slow path: must connect first (only happens once per server).
+                    runCatching { refreshTools(connection(server)).let(::remoteDefinitions) }.getOrDefault(emptyList())
+                }
             }
         }.awaitAll().flatten()
         remote + brokerDefinitions(active)
