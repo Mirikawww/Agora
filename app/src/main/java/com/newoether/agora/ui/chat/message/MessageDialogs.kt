@@ -66,11 +66,10 @@ internal fun MessageInfoDialog(
                         Text(stringResource(R.string.download_tokens_with_label, message.completionTokens), style = bodyStyle)
                     }
                 } else if (message.participant == Participant.USER) {
-                    // Estimate user message tokens: chars / 3.5, rounded up
-                    val estimatedTokens = ((message.text.length + 2) / 3.5).toInt().coerceAtLeast(1)
+                    val tokenCount = com.newoether.agora.util.TokenEstimator.estimate(message.text)
                     if (message.text.isNotBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(stringResource(R.string.user_tokens_with_label, estimatedTokens), style = bodyStyle)
+                        Text(stringResource(R.string.user_tokens_with_label, tokenCount), style = bodyStyle)
                     }
                 }
             }

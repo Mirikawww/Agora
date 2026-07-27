@@ -121,7 +121,7 @@
     <string name="ttft_with_label">First token: %1$d ms</string>
     <string name="upload_tokens_with_label">Upload: %1$d tokens</string>
     <string name="download_tokens_with_label">Download: %1$d tokens</string>
-    <string name="user_tokens_with_label">~%1$d tokens (estimated)</string>
+    <string name="user_tokens_with_label">Tokens: %1$d</string>
     <string name="cancel">Cancel</string>
     <string name="copy">Copy</string>
     <string name="edit">Edit</string>
