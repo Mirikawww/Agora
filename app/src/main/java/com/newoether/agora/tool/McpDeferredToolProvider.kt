@@ -33,10 +33,15 @@ import kotlinx.serialization.json.putJsonArray
  * For infrequent tool use this is a net win; for heavy tool use the model can cache
  * the inspect result across calls in the same turn.
  *
- * Deferral triggers when:
- *   • total tools (built-ins + MCP) would exceed MAX_INLINE_TOOLS (64), OR
- *   • estimated MCP schema tokens exceed DEFER_THRESHOLD_PCT of the context window
- *     AND there are at least MIN_DEFER_COUNT MCP tools.
+ * **No tool is ever removed.** Deferral changes the *entry point*, not the capability:
+ * every MCP tool stays reachable through mcp_tool_invoke, which forwards to the same
+ * execution path a direct call would take. This is the difference between deferral and
+ * truncating the list to fit a provider cap — truncation would genuinely cost the model
+ * tools, deferral costs it one discovery round-trip.
+ *
+ * Deferral triggers when either:
+ *   • total tools (built-ins + MCP) would exceed [MAX_INLINE_TOOLS], or
+ *   • the MCP pool alone exceeds [MAX_INLINE_MCP_TOOLS].
  *
  * When deferral is NOT triggered the provider returns an empty definitions list
  * and [McpToolProvider] keeps serving the full tool schemas as usual.
@@ -177,11 +182,17 @@ class McpDeferredToolProvider(
         /** Hard cap on total inline tools (Anthropic and most providers limit to 64). */
         const val MAX_INLINE_TOOLS = 64
 
-        /** Defer when MCP schemas alone take more than this fraction of the context window. */
-        private const val DEFER_THRESHOLD_PCT = 10
-
-        /** Don't bother deferring a tiny tool set — the meta round-trip costs more. */
-        private const val MIN_DEFER_COUNT = 5
+        /**
+         * Maximum MCP tools to send inline before switching to meta-tool discovery.
+         *
+         * Above this the pool is deferred even when the total stays under [MAX_INLINE_TOOLS].
+         * 8 gives room for 16 built-in tools (8 + 16 = 24, well under 64) while still
+         * triggering on any moderately-sized Notion/Todoist connector deployment.
+         * Keeping this low caps the per-request token cost from MCP schemas regardless of
+         * provider limit — a 40-tool pool at ~200 tokens each is 8 000 tokens for tools the
+         * model will almost certainly never call in a single turn.
+         */
+        private const val MAX_INLINE_MCP_TOOLS = 8
 
         const val TOOL_SEARCH  = "mcp_tool_search"
         const val TOOL_INSPECT = "mcp_tool_inspect"
@@ -227,29 +238,26 @@ class McpDeferredToolProvider(
             )),
         )
 
+        /**
+         * Whether to hide the MCP pool behind the meta-tools.
+         *
+         * The previous token-budget branch was broken: it read [maxContextWindow] as a token
+         * count and multiplied it by 4000, but that setting is a **message count** (default 20).
+         * The resulting threshold (~8000 tokens) sat right around what a trimmed 70-tool pool
+         * actually costs, so deferral silently never fired and every request still shipped the
+         * full schema list. Tool *count* is the honest signal here and needs no estimation.
+         */
         fun shouldDefer(
             mcpTools: List<ToolDefinition>,
             builtinToolCount: Int,
-            maxContextWindow: Int,
+            @Suppress("UNUSED_PARAMETER") maxContextWindow: Int,
         ): Boolean {
             if (mcpTools.isEmpty()) return false
-            // Hard cap: total tools exceed provider limit.
+            // Hard cap: total tools exceed the provider limit (Anthropic and most relays cap at 64).
             if (builtinToolCount + mcpTools.size > MAX_INLINE_TOOLS) return true
-            // Token budget: MCP schemas alone exceed DEFER_THRESHOLD_PCT of context.
-            if (mcpTools.size < MIN_DEFER_COUNT) return false
-            val schemaChars = mcpTools.sumOf { tool ->
-                tool.function.description.length +
-                    (tool.function.parameters.rawSchema?.toString()?.length
-                        ?: tool.function.parameters.properties.values.sumOf {
-                            it.type.length + it.description.length
-                        })
-            }
-            val schemaTokens = schemaChars / 4
-            // maxContextWindow is in messages; use a generous 4000-token-per-message proxy
-            // for the context token budget. Threshold: 10% of estimated context tokens.
-            val estimatedContextTokens = maxContextWindow * 4_000
-            val threshold = estimatedContextTokens * DEFER_THRESHOLD_PCT / 100
-            return schemaTokens > threshold
+            // Schema volume: MCP schemas run hundreds of tokens each (Notion, Todoist), so a
+            // pool past this size is not worth shipping inline on a turn that may never call it.
+            return mcpTools.size > MAX_INLINE_MCP_TOOLS
         }
     }
 }
