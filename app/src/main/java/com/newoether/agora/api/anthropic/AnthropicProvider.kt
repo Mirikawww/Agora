@@ -327,7 +327,11 @@ class AnthropicProvider : LlmProvider {
                                     "message_delta" -> {
                                         event.usage?.let { u ->
                                             val total = messageInputTokens + (u.outputTokens ?: 0)
-                                            emit(StreamEvent.UsageUpdate(total))
+                                            emit(StreamEvent.UsageUpdate(
+                                                tokenCount = total,
+                                                promptTokens = messageInputTokens,
+                                                completionTokens = u.outputTokens ?: 0,
+                                            ))
                                         }
                                     }
                                 }

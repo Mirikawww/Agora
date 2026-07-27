@@ -216,9 +216,10 @@ class DataImporter(
                         val msgEntities = data.messages.map { m ->
                             MessageEntity(m.id, m.conversationId, m.parentId, m.text, m.images,
                                 m.thoughts, m.thoughtTitle, m.tokenCount,
-                                try { MessageStatus.valueOf(m.status) } catch (_: Exception) { MessageStatus.SUCCESS },
-                                try { Participant.valueOf(m.participant) } catch (_: Exception) { Participant.MODEL },
-                                m.timestamp, m.completedAt, m.thoughtTimeMs, m.modelName, m.toolCallJson, m.attachmentMeta)
+                                status = try { MessageStatus.valueOf(m.status) } catch (_: Exception) { MessageStatus.SUCCESS },
+                                participant = try { Participant.valueOf(m.participant) } catch (_: Exception) { Participant.MODEL },
+                                timestamp = m.timestamp, completedAt = m.completedAt, thoughtTimeMs = m.thoughtTimeMs,
+                                modelName = m.modelName, toolCallJson = m.toolCallJson, attachmentMeta = m.attachmentMeta)
                         }
                         // Restore image files from ZIP to app storage
                         val imagesDir = java.io.File(context.filesDir, "images")

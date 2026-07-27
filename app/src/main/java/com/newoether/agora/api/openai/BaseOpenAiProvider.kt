@@ -345,7 +345,9 @@ abstract class BaseOpenAiProvider : LlmProvider {
                     send(
                         StreamEvent.UsageUpdate(
                             tokenCount = usage.totalTokens,
-                            thoughtsTokenCount = usage.completionTokensDetails?.reasoningTokens ?: 0
+                            thoughtsTokenCount = usage.completionTokensDetails?.reasoningTokens ?: 0,
+                            promptTokens = usage.promptTokens,
+                            completionTokens = usage.completionTokens,
                         )
                     )
                 }

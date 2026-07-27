@@ -17,7 +17,16 @@ import kotlinx.serialization.json.booleanOrNull
 sealed class StreamEvent {
     data class TextChunk(val text: String) : StreamEvent()
     data class ThoughtChunk(val thought: String, val title: String? = null, val signature: String? = null) : StreamEvent()
-    data class UsageUpdate(val tokenCount: Int, val thoughtsTokenCount: Int = 0) : StreamEvent()
+    data class UsageUpdate(
+        val tokenCount: Int,
+        val thoughtsTokenCount: Int = 0,
+        /** Prompt (input/upload) tokens for this request. 0 = not reported by provider. */
+        val promptTokens: Int = 0,
+        /** Completion (output/download) tokens for this request. 0 = not reported by provider. */
+        val completionTokens: Int = 0,
+        /** Time-to-first-token in ms, measured client-side. 0 = not yet known. */
+        val ttftMs: Long = 0L,
+    ) : StreamEvent()
     data class Error(val error: GenerationError) : StreamEvent() {
         val message: String get() = error.userMessage()
     }

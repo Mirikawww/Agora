@@ -46,10 +46,32 @@ internal fun MessageInfoDialog(
         title = { Text(stringResource(R.string.message_info), fontWeight = FontWeight.Bold) },
         text = {
             Column {
-                Text(stringResource(R.string.time_with_label, dateString), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 20.sp))
+                val bodyStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 20.sp)
+                Text(stringResource(R.string.time_with_label, dateString), style = bodyStyle)
                 if (message.participant == Participant.MODEL) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(stringResource(R.string.model_with_label, modelDisplay), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 20.sp))
+                    Text(stringResource(R.string.model_with_label, modelDisplay), style = bodyStyle)
+                    // First-token latency
+                    if (message.ttftMs > 0L) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(stringResource(R.string.ttft_with_label, message.ttftMs), style = bodyStyle)
+                    }
+                    // Upload / download token split
+                    if (message.promptTokens > 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(stringResource(R.string.upload_tokens_with_label, message.promptTokens), style = bodyStyle)
+                    }
+                    if (message.completionTokens > 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(stringResource(R.string.download_tokens_with_label, message.completionTokens), style = bodyStyle)
+                    }
+                } else if (message.participant == Participant.USER) {
+                    // Estimate user message tokens: chars / 3.5, rounded up
+                    val estimatedTokens = ((message.text.length + 2) / 3.5).toInt().coerceAtLeast(1)
+                    if (message.text.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(stringResource(R.string.user_tokens_with_label, estimatedTokens), style = bodyStyle)
+                    }
                 }
             }
         },

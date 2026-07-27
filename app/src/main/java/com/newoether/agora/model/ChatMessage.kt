@@ -56,6 +56,12 @@ data class ChatMessage(
     val thoughts: String? = null,
     val thoughtTitle: String? = null,
     val tokenCount: Int = 0,
+    /** Prompt (input/upload) tokens for this round. 0 = not reported. */
+    val promptTokens: Int = 0,
+    /** Completion (output/download) tokens for this round. 0 = not reported. */
+    val completionTokens: Int = 0,
+    /** Time-to-first-token in ms (client-side). 0 = not measured. */
+    val ttftMs: Long = 0L,
     val status: MessageStatus = MessageStatus.SUCCESS, // Default to SUCCESS for old messages
     val participant: Participant,
     val timestamp: Long = System.currentTimeMillis(),

@@ -482,7 +482,7 @@ class GenerationManager(
             val combinedText = if (attachmentText.isNotBlank()) it.text + attachmentText else it.text
             val hasTranscription = ctx.imageTranscriptionEnabled && meta != null && meta.items.any { item -> !item.transcription.isNullOrBlank() }
             val effectiveImages = if (hasTranscription) emptyList() else it.images
-            ChatMessage(id = it.id, parentId = it.parentId, text = combinedText, images = effectiveImages, thoughts = it.thoughts, thoughtTitle = it.thoughtTitle, tokenCount = it.tokenCount, status = it.status, participant = it.participant, timestamp = it.timestamp, completedAt = it.completedAt, thoughtTimeMs = it.thoughtTimeMs, segments = segs, toolCall = toolCall)
+            ChatMessage(id = it.id, parentId = it.parentId, text = combinedText, images = effectiveImages, thoughts = it.thoughts, thoughtTitle = it.thoughtTitle, tokenCount = it.tokenCount, promptTokens = it.promptTokens, completionTokens = it.completionTokens, ttftMs = it.ttftMs, status = it.status, participant = it.participant, timestamp = it.timestamp, completedAt = it.completedAt, thoughtTimeMs = it.thoughtTimeMs, segments = segs, toolCall = toolCall)
         }.filter { it.participant != Participant.ERROR }
             .let { path ->
                 if (isRegenerate && replaceMessageId != null) {
@@ -614,6 +614,14 @@ class GenerationManager(
         // number shown was the last round only and understated what the turn actually cost.
         var totalTokenCount = 0
         var roundTokenCount = 0
+        var roundPromptTokens = 0
+        var roundCompletionTokens = 0
+        var totalPromptTokens = 0
+        var totalCompletionTokens = 0
+        /** Epoch-ms when the current HTTP request was dispatched (reset each round). */
+        var requestDispatchMs = 0L
+        /** TTFT for this turn (first TextChunk or ThoughtChunk after request). */
+        var ttftMs = 0L
         var totalThoughtTimeMs: Long? = null
         var cumulativeThoughtMs: Long = 0
         var currentThoughtStartMs: Long? = null
@@ -699,6 +707,9 @@ class GenerationManager(
                 id = modelMessageId, parentId = parentId,
                 text = totalText, thoughts = totalThoughts.ifBlank { null },
                 thoughtTitle = totalThoughtTitle, tokenCount = totalTokenCount + roundTokenCount,
+                promptTokens = totalPromptTokens + roundPromptTokens,
+                completionTokens = totalCompletionTokens + roundCompletionTokens,
+                ttftMs = ttftMs,
                 status = currentStatus, participant = Participant.MODEL,
                 timestamp = startTime, thoughtTimeMs = totalThoughtTimeMs,
                 modelName = modelName, toolCall = toolCallData,
@@ -746,6 +757,10 @@ class GenerationManager(
                         if (currentStatus == MessageStatus.THINKING) {
                             flushThoughtSegment()
                         }
+                        // Record TTFT on the very first visible token of this turn.
+                        if (ttftMs == 0L && requestDispatchMs > 0L && answerText.isNotBlank()) {
+                            ttftMs = System.currentTimeMillis() - requestDispatchMs
+                        }
                         totalText += answerText
                         currentAnswerBuf.append(answerText)
                         if (answerText.isNotBlank()) {
@@ -758,6 +773,10 @@ class GenerationManager(
                         flushAnswerSegment()
                         currentStatus = MessageStatus.THINKING
                         retryText = null
+                        // Count TTFT on first thinking token too (thinking models think before speaking).
+                        if (ttftMs == 0L && requestDispatchMs > 0L && event.thought.isNotBlank()) {
+                            ttftMs = System.currentTimeMillis() - requestDispatchMs
+                        }
                         if (currentThoughtStartMs == null) {
                             currentThoughtStartMs = System.currentTimeMillis()
                         }
@@ -772,6 +791,8 @@ class GenerationManager(
                     }
                     is StreamEvent.UsageUpdate -> {
                         if (event.tokenCount > 0) roundTokenCount = event.tokenCount
+                        if (event.promptTokens > 0) roundPromptTokens = event.promptTokens
+                        if (event.completionTokens > 0) roundCompletionTokens = event.completionTokens
                         if (totalText.isEmpty() && event.thoughtsTokenCount > 0) {
                             currentStatus = MessageStatus.THINKING
                             if (currentThoughtStartMs == null) {
@@ -901,12 +922,17 @@ class GenerationManager(
 
             val projectedPath = projectAssistantImagesToLatestUserMessage(currentPath, providerConfig.includeImages)
             val apiPath = applyUserTemplate(projectedPath, config.userPrepend, config.userPostpend)
+            requestDispatchMs = System.currentTimeMillis()
             provider.generateResponse(apiPath, providerConfig).collect { event ->
                 handleStreamEvent(event)
             }
             // Settle this request's usage before any tool round issues the next one.
             totalTokenCount += roundTokenCount
             roundTokenCount = 0
+            totalPromptTokens += roundPromptTokens
+            roundPromptTokens = 0
+            totalCompletionTokens += roundCompletionTokens
+            roundCompletionTokens = 0
             finishCurrentThoughtTiming()
             // Always emit final state after collection completes
             if (generationJob?.isCancelled != true) {
@@ -979,11 +1005,16 @@ class GenerationManager(
                 val apiToolPath = applyUserTemplate(projectedToolPath, config.userPrepend, config.userPostpend)
                 // One normal continuation request after tool results. If the model returns no
                 // final output, completion validation below marks the generation as ERROR.
+                requestDispatchMs = System.currentTimeMillis()
                 provider.generateResponse(apiToolPath, providerConfig).collect { event ->
                     handleStreamEvent(event)
                 }
                 totalTokenCount += roundTokenCount
                 roundTokenCount = 0
+                totalPromptTokens += roundPromptTokens
+                roundPromptTokens = 0
+                totalCompletionTokens += roundCompletionTokens
+                roundCompletionTokens = 0
                 finishCurrentThoughtTiming()
                 // Always emit final state after tool round completes
                 onStreamUpdate(modelMessage())
@@ -1067,6 +1098,9 @@ class GenerationManager(
                                 text = totalText, images = generatedImages.toList(),
                                 thoughts = totalThoughts.ifBlank { null },
                                 thoughtTitle = totalThoughtTitle, tokenCount = totalTokenCount + roundTokenCount,
+                                promptTokens = totalPromptTokens + roundPromptTokens,
+                                completionTokens = totalCompletionTokens + roundCompletionTokens,
+                                ttftMs = ttftMs,
                                 status = currentStatus, participant = Participant.MODEL, timestamp = startTime,
                                 completedAt = finishedAt,
                                 thoughtTimeMs = totalThoughtTimeMs, modelName = modelName, toolCallJson = segmentsJson
