@@ -253,7 +253,7 @@ internal fun UserMessageBubble(
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.info)) },
                             onClick = { showMenu = false; onShowInfo() },
-                            leadingIcon = { Icon(Icons.Default.Info, null) }
+                            leadingIcon = { Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.onSurface) }
                         )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.delete), color = if (!isLoading) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.error.copy(alpha = 0.5f)) },
