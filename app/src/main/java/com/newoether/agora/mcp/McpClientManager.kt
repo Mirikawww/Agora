@@ -519,7 +519,7 @@ class McpClientManager(
 
     private fun remoteDefinitions(connection: Connection): List<ToolDefinition> =
         connection.exposedTools.map { (exposedName, tool) ->
-            val schema = McpJson.encodeToJsonElement(ToolSchema.serializer(), tool.inputSchema).jsonObject
+            val rawSchema = McpJson.encodeToJsonElement(ToolSchema.serializer(), tool.inputSchema).jsonObject
             val isBuiltinConnector = connection.config.id.startsWith("connector:")
             val description = if (isBuiltinConnector) {
                 // First-class connector tools: no noisy MCP prefix in the schema the model sees.
@@ -535,10 +535,58 @@ class McpClientManager(
                 function = ToolFunction(
                     name = exposedName,
                     description = description,
-                    parameters = ToolParameters(properties = emptyMap(), rawSchema = schema),
+                    parameters = ToolParameters(properties = emptyMap(), rawSchema = trimSchema(rawSchema)),
                 )
             )
         }
+
+    /**
+     * Strips token-heavy but LLM-unneeded JSON Schema details from MCP tool schemas.
+     *
+     * Notion/Todoist MCP servers expose tools with extremely large schemas: rich_text
+     * block types, deep anyOf/oneOf enumerations, $defs references, and multi-level
+     * nested objects. A single Notion tool can serialize to 5,000+ tokens. All of
+     * that cost is paid on every request even though the model only needs the
+     * top-level property names, types, and descriptions to call the tool correctly.
+     *
+     * Schemas under [SCHEMA_TRIM_THRESHOLD] chars are returned unchanged (fast path).
+     * Larger schemas are re-built retaining only:
+     *   - type / description at every level
+     *   - properties (one level deep, each property keeps type + description only)
+     *   - required array
+     *   - items.type for array properties
+     *
+     * The stripped schema is still valid JSON Schema and fully sufficient for the
+     * model to construct correct tool calls; deep enum lists and $defs are noise.
+     */
+    private fun trimSchema(schema: JsonObject): JsonObject {
+        // ~2 000 chars ≈ 500 tokens — small schemas pass through unchanged.
+        if (schema.toString().length <= SCHEMA_TRIM_THRESHOLD) return schema
+
+        fun trimProperty(prop: JsonObject): JsonObject = buildJsonObject {
+            (prop["type"] as? JsonPrimitive)?.let { put("type", it) }
+            (prop["description"] as? JsonPrimitive)?.let { put("description", it) }
+            // For arrays keep only items.type so the model knows element type.
+            (prop["items"] as? JsonObject)?.let { items ->
+                (items["type"] as? JsonPrimitive)?.let { t ->
+                    put("items", buildJsonObject { put("type", t) })
+                }
+            }
+        }
+
+        return buildJsonObject {
+            (schema["type"] as? JsonPrimitive)?.let { put("type", it) }
+            (schema["description"] as? JsonPrimitive)?.let { put("description", it) }
+            (schema["properties"] as? JsonObject)?.let { props ->
+                put("properties", buildJsonObject {
+                    props.forEach { (key, value) ->
+                        put(key, if (value is JsonObject) trimProperty(value) else value)
+                    }
+                })
+            }
+            (schema["required"] as? kotlinx.serialization.json.JsonArray)?.let { put("required", it) }
+        }
+    }
 
     private fun brokerDefinitions(servers: List<McpServerConfig>): List<ToolDefinition> {
         if (servers.isEmpty()) return emptyList()
@@ -810,6 +858,11 @@ class McpClientManager(
         private const val MAX_RECONNECT_ATTEMPTS = 5
         private const val BASE_RECONNECT_DELAY_MS = 1_000L
         private const val MAX_RECONNECT_DELAY_MS = 30_000L
+        // MCP tool schemas larger than this (chars) are stripped to top-level
+        // properties only before being sent to the LLM. Notion/Todoist schemas
+        // can reach 50 000+ chars; retaining only names/types/descriptions
+        // cuts them to <500 chars each without losing call correctness.
+        private const val SCHEMA_TRIM_THRESHOLD = 2_000
 
         fun serverPrefix(server: McpServerConfig): String =
             "mcp_${sanitize(server.name).take(18)}_${sanitize(server.id).take(6)}_"

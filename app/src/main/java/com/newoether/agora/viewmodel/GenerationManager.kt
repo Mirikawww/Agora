@@ -329,6 +329,11 @@ class GenerationManager(
                 }
             }
             "Unknown tool: $name"
+        } catch (e: CancellationException) {
+            // Must not swallow CancellationException — doing so prevents the coroutine from
+            // stopping when the user presses Stop mid-tool, causing the generation loop to
+            // keep running even after cancellation was requested.
+            throw e
         } catch (e: Exception) {
             "Error executing tool '$name': ${e.localizedMessage ?: "Unknown error"}"
         }

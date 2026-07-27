@@ -260,6 +260,11 @@ abstract class BaseOpenAiProvider : LlmProvider {
                     return
                 }
                 continue
+            } catch (e: java.io.IOException) {
+                // call.cancel() from Stop/regenerate lands here as IOException("stream was
+                // reset: CANCEL") before the coroutine cancel signal reaches isActive. Simply
+                // break — the caller will see STOPPED, not an error.
+                break
             } ?: break
 
             totalLines++

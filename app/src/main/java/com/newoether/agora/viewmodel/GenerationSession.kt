@@ -286,8 +286,12 @@ class GenerationSession(
 
     fun stopConversation(conversationId: String, releaseSendGate: Boolean = true): Job? {
         val previousJob = jobsByConversation[conversationId]
-        cancelStreamHandles(conversationId)
+        // Cancel the coroutine FIRST so isActive flips to false before OkHttp's
+        // call.cancel() unblocks readLine() with IOException("stream was reset: CANCEL").
+        // Reversed order caused the IOException to escape the read loop while isActive
+        // was still true, turning a normal Stop into a visible error message.
         previousJob?.cancel()
+        cancelStreamHandles(conversationId)
 
         var stoppedConversationId: String? = null
         val stoppedMsg = synchronized(genLock) {
