@@ -77,14 +77,21 @@ data class ProviderConfig(
  * Whether a tool's full schema may be withheld from the request and reached through the
  * deferred-discovery meta-tools instead.
  *
- * Deferring is not disabling: a deferred tool stays discoverable via `mcp_tool_search` and
- * callable via `mcp_tool_invoke`, so model capability is unchanged — only the per-request
- * schema cost goes away.
+ * Deferring is not disabling: a deferred tool stays discoverable and callable through the
+ * capability broker, so model capability is unchanged — only the per-request schema cost goes
+ * away.
  */
 enum class DeferPolicy {
     /** Always inline. Reserved for tools that must be visible to a native provider gate
      *  (e.g. a future approval flow), where deferring would bypass that gate. */
     NEVER,
+
+    /**
+     * Inline on substantive requests even without a lexical match, but defer for a trivial chat
+     * turn such as a greeting or acknowledgement. Use for small, high-frequency tools whose
+     * discovery round costs more than their schemas.
+     */
+    EAGER,
 
     /** Eligible for deferral when the schema budget is exceeded. */
     AUTO,

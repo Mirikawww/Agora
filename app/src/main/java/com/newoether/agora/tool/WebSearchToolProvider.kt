@@ -1,6 +1,7 @@
 package com.newoether.agora.tool
 
 import androidx.core.text.HtmlCompat
+import com.newoether.agora.api.DeferPolicy
 import com.newoether.agora.api.DuckDuckGoScraper
 import com.newoether.agora.api.HttpClient
 import com.newoether.agora.api.ToolDefinition
@@ -64,29 +65,35 @@ class WebSearchToolProvider : ToolProvider {
     override fun definitions(ctx: GenerationContext): List<ToolDefinition> {
         if (!ctx.webSearchEnabled) return emptyList()
         return listOf(
-            ToolDefinition(function = ToolFunction(
-                name = "web_search",
-                description = "Search the web for current information. Use this to find facts, news, or data " +
-                    "not in your training set. The number of results is controlled by the user's settings — " +
-                    "you cannot request fewer or more.",
-                parameters = ToolParameters(
-                    properties = mapOf(
-                        "query" to ToolProperty("string", "The search query to execute.")
-                    ),
-                    required = listOf("query")
-                )
-            )),
-            ToolDefinition(function = ToolFunction(
-                name = "web_fetch",
-                description = "Fetch and read the full text content of a web page. Use this after web_search when you need more detail from a specific page.",
-                parameters = ToolParameters(
-                    properties = mapOf(
-                        "url" to ToolProperty("string", "The URL of the page to fetch."),
-                        "maxChars" to ToolProperty("integer", "Maximum characters of text to return (default 8000, max 100000). If the result has \"truncated\": true, call again with a larger maxChars to get more.")
-                    ),
-                    required = listOf("url")
-                )
-            ))
+            ToolDefinition(
+                function = ToolFunction(
+                    name = "web_search",
+                    description = "Search the web for current information. Use this to find facts, news, or data " +
+                        "not in your training set. The number of results is controlled by the user's settings — " +
+                        "you cannot request fewer or more.",
+                    parameters = ToolParameters(
+                        properties = mapOf(
+                            "query" to ToolProperty("string", "The search query to execute.")
+                        ),
+                        required = listOf("query")
+                    )
+                ),
+                defer = DeferPolicy.EAGER,
+            ),
+            ToolDefinition(
+                function = ToolFunction(
+                    name = "web_fetch",
+                    description = "Fetch and read the full text content of a web page. Use this after web_search when you need more detail from a specific page.",
+                    parameters = ToolParameters(
+                        properties = mapOf(
+                            "url" to ToolProperty("string", "The URL of the page to fetch."),
+                            "maxChars" to ToolProperty("integer", "Maximum characters of text to return (default 8000, max 100000). If the result has \"truncated\": true, call again with a larger maxChars to get more.")
+                        ),
+                        required = listOf("url")
+                    )
+                ),
+                defer = DeferPolicy.EAGER,
+            )
         )
     }
 

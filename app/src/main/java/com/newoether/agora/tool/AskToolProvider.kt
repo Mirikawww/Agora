@@ -1,5 +1,6 @@
 package com.newoether.agora.tool
 
+import com.newoether.agora.api.DeferPolicy
 import com.newoether.agora.api.ToolDefinition
 import com.newoether.agora.api.ToolFunction
 import com.newoether.agora.api.ToolParameters
@@ -61,7 +62,8 @@ class AskToolProvider : ToolProvider {
                     ),
                     required = listOf("question", "options"),
                 ),
-            )
+            ),
+            defer = DeferPolicy.EAGER,
         )
         )
     }

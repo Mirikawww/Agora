@@ -1,9 +1,17 @@
 package com.newoether.agora.viewmodel
 
+import com.newoether.agora.api.ToolDefinition
+import com.newoether.agora.api.ToolFunction
+import com.newoether.agora.api.ToolParameters
+import com.newoether.agora.api.ToolProperty
 import com.newoether.agora.model.ChatMessage
 import com.newoether.agora.model.Participant
+import com.newoether.agora.tool.AskToolProvider
+import com.newoether.agora.tool.McpDeferredToolProvider
+import com.newoether.agora.tool.WebSearchToolProvider
 import com.newoether.agora.util.Constants
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GenerationManagerUserTemplateTest {
@@ -22,5 +30,46 @@ class GenerationManagerUserTemplateTest {
         assertEquals("tool output", result[1].text)
         assertEquals("", result[2].text)
         assertEquals("assistant", result[3].text)
+    }
+
+    @Test
+    fun forcedWebContext_keepsWebToolsDirectAcrossManagerRoutingBoundary() {
+        val ctx = GenerationContext(
+            webSearchEnabled = true,
+            forceWebSearch = true,
+            askToolEnabled = true,
+        )
+        val longTail = (1..70).map { index ->
+            ToolDefinition(
+                function = ToolFunction(
+                    name = "connector_tool_$index",
+                    description = "Long-tail connector capability.",
+                    parameters = ToolParameters(
+                        properties = mapOf(
+                            "query" to ToolProperty("string", "The request."),
+                        ),
+                        required = listOf("query"),
+                    ),
+                ),
+            )
+        }
+
+        val forcedNames = forcedDirectToolNames(ctx)
+        val plan = McpDeferredToolProvider.plan(
+            tools = WebSearchToolProvider().definitions(ctx) +
+                AskToolProvider().definitions(ctx) +
+                longTail,
+            contextTokens = 200_000,
+            currentText = "你好",
+            forcedDirectToolNames = forcedNames,
+        )
+
+        assertEquals(setOf("web_search", "web_fetch"), forcedNames)
+        assertEquals(
+            setOf("web_search", "web_fetch"),
+            plan.inlineTools.map { it.function.name }.toSet(),
+        )
+        assertTrue(plan.deferredTools.any { it.function.name == "ask_user" })
+        assertTrue(plan.usesBroker)
     }
 }

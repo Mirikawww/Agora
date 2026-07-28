@@ -7,9 +7,14 @@ import com.newoether.agora.api.ToolParameters
 import com.newoether.agora.api.ToolProperty
 import com.newoether.agora.viewmodel.GenerationContext
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -69,6 +74,137 @@ class DeferredToolBudgetTest {
         assertEquals(70, plan.deferredTools.size)
         assertEquals(1, plan.wireToolCount)
         assertEquals(CapabilityRouteMode.NO_TOOL, plan.route.mode)
+    }
+
+    @Test
+    fun `substantive requests keep foundational tools directly callable without discovery`() {
+        val ctx = GenerationContext(webSearchEnabled = true, askToolEnabled = true)
+        val foundational = WebSearchToolProvider().definitions(ctx) +
+            AskToolProvider().definitions(ctx)
+        val longTail = (1..70).map { tool("connector_tool_$it") }
+
+        val plan = McpDeferredToolProvider.plan(
+            tools = foundational + longTail,
+            contextTokens = 200_000,
+            currentText = "请核实 OpenAI 创始人是谁",
+        )
+
+        assertEquals(
+            setOf("ask_user", "web_fetch", "web_search"),
+            plan.inlineTools.map { it.function.name }.toSet(),
+        )
+        assertTrue(plan.usesBroker)
+        assertEquals(4, plan.wireToolCount)
+        assertTrue(
+            "foundational schema cost=${plan.inlineSchemaTokens}",
+            plan.inlineSchemaTokens < 1_000,
+        )
+    }
+
+    @Test
+    fun `pure greeting still defers foundational tools`() {
+        val ctx = GenerationContext(webSearchEnabled = true, askToolEnabled = true)
+        val foundational = WebSearchToolProvider().definitions(ctx) +
+            AskToolProvider().definitions(ctx)
+        val longTail = (1..70).map { tool("connector_tool_$it") }
+
+        val plan = McpDeferredToolProvider.plan(
+            tools = foundational + longTail,
+            contextTokens = 200_000,
+            currentText = "你好",
+        )
+
+        assertTrue(plan.inlineTools.isEmpty())
+        assertEquals(1, plan.wireToolCount)
+        assertEquals(CapabilityRouteMode.NO_TOOL, plan.route.mode)
+    }
+
+    @Test
+    fun `pure greeting defers foundational tools even without a large connector registry`() {
+        val ctx = GenerationContext(webSearchEnabled = true, askToolEnabled = true)
+        val foundational = WebSearchToolProvider().definitions(ctx) +
+            AskToolProvider().definitions(ctx)
+
+        val plan = McpDeferredToolProvider.plan(
+            tools = foundational,
+            contextTokens = 200_000,
+            currentText = "你好",
+        )
+
+        assertTrue(plan.inlineTools.isEmpty())
+        assertEquals(3, plan.deferredTools.size)
+        assertEquals(1, plan.wireToolCount)
+    }
+
+    @Test
+    fun `explicit force exposes the requested foundational tool even for a greeting`() {
+        val ctx = GenerationContext(webSearchEnabled = true, askToolEnabled = true)
+        val foundational = WebSearchToolProvider().definitions(ctx) +
+            AskToolProvider().definitions(ctx)
+        val longTail = (1..70).map { tool("connector_tool_$it") }
+
+        val plan = McpDeferredToolProvider.plan(
+            tools = foundational + longTail,
+            contextTokens = 200_000,
+            currentText = "你好",
+            forcedDirectToolNames = setOf("web_search", "web_fetch"),
+        )
+
+        assertEquals(
+            setOf("web_fetch", "web_search"),
+            plan.inlineTools.map { it.function.name }.toSet(),
+        )
+        assertTrue(plan.usesBroker)
+    }
+
+    @Test
+    fun `broker search excludes direct tools and returns an invoke-ready input hint`() = runBlocking {
+        var invoked = false
+        val provider = McpDeferredToolProvider { _, _, _ ->
+            invoked = true
+            "{}"
+        }
+        val ctx = GenerationContext(
+            conversationId = "foundational-direct",
+            webSearchEnabled = true,
+            askToolEnabled = true,
+        )
+        val foundational = WebSearchToolProvider().definitions(ctx) +
+            AskToolProvider().definitions(ctx)
+        val longTail = (1..70).map { tool("connector_tool_$it") }
+        provider.prepare(
+            requestId = "foundational-direct",
+            allTools = foundational + longTail,
+            contextTokens = 200_000,
+            currentText = "请核实 OpenAI 创始人是谁",
+            recentTexts = emptyList(),
+        )
+
+        val search = provider.execute(
+            McpDeferredToolProvider.TOOL_BROKER,
+            """{"action":"search","query":"connector","limit":6}""",
+            ctx,
+        )
+        val inspectDirect = provider.execute(
+            McpDeferredToolProvider.TOOL_BROKER,
+            """{"action":"inspect","name":"web_search"}""",
+            ctx,
+        )
+        val invokeDirect = provider.execute(
+            McpDeferredToolProvider.TOOL_BROKER,
+            """{"action":"invoke","name":"web_search","arguments":{"query":"OpenAI"}}""",
+            ctx,
+        )
+
+        assertFalse(search.contains("\"name\":\"web_search\""))
+        assertFalse(search.contains("\"name\":\"web_fetch\""))
+        assertFalse(search.contains("\"name\":\"ask_user\""))
+        assertTrue(search.contains("\"input_hint\""))
+        assertTrue(search.contains("\"query\":\"string; required; hint="))
+        assertTrue(search.contains("Invoke directly"))
+        assertTrue(inspectDirect.contains("tool_already_direct"))
+        assertTrue(invokeDirect.contains("tool_already_direct"))
+        assertFalse(invoked)
     }
 
     @Test
@@ -314,6 +450,199 @@ class DeferredToolBudgetTest {
     }
 
     @Test
+    fun `search capsule stays bounded while inspect preserves a huge exact schema`() = runBlocking {
+        val compact = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("mode", buildJsonObject { put("type", "string") })
+            })
+        }
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("mode", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        repeat(1_000) { index -> add(JsonPrimitive("exact-mode-$index")) }
+                    })
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("mode")) })
+        }
+        val huge = ToolDefinition(
+            function = ToolFunction(
+                "connector_huge",
+                "Choose an exact connector mode.",
+                ToolParameters(properties = emptyMap(), rawSchema = compact),
+            ),
+            fullParameters = ToolParameters(properties = emptyMap(), rawSchema = full),
+            defer = DeferPolicy.ALWAYS,
+        )
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "huge-capsule")
+        provider.prepare(
+            requestId = "huge-capsule",
+            allTools = listOf(huge),
+            contextTokens = 200_000,
+            currentText = "use the connector",
+            recentTexts = emptyList(),
+        )
+
+        val search = provider.execute(
+            McpDeferredToolProvider.TOOL_BROKER,
+            """{"action":"search","query":"connector_huge","limit":1}""",
+            ctx,
+        )
+        val inspect = provider.execute(
+            McpDeferredToolProvider.TOOL_BROKER,
+            """{"action":"inspect","name":"connector_huge"}""",
+            ctx,
+        )
+
+        assertTrue(search.length < 1_500)
+        assertTrue(search.contains("\"inspect_for_required_constraints\":true"))
+        assertFalse(search.contains("exact-mode-999"))
+        assertTrue(inspect.contains("exact-mode-999"))
+    }
+
+    @Test
+    fun `search capsule marks omitted format and pattern constraints for inspect`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("email", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Account email address.")
+                    put("format", "email")
+                })
+                put("code", buildJsonObject {
+                    put("type", "string")
+                    put("description", "Six digit verification code.")
+                    put("pattern", "^[0-9]{6}$")
+                })
+            })
+            put("required", buildJsonArray {
+                add(JsonPrimitive("email"))
+                add(JsonPrimitive("code"))
+            })
+        }
+        val constrained = ToolDefinition(
+            function = ToolFunction(
+                "connector_verify",
+                "Verify a connector account.",
+                ToolParameters(properties = emptyMap(), rawSchema = full),
+            ),
+            defer = DeferPolicy.ALWAYS,
+        )
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "constraint-capsule")
+        provider.prepare(
+            requestId = "constraint-capsule",
+            allTools = listOf(constrained),
+            contextTokens = 200_000,
+            currentText = "verify the account",
+            recentTexts = emptyList(),
+        )
+
+        val search = provider.execute(
+            McpDeferredToolProvider.TOOL_BROKER,
+            """{"action":"search","query":"connector_verify","limit":1}""",
+            ctx,
+        )
+        val inspect = provider.execute(
+            McpDeferredToolProvider.TOOL_BROKER,
+            """{"action":"inspect","name":"connector_verify"}""",
+            ctx,
+        )
+
+        assertTrue(search.contains("\"inspect_for_required_constraints\":true"))
+        assertFalse(search.contains("^[0-9]{6}$"))
+        assertTrue(inspect.contains("^[0-9]{6}$"))
+    }
+
+    @Test
+    fun `exact search hit returns one capsule before paginated fallback tools`() = runBlocking {
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val tools = listOf(tool("alpha_exact", "Exact alpha capability.")) +
+            (1..11).map { index ->
+                tool("opaque_${index.toString().padStart(2, '0')}", "Opaque operation $index.")
+            }
+        val ctx = GenerationContext(conversationId = "positive-paging")
+        provider.prepare("positive-paging", tools, 200_000, "你好", emptyList())
+
+        val first = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"search","query":"alpha_exact"}""",
+                ctx,
+            ),
+        ).jsonObject
+        val second = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"search","query":"alpha_exact","cursor":1,"limit":20}""",
+                ctx,
+            ),
+        ).jsonObject
+
+        assertEquals(1, first["tools"]!!.jsonArray.size)
+        assertEquals("alpha_exact", first["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content)
+        assertEquals(1, first["next_cursor"]!!.jsonPrimitive.int)
+        assertEquals(11, second["tools"]!!.jsonArray.size)
+        assertTrue(second.toString().contains("opaque_01"))
+    }
+
+    @Test
+    fun `required fields win capsule budget and optional complexity does not force inspect`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                repeat(10) { index ->
+                    put("optional_$index", buildJsonObject {
+                        put("type", "object")
+                        put("description", "Advanced optional filter $index.")
+                        put("properties", buildJsonObject {
+                            put("value", buildJsonObject { put("type", "string") })
+                        })
+                    })
+                }
+                put("query", buildJsonObject {
+                    put("type", "string")
+                    put("description", "The required search query.")
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("query")) })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "required-first")
+        val requiredLast = ToolDefinition(
+            function = ToolFunction(
+                "required_last",
+                "Run a search with optional advanced filters.",
+                ToolParameters(properties = emptyMap(), rawSchema = full),
+            ),
+            defer = DeferPolicy.ALWAYS,
+        )
+        provider.prepare(
+            "required-first",
+            listOf(requiredLast),
+            200_000,
+            "use required_last",
+            emptyList(),
+        )
+
+        val search = provider.execute(
+            McpDeferredToolProvider.TOOL_BROKER,
+            """{"action":"search","query":"required_last"}""",
+            ctx,
+        )
+
+        assertTrue(search.contains("\"query\":\"string; required; hint=The required search query.\""))
+        assertTrue(search.contains("\"inspect_for_required_constraints\":false"))
+        assertTrue(search.contains("\"inspect_for_optional_constraints\":true"))
+    }
+
+    @Test
     fun `search pagination makes zero-score and seventh tools discoverable`() = runBlocking {
         val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
         val tools = (1..12).map { index ->
@@ -372,6 +701,24 @@ class DeferredToolBudgetTest {
     }
 
     @Test
+    fun `custom MCP names keep broker manifest bounded while preserving server count`() {
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val tools = (1..100).map { index ->
+            tool(
+                "mcp_tool_$index",
+                "[MCP: server-$index-${"x".repeat(80)}] Capability $index.",
+            )
+        }
+        val ctx = GenerationContext(conversationId = "bounded-manifest")
+        provider.prepare("bounded-manifest", tools, 200_000, "你好", emptyList())
+
+        val description = provider.definitions(ctx).single().function.description
+
+        assertTrue("description chars=${description.length}", description.length < 1_500)
+        assertTrue(description.contains("+84 more MCP servers"))
+    }
+
+    @Test
     fun `old generation cleanup cannot delete replacement state in same conversation`() = runBlocking {
         val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
         val oldTools = (1..12).map { tool("old_$it", "Old capability.") }
@@ -411,6 +758,24 @@ class DeferredToolBudgetTest {
         }
 
         assertTrue(error?.message?.contains("NEVER-deferred") == true)
+    }
+
+    @Test
+    fun `exact provider cap of protected tools fits without a broker`() {
+        val tools = (1..64).map {
+            tool("mandatory_$it", defer = DeferPolicy.NEVER)
+        }
+
+        val plan = McpDeferredToolProvider.plan(
+            tools,
+            contextTokens = 200_000,
+            currentText = "do work",
+        )
+
+        assertEquals(64, plan.inlineTools.size)
+        assertTrue(plan.deferredTools.isEmpty())
+        assertFalse(plan.usesBroker)
+        assertEquals(64, plan.wireToolCount)
     }
 
     @Test

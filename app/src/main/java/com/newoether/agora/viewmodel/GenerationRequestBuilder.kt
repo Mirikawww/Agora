@@ -29,6 +29,14 @@ import com.newoether.agora.util.Constants
 import kotlinx.coroutines.flow.StateFlow
 
 
+internal data class GenerationForceSnapshot(
+    val webSearch: Boolean,
+    val imageGen: Boolean,
+    val github: Boolean,
+    val todoist: Boolean,
+    val notion: Boolean,
+)
+
 
 /**
 
@@ -74,6 +82,14 @@ class GenerationRequestBuilder(
 ) {
 
     data class ProviderKey(val providerName: String, val apiKey: String)
+
+    internal fun captureForceSnapshot() = GenerationForceSnapshot(
+        webSearch = forceWebSearch(),
+        imageGen = forceImageGen(),
+        github = forceGithub(),
+        todoist = forceTodoist(),
+        notion = forceNotion(),
+    )
 
 
 
@@ -170,7 +186,10 @@ class GenerationRequestBuilder(
 
 
 
-    fun buildEffectiveConversationSettings(conversationId: String): ConversationSettings {
+    internal fun buildEffectiveConversationSettings(
+        conversationId: String,
+        forceSnapshot: GenerationForceSnapshot,
+    ): ConversationSettings {
 
         val overrides = settings.conversationSettings.value[conversationId]
 
@@ -206,7 +225,7 @@ class GenerationRequestBuilder(
 
             fastEnabled = overrides.fastEnabled ?: settings.fastEnabled.value,
 
-            webSearchEnabled = if (forceWebSearch()) true else (overrides.webSearchEnabled ?: settings.webSearchEnabled.value),
+            webSearchEnabled = if (forceSnapshot.webSearch) true else (overrides.webSearchEnabled ?: settings.webSearchEnabled.value),
 
             shellEnabled = if (settings.shellEnabled.value) (overrides.shellEnabled ?: true) else false
 
@@ -232,7 +251,9 @@ class GenerationRequestBuilder(
 
         effectiveSettings: ConversationSettings,
 
-        currentId: String
+        currentId: String,
+
+        forceSnapshot: GenerationForceSnapshot,
 
     ): Pair<GenerationConfig, GenerationContext> {
 
@@ -261,11 +282,11 @@ class GenerationRequestBuilder(
 
             effectiveSystemPrompt = run {
                 var prompt = resolvedSystemPrompt.orEmpty()
-                if (forceWebSearch()) {
+                if (forceSnapshot.webSearch) {
                     val instr = "You MUST call the web_search tool to research before answering. Do not answer from memory alone."
                     prompt = if (prompt.isBlank()) instr else prompt + "\n\n" + instr
                 }
-                if (forceImageGen()) {
+                if (forceSnapshot.imageGen) {
                     val instr = "You MUST call the generate_image tool to create the requested image(s). Do not only describe the image in text."
                     prompt = if (prompt.isBlank()) instr else prompt + "\n\n" + instr
                 }
@@ -332,7 +353,8 @@ class GenerationRequestBuilder(
 
             searchContextWindow = settings.searchContextWindow.value,
 
-            webSearchEnabled = if (forceWebSearch()) true else (effectiveSettings.webSearchEnabled ?: settings.webSearchEnabled.value),
+            webSearchEnabled = if (forceSnapshot.webSearch) true else (effectiveSettings.webSearchEnabled ?: settings.webSearchEnabled.value),
+            forceWebSearch = forceSnapshot.webSearch,
 
             webSearchApiKeys = settings.webSearchApiKeys.value,
 
@@ -342,24 +364,24 @@ class GenerationRequestBuilder(
 
             webSearchBaseUrl = settings.webSearchBaseUrl.value,
 
-            imageGenEnabled = (settings.imageGenEnabled.value || forceImageGen()) && settings.imageGenModel.value?.contains(":") == true,
+            imageGenEnabled = (settings.imageGenEnabled.value || forceSnapshot.imageGen) && settings.imageGenModel.value?.contains(":") == true,
             imageGenApiKey = resolveImageGenApiKey(),
             imageGenBaseUrl = resolveImageGenBaseUrl(),
             imageGenModel = resolveImageGenModelId(),
             imageGenSize = settings.imageGenSize.value,
-            forceImageGen = forceImageGen(),
+            forceImageGen = forceSnapshot.imageGen,
             skillsEnabled = settings.skillsEnabled.value,
             askToolEnabled = settings.askToolEnabled.value,
             personalizationToolsEnabled = settings.personalizationToolsEnabled.value,
-            githubEnabled = (settings.githubConnectorEnabled.value || forceGithub()) && settings.githubToken.value.isNotBlank(),
+            githubEnabled = (settings.githubConnectorEnabled.value || forceSnapshot.github) && settings.githubToken.value.isNotBlank(),
             githubToken = settings.githubToken.value,
             todoistEnabled = TodoistConnector.isActive(
-                enabled = settings.todoistConnectorEnabled.value || forceTodoist(),
+                enabled = settings.todoistConnectorEnabled.value || forceSnapshot.todoist,
                 oauth = settings.todoistOAuth.value,
             ),
             todoistOAuth = settings.todoistOAuth.value,
             notionEnabled = NotionConnector.isActive(
-                enabled = settings.notionConnectorEnabled.value || forceNotion(),
+                enabled = settings.notionConnectorEnabled.value || forceSnapshot.notion,
                 oauth = settings.notionOAuth.value,
             ),
             notionOAuth = settings.notionOAuth.value,
@@ -368,11 +390,11 @@ class GenerationRequestBuilder(
             // Built-in connectors inject synthetic MCP servers (OAuth). Keep the MCP tool
             // pipeline on whenever user MCP or any built-in connector is enabled.
             mcpEnabled = settings.mcpEnabled.value ||
-                settings.todoistConnectorEnabled.value || forceTodoist() ||
-                settings.notionConnectorEnabled.value || forceNotion(),
+                settings.todoistConnectorEnabled.value || forceSnapshot.todoist ||
+                settings.notionConnectorEnabled.value || forceSnapshot.notion,
             mcpServers = buildList {
-                val todoistOn = settings.todoistConnectorEnabled.value || forceTodoist()
-                val notionOn = settings.notionConnectorEnabled.value || forceNotion()
+                val todoistOn = settings.todoistConnectorEnabled.value || forceSnapshot.todoist
+                val notionOn = settings.notionConnectorEnabled.value || forceSnapshot.notion
                 // Only strip a hand-added row when the matching connector is ON (its synthetic
                 // row replaces it). With the connector off, stripping would leave the user with
                 // no server at all for that service.

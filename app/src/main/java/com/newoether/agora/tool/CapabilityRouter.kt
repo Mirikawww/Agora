@@ -13,9 +13,10 @@ import java.util.Locale
  * turning tools off.
  */
 object CapabilityRouter {
-    private val greetings = setOf(
+    private val trivialNoToolTurns = setOf(
         "hi", "hithere", "hello", "hey", "你好", "您好", "嗨", "哈喽", "早上好", "上午好",
-        "下午好", "晚上好",
+        "下午好", "晚上好", "早", "晚安", "thanks", "thankyou", "ok", "okay", "gotit",
+        "谢谢", "谢了", "好的", "好", "收到", "明白", "知道了", "在吗", "辛苦了",
     )
 
     /**
@@ -25,9 +26,10 @@ object CapabilityRouter {
      */
     private val intentAliases: Map<String, Set<String>> = linkedMapOf(
         "web" to setOf(
-            "web", "internet", "online", "search", "fetch", "url", "website", "latest",
-            "current", "news", "weather", "网页", "网站", "联网", "上网", "搜索", "查一下",
-            "最新", "新闻", "天气", "网址",
+            "web", "internet", "online", "search", "fetch", "look up", "verify", "url",
+            "website", "latest", "current", "today", "news", "weather", "网页", "网站",
+            "联网", "上网", "网上", "搜索", "搜一下", "查一下", "查查", "核实", "验证",
+            "今天", "现在", "实时", "最新", "新闻", "天气", "网址",
         ),
         "github" to setOf(
             "github", "repository", "repo", "pull request", "issue", "commit", "branch",
@@ -81,12 +83,12 @@ object CapabilityRouter {
             )
         }
 
-        if (isGreeting(currentText)) {
+        if (isTrivialNoToolTurn(currentText)) {
             return CapabilityRoute(
                 mode = CapabilityRouteMode.NO_TOOL,
                 selectedToolNames = emptyList(),
                 confidence = 1f,
-                reason = "Pure greeting; keep only the compact capability broker.",
+                reason = "Trivial chat turn; keep only the compact capability broker.",
                 schemaTokenEstimate = 0,
                 requiresBroker = true,
             )
@@ -153,7 +155,7 @@ object CapabilityRouter {
                 val queryHit = aliases.any(lowerQuery::contains)
                 val toolHit = aliases.any(haystack::contains)
                 if (queryHit && toolHit) score += 12
-                else if (!queryHit && aliases.any(lowerRecent::contains) && toolHit) score += 3
+                else if (!queryHit && aliases.any(lowerRecent::contains) && toolHit) score += 4
             }
 
             score += queryWords.count { it.length >= 3 && haystack.contains(it) } * 2
@@ -165,10 +167,11 @@ object CapabilityRouter {
         )
     }
 
-    private fun isGreeting(text: String): Boolean {
+    internal fun isTrivialNoToolTurn(text: String): Boolean {
         val normalized = text.lowercase(Locale.ROOT)
-            .replace(Regex("[\\s\\p{P}\\p{S}]+"), "")
-        return normalized in greetings
+            .replace(Regex("[\\s\\p{P}\\p{S}\\p{M}\\p{Cf}]+"), "")
+        return normalized in trivialNoToolTurns ||
+            (text.isNotBlank() && normalized.isEmpty() && text.codePointCount(0, text.length) <= 16)
     }
 
     private fun words(value: String): Set<String> =

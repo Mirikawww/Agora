@@ -323,8 +323,14 @@ class MessageGenerationController(
         // conversation deleted mid-flight. They used to sit outside the try, so those failures
         // escaped the root coroutine and killed the process instead of failing this one turn.
         try {
+            // One UI-state snapshot must drive settings, prompt instructions, enabled providers,
+            // and direct-tool routing for the entire generation.
+            val forceSnapshot = requestBuilder.captureForceSnapshot()
             val resolved = requestBuilder.buildEffectiveSystemPrompt(currentId)
-            val effectiveSettings = requestBuilder.buildEffectiveConversationSettings(currentId)
+            val effectiveSettings = requestBuilder.buildEffectiveConversationSettings(
+                currentId,
+                forceSnapshot,
+            )
             // Re-resolve the key against on-disk settings here (the suspend convergence
             // point for all entry paths). The synchronous [activeKey] resolved by the
             // callers can be blank if DataStore had not finished loading when Send was
@@ -334,7 +340,7 @@ class MessageGenerationController(
             val (config, genCtx) = requestBuilder.buildGenerationPair(
                 providerName, modelId, freshKey,
                 resolved.systemPrompt, resolved.userPrepend, resolved.userPostpend,
-                effectiveSettings, currentId
+                effectiveSettings, currentId, forceSnapshot,
             )
             generationManager.generate(
                 conversationId = currentId,

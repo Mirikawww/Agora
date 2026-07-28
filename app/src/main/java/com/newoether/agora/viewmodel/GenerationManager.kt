@@ -93,6 +93,7 @@ data class GenerationContext(
     val searchMatchLimit: Int = 10,
     val searchContextWindow: Int = 8,
     val webSearchEnabled: Boolean = false,
+    val forceWebSearch: Boolean = false,
     val webSearchApiKeys: Map<String, String> = emptyMap(),
     val webSearchProvider: String = "duckduckgo",
     val webSearchNumResults: Int = 5,
@@ -126,6 +127,14 @@ data class GenerationContext(
     val transcriptionApiKey: String = "",
     val transcriptionBaseUrl: String? = null
 )
+
+internal fun forcedDirectToolNames(ctx: GenerationContext): Set<String> = buildSet {
+    if (ctx.forceWebSearch) {
+        add("web_search")
+        add("web_fetch")
+    }
+    if (ctx.forceImageGen) add("generate_image")
+}
 
 internal fun applyUserTemplateToMessages(
     messages: List<ChatMessage>,
@@ -528,6 +537,7 @@ class GenerationManager(
                 contextTokens = config.contextTokens,
                 currentText = userTexts.lastOrNull().orEmpty(),
                 recentTexts = userTexts.dropLast(1).takeLast(3),
+                forcedDirectToolNames = forcedDirectToolNames(ctx),
             )
         } else {
             mcpDeferredToolProvider.clear(ctx.capabilityRequestId ?: conversationId)

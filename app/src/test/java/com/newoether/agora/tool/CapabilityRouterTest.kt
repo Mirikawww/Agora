@@ -80,6 +80,51 @@ class CapabilityRouterTest {
     }
 
     @Test
+    fun `common Chinese lookup phrasing selects web without broker discovery`() {
+        val tools = listOf(
+            tool("web_search", "Search current information on the web."),
+            tool("notion_create_page", "Create a page in Notion."),
+        )
+
+        for (request in listOf("请去网上查查 Android 16", "请核实这个消息", "今天发生了什么")) {
+            val route = CapabilityRouter.route(request, emptyList(), tools)
+
+            assertTrue(request, route.selectedToolNames.contains("web_search"))
+        }
+    }
+
+    @Test
+    fun `follow-up can inherit a recent explicit web intent`() {
+        val tools = listOf(
+            tool("web_search", "Search current information on the web."),
+            tool("notion_create_page", "Create a page in Notion."),
+        )
+
+        val route = CapabilityRouter.route(
+            currentText = "继续详细一点",
+            recentTexts = listOf("搜索一下 Android 16 的最新发布信息"),
+            tools = tools,
+        )
+
+        assertTrue(route.selectedToolNames.contains("web_search"))
+    }
+
+    @Test
+    fun `acknowledgements and short emoji turns stay broker only`() {
+        val tools = listOf(
+            tool("web_search", "Search current information on the web."),
+            tool("ask_user", "Ask the user a clarifying question."),
+        )
+
+        for (request in listOf("谢谢", "好的", "在吗", "👍", "❤️", "👨‍👩‍👧‍👦")) {
+            val route = CapabilityRouter.route(request, emptyList(), tools)
+
+            assertEquals(request, CapabilityRouteMode.NO_TOOL, route.mode)
+            assertTrue(request, route.selectedToolNames.isEmpty())
+        }
+    }
+
+    @Test
     fun `unknown intent uses broker instead of guessing or dropping tools`() {
         val tools = listOf(
             tool("mcp_custom_analyze", "Perform a domain-specific operation."),

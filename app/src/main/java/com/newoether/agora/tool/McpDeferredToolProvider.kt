@@ -10,6 +10,7 @@ import com.newoether.agora.util.TokenEstimator
 import com.newoether.agora.viewmodel.GenerationContext
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -23,9 +24,9 @@ import kotlinx.serialization.json.putJsonArray
  * Per-conversation capability exposure.
  *
  * Large registries are represented by a handful of directly relevant tools plus one compact
- * broker. The broker is not a lossy replacement: it can search, return the complete schema, and
- * invoke every enabled tool. Small registries remain direct because an extra tool round would cost
- * more than their schemas.
+ * broker. The broker is not a lossy replacement: deferred tools remain searchable, inspectable,
+ * and invokable, while inline tools remain directly callable. Small registries remain direct
+ * because an extra tool round would cost more than their schemas.
  *
  * State is keyed by conversation. Agora permits concurrent generations, so a process-global
  * `deferredTools` list would let one conversation search or invoke another conversation's tools.
@@ -39,7 +40,6 @@ class McpDeferredToolProvider(
 ) : ToolProvider {
 
     private data class RequestState(
-        val allTools: List<ToolDefinition>,
         val inlineTools: List<ToolDefinition>,
         val deferredTools: List<ToolDefinition>,
         val brokerDefinition: ToolDefinition?,
@@ -60,20 +60,21 @@ class McpDeferredToolProvider(
         contextTokens: Int,
         currentText: String,
         recentTexts: List<String>,
+        forcedDirectToolNames: Set<String> = emptySet(),
     ): ToolExposurePlan {
         val plan = plan(
             tools = allTools,
             contextTokens = contextTokens,
             currentText = currentText,
             recentTexts = recentTexts,
+            forcedDirectToolNames = forcedDirectToolNames,
         )
         val broker = if (plan.deferredTools.isNotEmpty()) {
-            brokerDefinition(allTools)
+            brokerDefinition(plan.deferredTools)
         } else {
             null
         }
         states[requestId] = RequestState(
-            allTools = allTools,
             inlineTools = plan.inlineTools,
             deferredTools = plan.deferredTools,
             brokerDefinition = broker,
@@ -139,18 +140,23 @@ class McpDeferredToolProvider(
 
     private fun handleSearch(state: RequestState, args: JsonObject): String {
         val query = args.string("query").orEmpty()
-        val ranked = CapabilityRouter.rank(query, emptyList(), state.allTools)
-        val cursor = args.int("cursor").coerceAtLeast(0)
+        val ranked = CapabilityRouter.rank(query, emptyList(), state.deferredTools)
+        val cursor = args.int("cursor").coerceIn(0, ranked.size)
         val limit = args.int("limit", DEFAULT_SEARCH_RESULTS).coerceIn(1, MAX_SEARCH_RESULTS)
-        // Keep zero-score entries after relevant matches. This makes every enabled tool reachable
-        // through cursor pagination even when a new connector uses vocabulary the local router
-        // has never seen.
-        val matches = ranked.drop(cursor).take(limit).map { it.tool }
-        val nextCursor = (cursor + matches.size).takeIf { it < ranked.size }
         val lexicalMatches = ranked.count { it.score > 0 }
+        // Do not pad a relevant page with zero-score capsules: one exact match should cost one
+        // capsule, not the default six. The absolute cursor still opens the zero-score tail on the
+        // next page, so tools using unfamiliar vocabulary remain fully reachable.
+        val pageEnd = when {
+            cursor < lexicalMatches -> minOf(cursor + limit, lexicalMatches)
+            else -> minOf(cursor + limit, ranked.size)
+        }
+        val matches = ranked.subList(cursor, pageEnd).map { it.tool }
+        val nextCursor = (cursor + matches.size).takeIf { it < ranked.size }
 
         return buildJsonObject {
-            put("query", query)
+            put("query", query.take(MAX_SEARCH_QUERY_CHARS))
+            if (query.length > MAX_SEARCH_QUERY_CHARS) put("query_truncated", true)
             put("total", ranked.size)
             put("lexical_matches", lexicalMatches)
             put("cursor", cursor)
@@ -160,25 +166,161 @@ class McpDeferredToolProvider(
                 if (matches.isEmpty()) {
                     "No more results. Search with a connector or operation name."
                 } else {
-                    "Use action=inspect with an exact name for its full schema, then action=invoke. " +
-                        "Continue with next_cursor when present."
+                    "Invoke directly when inspect_for_required_constraints is false. Inspect only " +
+                        "when it is true, or when omitted optional constraints are needed. Continue " +
+                        "with next_cursor for less relevant fallback results."
                 },
             )
             putJsonArray("tools") {
                 matches.forEach { tool ->
                     add(buildJsonObject {
                         put("name", tool.function.name)
-                        put("description", tool.function.description.take(240))
+                        put("description", tool.function.description.take(MAX_SEARCH_DESCRIPTION_CHARS))
+                        put("input_hint", compactInputHint(tool))
                     })
                 }
             }
         }.toString()
     }
 
+    /**
+     * A bounded call signature for the common search -> invoke path. It intentionally omits long
+     * descriptions and deep constraints; those remain losslessly available through inspect.
+     */
+    private fun compactInputHint(tool: ToolDefinition): JsonObject {
+        val schema = tool.completeParameters().asJsonObject()
+        val requiredOrder = (schema["required"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            ?.distinct()
+            .orEmpty()
+        val required = requiredOrder.toSet()
+        val properties = schema["properties"] as? JsonObject ?: JsonObject(emptyMap())
+        val orderedProperties = buildList {
+            requiredOrder.forEach { name ->
+                properties[name]?.let { add(name to it) }
+            }
+            properties.entries
+                .filter { it.key !in required }
+                .forEach { add(it.key to it.value) }
+        }
+        var inspectForRequiredConstraints =
+            schema.keys.any { it in COMPLEX_SCHEMA_KEYS || it !in SIMPLE_ROOT_HINT_KEYS }
+        if (required.any { it !in properties }) inspectForRequiredConstraints = true
+        var inspectForOptionalConstraints = false
+        var hintChars = 0
+        var includedProperties = 0
+        var omittedRequiredProperties = 0
+        var omittedOptionalProperties = 0
+
+        return buildJsonObject {
+            put("properties", buildJsonObject {
+                orderedProperties.forEach { (name, value) ->
+                    val isRequired = name in required
+                    val property = value as? JsonObject
+                    val rawType = property?.get("type")
+                    val type = ((rawType as? JsonPrimitive)?.contentOrNull ?: "any")
+                        .take(MAX_HINT_TYPE_CHARS)
+                    val itemSchema = property?.get("items") as? JsonObject
+                    val itemType = (itemSchema?.get("type") as? JsonPrimitive)
+                        ?.contentOrNull
+                        ?.take(MAX_HINT_TYPE_CHARS)
+                    val rawEnum = property?.get("enum") as? JsonArray
+                    val enumFits = rawEnum != null &&
+                        rawEnum.all { it is JsonPrimitive } &&
+                        rawEnum.size <= MAX_HINT_ENUM_VALUES &&
+                        rawEnum.toString().length <= MAX_HINT_ENUM_CHARS
+                    val description = (
+                        (property?.get("description") as? JsonPrimitive)?.contentOrNull
+                            ?: (property?.get("title") as? JsonPrimitive)?.contentOrNull
+                        )
+                        ?.trim()
+                        ?.takeIf(String::isNotEmpty)
+                    val itemDescription = (
+                        (itemSchema?.get("description") as? JsonPrimitive)?.contentOrNull
+                            ?: (itemSchema?.get("title") as? JsonPrimitive)?.contentOrNull
+                        )
+                        ?.trim()
+                        ?.takeIf(String::isNotEmpty)
+                    val defaultValue = property?.get("default")
+                    val constraintsOmitted =
+                        property == null ||
+                        rawType !is JsonPrimitive ||
+                        property.keys.any { it in COMPLEX_SCHEMA_KEYS } ||
+                        property.keys.any { it !in SIMPLE_HINT_KEYS } ||
+                        itemSchema?.keys?.any { it !in SIMPLE_ITEM_HINT_KEYS } == true ||
+                        type == "object" ||
+                        (type == "array" && itemType == null) ||
+                        (rawEnum != null && !enumFits) ||
+                        description?.length?.let { it > MAX_HINT_DESCRIPTION_CHARS } == true ||
+                        itemDescription?.length?.let { it > MAX_HINT_ITEM_DESCRIPTION_CHARS } == true ||
+                        (defaultValue != null && (
+                            defaultValue !is JsonPrimitive ||
+                                defaultValue.toString().length > MAX_HINT_DEFAULT_CHARS
+                            ))
+                    if (constraintsOmitted) {
+                        if (isRequired) {
+                            inspectForRequiredConstraints = true
+                        } else {
+                            inspectForOptionalConstraints = true
+                        }
+                    }
+                    val signature = buildString {
+                        append(type)
+                        itemType?.let { append('<').append(it).append('>') }
+                        if (isRequired) append("; required")
+                        if (enumFits) append("; enum=").append(rawEnum)
+                        description?.let {
+                            append("; hint=").append(it.take(MAX_HINT_DESCRIPTION_CHARS))
+                        }
+                        itemDescription?.let {
+                            append("; item_hint=").append(it.take(MAX_HINT_ITEM_DESCRIPTION_CHARS))
+                        }
+                        (defaultValue as? JsonPrimitive)
+                            ?.toString()
+                            ?.takeIf { it.length <= MAX_HINT_DEFAULT_CHARS }
+                            ?.let { append("; default=").append(it) }
+                    }
+                    val estimatedChars = name.length + signature.length + 6
+                    if (
+                        includedProperties >= MAX_HINT_PROPERTIES ||
+                        name.length > MAX_HINT_PROPERTY_NAME_CHARS ||
+                        hintChars + estimatedChars > MAX_HINT_CHARS
+                    ) {
+                        if (isRequired) {
+                            omittedRequiredProperties += 1
+                            inspectForRequiredConstraints = true
+                        } else {
+                            omittedOptionalProperties += 1
+                            inspectForOptionalConstraints = true
+                        }
+                    } else {
+                        put(name, signature)
+                        hintChars += estimatedChars
+                        includedProperties += 1
+                    }
+                }
+            })
+            val omittedProperties = omittedRequiredProperties + omittedOptionalProperties
+            if (omittedProperties > 0) put("more_properties", omittedProperties)
+            if (omittedRequiredProperties > 0) {
+                put("more_required_properties", omittedRequiredProperties)
+            }
+            if (omittedOptionalProperties > 0) {
+                put("more_optional_properties", omittedOptionalProperties)
+            }
+            put("inspect_for_required_constraints", inspectForRequiredConstraints)
+            put("inspect_for_optional_constraints", inspectForOptionalConstraints)
+        }
+    }
+
     private fun handleInspect(state: RequestState, args: JsonObject): String {
         val name = args.string("name") ?: return errorJson("missing_name")
-        val tool = state.allTools.firstOrNull { it.function.name == name }
-            ?: return errorJson("tool_not_found", "Search enabled capabilities first.")
+        val tool = state.deferredTools.firstOrNull { it.function.name == name }
+            ?: return if (state.inlineTools.any { it.function.name == name }) {
+                errorJson("tool_already_direct", "Call $name directly; its complete schema is already available.")
+            } else {
+                errorJson("tool_not_found", "Search deferred capabilities first.")
+            }
         val schema = tool.completeParameters().asJsonObject()
         val schemaText = schema.toString()
         val cursor = args.int("cursor").coerceIn(0, schemaText.length)
@@ -208,8 +350,12 @@ class McpDeferredToolProvider(
         ctx: GenerationContext,
     ): String {
         val name = args.string("name") ?: return errorJson("missing_name")
-        if (state.allTools.none { it.function.name == name }) {
-            return errorJson("tool_not_found", "Search enabled capabilities first.")
+        if (state.deferredTools.none { it.function.name == name }) {
+            return if (state.inlineTools.any { it.function.name == name }) {
+                errorJson("tool_already_direct", "Call $name directly; broker invocation is only for deferred tools.")
+            } else {
+                errorJson("tool_not_found", "Search deferred capabilities first.")
+            }
         }
         val toolArgs = when (val value = args["arguments"]) {
             null -> "{}"
@@ -230,11 +376,57 @@ class McpDeferredToolProvider(
         const val MAX_INLINE_SCHEMA_TOKENS = 1_500
 
         const val TOP_K_DIRECT_TOOLS = 6
-        private const val DEFAULT_SEARCH_RESULTS = 10
+        private const val DEFAULT_SEARCH_RESULTS = 6
         private const val MAX_SEARCH_RESULTS = 20
+        private const val MAX_SEARCH_QUERY_CHARS = 240
+        private const val MAX_SEARCH_DESCRIPTION_CHARS = 160
+        private const val MAX_HINT_PROPERTIES = 10
+        private const val MAX_HINT_CHARS = 600
+        private const val MAX_HINT_PROPERTY_NAME_CHARS = 80
+        private const val MAX_HINT_TYPE_CHARS = 40
+        private const val MAX_HINT_DESCRIPTION_CHARS = 80
+        private const val MAX_HINT_ITEM_DESCRIPTION_CHARS = 60
+        private const val MAX_HINT_DEFAULT_CHARS = 40
+        private const val MAX_HINT_ENUM_VALUES = 6
+        private const val MAX_HINT_ENUM_CHARS = 160
+        private const val MAX_CATALOG_MCP_NAMES = 16
+        private const val MAX_CATALOG_MCP_NAME_CHARS = 40
         private const val DEFAULT_SCHEMA_CHUNK_CHARS = 30_000
         private const val MIN_SCHEMA_CHUNK_CHARS = 1_000
         private const val MAX_SCHEMA_CHUNK_CHARS = 40_000
+        private val COMPLEX_SCHEMA_KEYS = setOf(
+            "oneOf",
+            "anyOf",
+            "allOf",
+            "not",
+            "\$defs",
+            "definitions",
+            "dependentSchemas",
+            "if",
+            "then",
+            "else",
+        )
+        private val SIMPLE_ROOT_HINT_KEYS = setOf(
+            "type",
+            "properties",
+            "required",
+            "title",
+            "description",
+            "\$schema",
+        )
+        private val SIMPLE_HINT_KEYS = setOf(
+            "type",
+            "description",
+            "title",
+            "items",
+            "enum",
+            "default",
+        )
+        private val SIMPLE_ITEM_HINT_KEYS = setOf(
+            "type",
+            "description",
+            "title",
+        )
 
         const val TOOL_BROKER = "agora_capabilities"
         const val LEGACY_SEARCH = "mcp_tool_search"
@@ -262,18 +454,24 @@ class McpDeferredToolProvider(
             contextTokens: Int,
             currentText: String,
             recentTexts: List<String> = emptyList(),
+            forcedDirectToolNames: Set<String> = emptySet(),
         ): ToolExposurePlan {
             if (tools.isEmpty()) {
                 val route = CapabilityRouter.route(currentText, recentTexts, tools)
                 return ToolExposurePlan(route, emptyList(), emptyList(), 0)
             }
 
+            val trivialNoToolTurn = CapabilityRouter.isTrivialNoToolTurn(currentText)
             val directEligible = tools
-                .filter { it.defer != DeferPolicy.ALWAYS }
+                .filter {
+                    it.defer != DeferPolicy.ALWAYS &&
+                        !(trivialNoToolTurn && it.defer == DeferPolicy.EAGER)
+                }
                 .sortedBy { it.function.name }
             val directComplete = directEligible.map { it.withCompleteSchema() }
             val totalSchemaTokens = estimateSchemaTokens(directComplete)
             val mustRoute = tools.any { it.defer == DeferPolicy.ALWAYS } ||
+                (trivialNoToolTurn && tools.any { it.defer == DeferPolicy.EAGER }) ||
                 directEligible.size >= LARGE_REGISTRY_TOOLS ||
                 directEligible.size > MAX_WIRE_TOOLS ||
                 totalSchemaTokens > MAX_INLINE_SCHEMA_TOKENS
@@ -306,17 +504,34 @@ class McpDeferredToolProvider(
             val mandatory = tools
                 .filter { it.defer == DeferPolicy.NEVER }
                 .sortedBy { it.function.name }
-            require(mandatory.size < MAX_WIRE_TOOLS) {
-                "Cannot expose ${mandatory.size} NEVER-deferred tools plus the capability broker " +
+            val eager = if (trivialNoToolTurn) {
+                emptyList()
+            } else {
+                tools
+                    .filter { it.defer == DeferPolicy.EAGER }
+                    .sortedBy { it.function.name }
+            }
+            val forced = tools
+                .filter { it.function.name in forcedDirectToolNames }
+                .sortedBy { it.function.name }
+            val protected = (mandatory + eager + forced).distinctBy { it.function.name }
+            val protectedNames = protected.mapTo(mutableSetOf()) { it.function.name }
+            val hasUnprotectedTools = tools.any { it.function.name !in protectedNames }
+            require(
+                protected.size <= MAX_WIRE_TOOLS &&
+                    !(protected.size == MAX_WIRE_TOOLS && hasUnprotectedTools)
+            ) {
+                "Cannot expose ${protected.size} NEVER-deferred/EAGER tools plus the capability broker " +
                     "within the $MAX_WIRE_TOOLS-tool provider limit."
             }
             val selected = route.selectedToolsFrom(tools)
                 .filter { it.defer == DeferPolicy.AUTO }
             // Reserve one of the provider's 64 slots for the broker. If an impossible registry
-            // contains 64+ NEVER items, the overflow remains broker-reachable instead of vanishing.
-            val inline = (mandatory + selected)
+            // contains too many protected items, fail explicitly instead of silently hiding one.
+            val inlineLimit = if (hasUnprotectedTools) MAX_WIRE_TOOLS - 1 else MAX_WIRE_TOOLS
+            val inline = (protected + selected)
                 .distinctBy { it.function.name }
-                .take(MAX_WIRE_TOOLS - 1)
+                .take(inlineLimit)
                 .map { it.withCompleteSchema() }
             val inlineNames = inline.map { it.function.name }.toSet()
             val deferred = tools.filter { it.function.name !in inlineNames }
@@ -347,17 +562,18 @@ class McpDeferredToolProvider(
             return ToolDefinition(
                 function = ToolFunction(
                     name = TOOL_BROKER,
-                    description = "Access enabled capabilities not directly listed in this request " +
-                        "($catalog). Search by the user's intent for short summaries, inspect one " +
-                        "exact name for its full paginated schema, then invoke it. Search results " +
-                        "are cursor-paginated across the complete registry; never claim a capability " +
-                        "is unavailable before exhausting the relevant search.",
+                    description = "Access deferred capabilities not already listed as direct tools " +
+                        "($catalog). Never search for a tool whose schema is already available. Search " +
+                        "once by user intent, then invoke directly when input_hint says required constraints " +
+                        "are complete. Inspect only when required constraints are flagged, or when you need " +
+                        "omitted optional fields. Results are cursor-paginated across all deferred tools; " +
+                        "never claim one unavailable before exhausting relevant search.",
                     parameters = ToolParameters(
                         properties = mapOf(
                             "action" to ToolProperty("string", "search, inspect, or invoke"),
                             "query" to ToolProperty("string", "For search: the user's concrete intent."),
                             "name" to ToolProperty("string", "For inspect/invoke: exact result name."),
-                            "arguments" to ToolProperty("object", "For invoke: arguments matching the returned schema."),
+                            "arguments" to ToolProperty("object", "For invoke: arguments matching input_hint or the inspected schema."),
                             "cursor" to ToolProperty("integer", "For paginated search/inspect: next_cursor."),
                             "limit" to ToolProperty("integer", "For search: summaries per page, 1-20."),
                             "max_chars" to ToolProperty("integer", "For inspect: schema chunk size, 1000-40000."),
@@ -384,7 +600,7 @@ class McpDeferredToolProvider(
                                 })
                                 put("arguments", buildJsonObject {
                                     put("type", "object")
-                                    put("description", "Arguments matching the returned input_schema.")
+                                    put("description", "Arguments matching input_hint or the inspected input_schema.")
                                 })
                                 put("cursor", buildJsonObject {
                                     put("type", "integer")
@@ -411,19 +627,25 @@ class McpDeferredToolProvider(
             val text = tools.joinToString(" ") {
                 "${it.function.name} ${it.function.description}"
             }.lowercase()
-            val customMcpNames = tools.mapNotNull { tool ->
-                Regex("""\[MCP:\s*([^]]+)]""", RegexOption.IGNORE_CASE)
-                    .find(tool.function.description)
-                    ?.groupValues
-                    ?.getOrNull(1)
-                    ?.trim()
-                    ?.takeIf(String::isNotBlank)
-            }
+            val customMcpNames = tools
+                .mapNotNull { tool ->
+                    Regex("""\[MCP:\s*([^]]+)]""", RegexOption.IGNORE_CASE)
+                        .find(tool.function.description)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.trim()
+                        ?.takeIf(String::isNotBlank)
+                }
+                .distinctBy { it.lowercase() }
+                .sortedWith(String.CASE_INSENSITIVE_ORDER)
+            val visibleMcpNames = customMcpNames.take(MAX_CATALOG_MCP_NAMES)
             return buildList {
                 if ("todoist" in text) add("Todoist")
                 if ("notion" in text) add("Notion")
                 if ("github" in text) add("GitHub")
-                addAll(customMcpNames.sortedWith(String.CASE_INSENSITIVE_ORDER))
+                addAll(visibleMcpNames.map { it.take(MAX_CATALOG_MCP_NAME_CHARS) })
+                val hiddenMcpNames = customMcpNames.size - visibleMcpNames.size
+                if (hiddenMcpNames > 0) add("+$hiddenMcpNames more MCP servers")
                 if ("web_search" in text || "web_fetch" in text) add("web")
                 if ("memory" in text) add("memory")
                 if ("conversation" in text) add("past conversations")
