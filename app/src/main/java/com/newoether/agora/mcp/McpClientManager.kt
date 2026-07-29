@@ -279,7 +279,11 @@ class McpClientManager(
         connections[config.id]?.takeIf { it.fingerprint == fingerprint }?.let { return it }
         return locks.getOrPut(config.id) { Mutex() }.withLock {
             connections[config.id]?.takeIf { it.fingerprint == fingerprint }?.let { return@withLock it }
-            connections.remove(config.id)?.client?.close()
+            // Keep the stale connection in the map while reconnecting. definitions() will take the
+            // fast path (cached tool list) for any generation that races the reconnect, so the LLM
+            // request is dispatched immediately instead of waiting for TCP + TLS + MCP handshake.
+            // The old client is closed only after the new connection is fully established.
+            val staleConnection = connections[config.id]
             updateStatus(config.id, McpStatus.Connecting)
             try {
                 val client = connect(freshConfig)
@@ -298,6 +302,9 @@ class McpClientManager(
                 val exposed = namespaceTools(mergedConfig, enabledTools(mergedConfig, tools))
                 Connection(fingerprint, mergedConfig, client, tools, exposed).also { connected ->
                     connections[config.id] = connected
+                    // Close the stale client only after the map entry is replaced so that
+                    // concurrent definitions() calls always find a live or stale entry.
+                    staleConnection?.client?.let { runCatching { it.close() } }
                     reconnectAttempts.remove(config.id)
                     updateStatus(config.id, McpStatus.Connected)
                     if (mergedConfig.tools != latestConfig.tools) persistUpdatedServer(mergedConfig)
@@ -305,6 +312,7 @@ class McpClientManager(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                // Leave the stale entry in the map so the next generation still has cached tools.
                 if (oauthCoordinator.needsAuthorization(freshConfig, error)) {
                     updateStatus(config.id, McpStatus.NeedsAuthorization)
                 } else {
@@ -428,7 +436,9 @@ class McpClientManager(
                         val latest = desiredServers[serverId]
                             ?.takeIf { it.enabled && it.url.isNotBlank() }
                             ?: return@launch
-                        connections.remove(serverId)?.client?.let { runCatching { it.close() } }
+                        // Do NOT remove the stale entry here. connection() will keep it alive
+                        // until the new connection is ready, so definitions() always finds a
+                        // cached entry and never blocks a generation on reconnect.
                         retry = runCatching { connection(latest) }.isFailure
                     } finally {
                         reconnectJobs.remove(serverId, currentCoroutineContext().job)
