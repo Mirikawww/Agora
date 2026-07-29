@@ -329,25 +329,30 @@ class MessageGenerationController(
         // conversation deleted mid-flight. They used to sit outside the try, so those failures
         // escaped the root coroutine and killed the process instead of failing this one turn.
         try {
+            val t_launch = System.currentTimeMillis()
             // One UI-state snapshot must drive settings, prompt instructions, enabled providers,
             // and direct-tool routing for the entire generation.
             val forceSnapshot = requestBuilder.captureForceSnapshot()
             val resolved = requestBuilder.buildEffectiveSystemPrompt(currentId)
+            android.util.Log.d("AgoraTiming", "launchGeneration: systemPrompt took ${System.currentTimeMillis() - t_launch}ms")
             val effectiveSettings = requestBuilder.buildEffectiveConversationSettings(
                 currentId,
                 forceSnapshot,
             )
+            android.util.Log.d("AgoraTiming", "launchGeneration: effectiveSettings took ${System.currentTimeMillis() - t_launch}ms")
             // Re-resolve the key against on-disk settings here (the suspend convergence
             // point for all entry paths). The synchronous [activeKey] resolved by the
             // callers can be blank if DataStore had not finished loading when Send was
             // tapped, which would build the request with an empty key → 401.
             // Model-bound key only — never fall across sibling keys on the same provider.
             val freshKey = settings.awaitApiKeyForModel(modelId, providerName)?.takeIf { it.isNotBlank() } ?: activeKey
+            android.util.Log.d("AgoraTiming", "launchGeneration: awaitApiKey took ${System.currentTimeMillis() - t_launch}ms")
             val (config, genCtx) = requestBuilder.buildGenerationPair(
                 providerName, modelId, freshKey,
                 resolved.systemPrompt, resolved.userPrepend, resolved.userPostpend,
                 effectiveSettings, currentId, forceSnapshot,
             )
+            android.util.Log.d("AgoraTiming", "launchGeneration: buildPair took ${System.currentTimeMillis() - t_launch}ms → calling generate()")
             generationManager.generate(
                 conversationId = currentId,
                 modelMessageId = modelMessageId,

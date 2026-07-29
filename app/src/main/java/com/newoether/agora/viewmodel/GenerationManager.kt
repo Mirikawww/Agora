@@ -535,7 +535,9 @@ class GenerationManager(
         ctx: GenerationContext,
         provider: LlmProvider,
     ): Triple<List<ChatMessage>, ProviderConfig, ToolExposurePlan?> {
+        val t_buildApiPath = System.currentTimeMillis()
         val dbMessages = conversations.getMessagesForConversationSnapshot(conversationId)
+        android.util.Log.d("AgoraTiming", "buildApiPath: getMessages took ${System.currentTimeMillis() - t_buildApiPath}ms msgs=${dbMessages.size}")
         val pathEntities = mutableListOf<MessageEntity>()
         var currId: String? = parentId
         while (currId != null) {
@@ -543,7 +545,6 @@ class GenerationManager(
             pathEntities.add(0, msg)
             currId = msg.parentId
         }
-        // Inject tool call chains that are children of messages in the ancestor path.
         val expanded = mutableListOf<MessageEntity>()
         for (entity in pathEntities) {
             val toolChildren = dbMessages
@@ -584,6 +585,7 @@ class GenerationManager(
                 expanded.add(entity.copy(toolCallJson = null))
             }
         }
+        val t_pathBuild = System.currentTimeMillis()
         val currentPath = expanded.map {
             val segs = it.toolCallJson?.let { json -> try { Json.decodeFromString<List<MessageSegment>>(json) } catch (_: Exception) { null } }
             val toolCall = segs?.lastOrNull { s -> s.type == "tool" }?.let { s ->
@@ -639,6 +641,7 @@ class GenerationManager(
             modelCatalogSupportsTools = config.toolsSupported,
             transport = provider.functionToolTransport,
         )
+        android.util.Log.d("AgoraTiming", "buildApiPath: pathBuild took ${System.currentTimeMillis() - t_pathBuild}ms expanded=${expanded.size} path=${currentPath.size}")
         val forcedTools = forcedDirectToolNames(ctx)
         if (!functionToolsSupported && forcedTools.isNotEmpty()) {
             // Text-only families (local llama.cpp) and tool-disabled Ollama models deliberately
