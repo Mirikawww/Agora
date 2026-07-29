@@ -9,7 +9,6 @@ import com.newoether.agora.model.ChatMessage
 import com.newoether.agora.model.MessageSegment
 import com.newoether.agora.model.MessageStatus
 import com.newoether.agora.model.Participant
-import com.newoether.agora.util.Constants
 import com.newoether.agora.util.DebugLog
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -20,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
@@ -49,7 +50,6 @@ class GenerationSession(
     private val generatingInConversationId: MutableStateFlow<String?>,
     private val allMessages: MutableStateFlow<List<ChatMessage>>,
     private val currentConversationId: StateFlow<String?>,
-    private val onIndexMessageForRag: (messageId: String, text: String) -> Unit,
     private val onCacheMessages: (modelId: String) -> Unit,
 ) {
     /**
@@ -84,16 +84,19 @@ class GenerationSession(
     val sendGate = AtomicBoolean(false)
 
     private val jobsByConversation = ConcurrentHashMap<String, Job>()
+    private val provisionalJobs = ConcurrentHashMap.newKeySet<Job>()
     private val sendGates = ConcurrentHashMap<String, AtomicBoolean>()
     private val uiTokens = ConcurrentHashMap<String, AtomicLong>()
     private val persistIds = ConcurrentHashMap<String, AtomicLong>()
+    private val persistenceLocks = ConcurrentHashMap<String, Mutex>()
+    private val stopFinalizationJobs = ConcurrentHashMap<String, Job>()
 
-    @Volatile private var stopFinalizationJob: Job? = null
     private val genLock = Any()
 
     private data class StopFinalizationState(
         val conversationId: String?,
-        val messages: List<ChatMessage>
+        val messages: List<ChatMessage>,
+        val expectedPersistId: Long,
     )
 
     private fun uiTokenCounter(conversationId: String): AtomicLong =
@@ -104,6 +107,9 @@ class GenerationSession(
 
     private fun sendGateFor(conversationId: String): AtomicBoolean =
         sendGates.getOrPut(conversationId) { AtomicBoolean(false) }
+
+    private fun persistenceLockFor(conversationId: String): Mutex =
+        persistenceLocks.getOrPut(conversationId) { Mutex() }
 
     fun tryAcquireSend(conversationId: String): Boolean {
         val ok = sendGateFor(conversationId).compareAndSet(false, true)
@@ -125,8 +131,19 @@ class GenerationSession(
     fun captureUiToken(conversationId: String): Long =
         synchronized(genLock) { uiTokenCounter(conversationId).get() }
 
-    fun nextPersistId(conversationId: String): Long =
-        persistCounter(conversationId).incrementAndGet()
+    /**
+     * Starts a new generation persistence epoch while holding the same lock used by writers.
+     * A stale writer therefore either finishes before this returns or observes the new epoch.
+     */
+    suspend fun beginPersistenceEpoch(conversationId: String): Long {
+        val lock = persistenceLockFor(conversationId)
+        lock.lock()
+        return try {
+            persistCounter(conversationId).incrementAndGet()
+        } finally {
+            lock.unlock()
+        }
+    }
 
     fun isLatestPersist(conversationId: String, id: Long): Boolean =
         persistCounter(conversationId).get() == id
@@ -144,7 +161,91 @@ class GenerationSession(
             },
             onStreamClear = { streamClear(uiToken, conversationId) },
             isLatestPersist = { isLatestPersist(conversationId, persistId) },
+            persistMessagesIfLatest = { messages ->
+                persistMessagesIfLatest(conversationId, persistId, messages)
+            },
         )
+
+    private suspend fun persistMessagesIfLatest(
+        conversationId: String,
+        persistId: Long,
+        messages: List<MessageEntity>,
+    ): Boolean {
+        if (messages.isEmpty()) return true
+        val lock = persistenceLockFor(conversationId)
+        lock.lock()
+        return try {
+            if (!isLatestPersist(conversationId, persistId)) return false
+            if (convRepo.getConversation(conversationId) == null) return false
+            convRepo.upsertMessages(messages)
+            true
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    /**
+     * Invalidates every older generation before a destructive/replacement mutation and keeps the
+     * mutation serialized with any terminal generation write already in progress.
+     */
+    suspend fun <T> withInvalidatedPersistence(
+        conversationId: String,
+        block: suspend () -> T,
+    ): T {
+        val lock = persistenceLockFor(conversationId)
+        lock.lock()
+        return try {
+            persistCounter(conversationId).incrementAndGet()
+            block()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    suspend fun <T> withAllInvalidatedPersistence(
+        conversationIds: Collection<String>,
+        block: suspend () -> T,
+    ): T {
+        val ids = conversationIds.filter(String::isNotBlank).distinct().sorted()
+        val acquired = mutableListOf<Mutex>()
+        try {
+            for (id in ids) {
+                val lock = persistenceLockFor(id)
+                lock.lock()
+                acquired += lock
+            }
+            ids.forEach { persistCounter(it).incrementAndGet() }
+            return block()
+        } finally {
+            acquired.asReversed().forEach { it.unlock() }
+        }
+    }
+
+    fun pendingStopFinalization(conversationId: String): Job? =
+        stopFinalizationJobs[conversationId]?.takeUnless { it.isCompleted }
+
+    fun stopAllConversations(releaseSendGate: Boolean = true): List<Job> {
+        val activeIds = generatingConversationIds.value.toSet()
+        val pendingIds = stopFinalizationJobs.keys.toSet()
+        val provisional = provisionalJobs.toList()
+        val jobs = buildList {
+            provisional.forEach { job ->
+                job.cancel()
+                add(job)
+            }
+            activeIds.forEach { id ->
+                stopConversation(id, releaseSendGate)?.let(::add)
+            }
+            (pendingIds - activeIds).forEach { id ->
+                pendingStopFinalization(id)?.let(::add)
+            }
+        }.distinct()
+        if (releaseSendGate) {
+            sendGates.values.forEach { it.set(false) }
+            sendGate.set(false)
+        }
+        return jobs
+    }
 
     /** Legacy overload used by older call sites that still pass only tokens. */
     fun callbacksFor(uiToken: Long, persistId: Long) = callbacksFor(
@@ -167,23 +268,38 @@ class GenerationSession(
     }
 
     fun attachJob(conversationId: String, job: Job) {
-            val previous = jobsByConversation[conversationId]
-            // Never cancel the job we are (re)attaching — double attach of the same Job used to
-            // cancel the active generation mid-stream, which then drained the queue early.
-            if (previous != null && previous !== job && previous.isActive) {
-                previous.cancel()
-            }
-            jobsByConversation[conversationId] = job
-            generationJob = job
-            job.invokeOnCompletion {
-                jobsByConversation.remove(conversationId, job)
-                if (generationJob === job) generationJob = null
-                // Only drop stream handles when this job still owns the conversation slot.
-                if (jobsByConversation[conversationId] == null) {
-                    cancelStreamHandles(conversationId)
-                }
+        // Publish the real owner before removing provisional ownership. A Stop/stopAll racing this
+        // migration therefore sees the job in at least one registry (brief double registration is
+        // intentional).
+        val previous = jobsByConversation.put(conversationId, job)
+        jobsByConversation.entries
+            .filter { (id, registered) -> id != conversationId && registered === job }
+            .forEach { (id, _) -> jobsByConversation.remove(id, job) }
+        provisionalJobs.remove(job)
+        // Never cancel the job we are (re)attaching — double attach of the same Job used to
+        // cancel the active generation mid-stream, which then drained the queue early.
+        if (previous != null && previous !== job && previous.isActive) {
+            previous.cancel()
+        }
+        generationJob = job
+        job.invokeOnCompletion {
+            jobsByConversation.remove(conversationId, job)
+            if (generationJob === job) generationJob = null
+            // Only drop stream handles when this job still owns the conversation slot.
+            if (jobsByConversation[conversationId] == null) {
+                cancelStreamHandles(conversationId)
             }
         }
+    }
+
+    fun attachProvisionalJob(job: Job) {
+        provisionalJobs += job
+        generationJob = job
+        job.invokeOnCompletion {
+            provisionalJobs.remove(job)
+            if (generationJob === job) generationJob = null
+        }
+    }
 
     fun streamUpdate(uiToken: Long, conversationId: String, msg: ChatMessage) {
         synchronized(genLock) {
@@ -274,6 +390,8 @@ class GenerationSession(
     }
 
     fun stop() {
+        // Covers the short new-chat phase before a real conversation id is published.
+        provisionalJobs.toList().forEach { it.cancel() }
         val id = currentConversationId.value
         if (id != null) stopConversation(id, releaseSendGate = true)
         else stopInternalLegacy(releaseSendGate = true)
@@ -300,9 +418,23 @@ class GenerationSession(
             clearGeneratingLocked(conversationId)
             refreshLoadingUiLocked()
             if (currentConversationId.value == conversationId) {
-                val s = streamingMessage.value?.copy(status = MessageStatus.STOPPED)
-                streamingMessage.value = s
-                s
+                val live = streamingMessage.value
+                if (live?.status?.isTransientGenerationStatus() == true) {
+                    live.copy(status = MessageStatus.STOPPED).also {
+                        streamingMessage.value = it
+                    }
+                } else {
+                    // The authoritative generation may already have reached SUCCESS/ERROR while
+                    // the loading overlay is still clearing. Preserve that terminal state in UI;
+                    // the stop finalizer likewise preserves the terminal DB row.
+                    if (live != null) {
+                        allMessages.update { list ->
+                            list.map { message -> if (message.id == live.id) live else message }
+                        }
+                    }
+                    streamingMessage.value = null
+                    null
+                }
             } else null
         }
 
@@ -313,9 +445,9 @@ class GenerationSession(
             } else {
                 allMessages.update { list ->
                     list.map { m ->
-                        if (m.participant == Participant.MODEL &&
-                            (m.status == MessageStatus.SENDING || m.status == MessageStatus.THINKING ||
-                                m.status == MessageStatus.TOOL_CALLING || m.status == MessageStatus.TRANSCRIBING)
+                        if (
+                            m.participant == Participant.MODEL &&
+                            m.status.isTransientGenerationStatus()
                         ) {
                             val stopped = m.copy(status = MessageStatus.STOPPED)
                             fallbackStoppedMessages.add(stopped)
@@ -326,16 +458,24 @@ class GenerationSession(
             }
         }
         val stoppedMessages = stoppedMsg?.let { listOf(it) } ?: fallbackStoppedMessages
-        val finalizationJob = launchStopFinalization(StopFinalizationState(stoppedConversationId, stoppedMessages))
+        val finalizationJob = launchStopFinalization(
+            state = StopFinalizationState(
+                conversationId = stoppedConversationId,
+                messages = stoppedMessages,
+                expectedPersistId = persistCounter(conversationId).get(),
+            ),
+            cancelledGeneration = previousJob,
+        )
         if (releaseSendGate) releaseSend(conversationId)
         // FGS teardown is owned by GenerationManager.generate() finally so every start
         // has exactly one stop, including user cancellation and regeneration.
-        return finalizationJob ?: currentStopFinalizationJob()
+        return finalizationJob ?: currentStopFinalizationJob(conversationId)
     }
 
     private fun stopInternalLegacy(releaseSendGate: Boolean): Job? {
         // No focused conversation: cancel everything.
         val ids = generatingConversationIds.value.toList()
+        provisionalJobs.toList().forEach { it.cancel() }
         var last: Job? = null
         if (ids.isEmpty()) {
             generationJob?.cancel()
@@ -353,37 +493,86 @@ class GenerationSession(
         return last
     }
 
-    private fun currentStopFinalizationJob(): Job? {
-        return synchronized(genLock) { stopFinalizationJob?.takeUnless { it.isCompleted } }
-    }
+    private fun currentStopFinalizationJob(conversationId: String): Job? =
+        stopFinalizationJobs[conversationId]?.takeUnless { it.isCompleted }
 
-    private fun launchStopFinalization(state: StopFinalizationState): Job? {
-        val conversationId = state.conversationId ?: return currentStopFinalizationJob()
+    private fun launchStopFinalization(
+        state: StopFinalizationState,
+        cancelledGeneration: Job? = null,
+    ): Job? {
+        val conversationId = state.conversationId ?: return null
         val messages = state.messages.distinctBy { it.id }
-        if (messages.isEmpty()) return currentStopFinalizationJob()
+        val priorFinalization = currentStopFinalizationJob(conversationId)
+        if (messages.isEmpty() && cancelledGeneration == null) return priorFinalization
 
         val job = scope.launch {
             try {
-                val conversationExists = convRepo.getConversation(conversationId) != null
-                if (!conversationExists) return@launch
-                for (message in messages) {
-                    convRepo.upsertMessage(message.toStoppedEntity(conversationId))
-                    if (message.text.isNotBlank() && settings.autoCacheEnabled.value &&
-                        (settings.modelSearchMethod.value == Constants.SEARCH_METHOD_RAG ||
-                            settings.manualSearchMethod.value == Constants.SEARCH_METHOD_RAG)
-                    ) {
-                        onIndexMessageForRag(message.id, message.text)
+                // GenerationManager normally owns the authoritative terminal write and settles the
+                // in-flight usage round first. A native provider/tool that ignores cancellation
+                // must not freeze regenerate/edit/delete forever, so the wait is bounded. All DB
+                // writes below share a per-conversation lock+epoch; a late old generation therefore
+                // cannot resurrect or overwrite a replacement after this barrier releases.
+                val completedWithinBarrier = withTimeoutOrNull(STOP_FINALIZATION_WAIT_MS) {
+                    priorFinalization?.join()
+                    cancelledGeneration?.join()
+                    true
+                } == true
+                val timedOut =
+                    !completedWithinBarrier &&
+                        (priorFinalization != null || cancelledGeneration != null)
+
+                val lock = persistenceLockFor(conversationId)
+                lock.lock()
+                var retireTimedOutEpoch = false
+                try {
+                    if (persistCounter(conversationId).get() != state.expectedPersistId) {
+                        return@launch
                     }
+                    retireTimedOutEpoch = timedOut
+                    val conversationExists = convRepo.getConversation(conversationId) != null
+                    if (conversationExists && messages.isNotEmpty()) {
+                        val terminalRows = convRepo
+                            .getMessagesForConversationSnapshot(conversationId)
+                            .associateBy { it.id }
+                        val finishedAt = System.currentTimeMillis()
+                        for (message in messages) {
+                            val terminal = terminalRows[message.id]
+                            if (terminal?.completedAt == null) {
+                                // Fallback for cancellation before GenerationManager acquired
+                                // persistence ownership (or if its terminal write failed).
+                                convRepo.upsertMessage(
+                                    message.toStoppedEntity(conversationId, finishedAt),
+                                )
+                            }
+                        }
+                    }
+                } finally {
+                    if (
+                        retireTimedOutEpoch &&
+                        persistCounter(conversationId).get() == state.expectedPersistId
+                    ) {
+                        // Retire the cancelled generation even if fallback persistence itself
+                        // failed. A provider that ignores cancellation can never write after the
+                        // bounded barrier releases.
+                        persistCounter(conversationId).incrementAndGet()
+                    }
+                    lock.unlock()
                 }
             } catch (e: Exception) {
                 DebugLog.e("AgoraVM", "Failed to persist stopped generation", e)
             }
         }
-        synchronized(genLock) { stopFinalizationJob = job }
+        stopFinalizationJobs[conversationId] = job
+        job.invokeOnCompletion {
+            stopFinalizationJobs.remove(conversationId, job)
+        }
         return job
     }
 
-    private fun ChatMessage.toStoppedEntity(conversationId: String): MessageEntity {
+    private fun ChatMessage.toStoppedEntity(
+        conversationId: String,
+        finishedAt: Long,
+    ): MessageEntity {
         val toolJson = segments?.let { Json.encodeToString(it) } ?: toolCall?.let {
             Json.encodeToString(
                 listOf(
@@ -412,9 +601,13 @@ class GenerationSession(
             cacheTelemetryAvailable = cacheTelemetryAvailable,
             completionTokens = completionTokens,
             ttftMs = ttftMs,
+            roundUsageJson = roundUsage
+                .takeIf { it.isNotEmpty() }
+                ?.let { Json.encodeToString(it) },
             status = MessageStatus.STOPPED,
             participant = participant,
             timestamp = timestamp,
+            completedAt = completedAt ?: finishedAt,
             thoughtTimeMs = thoughtTimeMs,
             modelName = modelName,
             toolCallJson = toolJson,
@@ -422,8 +615,18 @@ class GenerationSession(
         )
     }
 
+    private fun MessageStatus.isTransientGenerationStatus(): Boolean =
+        this == MessageStatus.TRANSCRIBING ||
+            this == MessageStatus.SENDING ||
+            this == MessageStatus.THINKING ||
+            this == MessageStatus.TOOL_CALLING
+
     fun cancelScope() {
         scope.coroutineContext[Job]?.cancel()
         HttpClient.cancelAllActiveStreams()
+    }
+
+    private companion object {
+        const val STOP_FINALIZATION_WAIT_MS = 3_000L
     }
 }

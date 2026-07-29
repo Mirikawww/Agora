@@ -83,7 +83,8 @@ class DataExporter(
         val thoughtTimeMs: Long? = null,
         val modelName: String? = null,
         val toolCallJson: String? = null,
-        val attachmentMeta: String? = null
+        val attachmentMeta: String? = null,
+        val roundUsageJson: String? = null,
     )
 
     @Serializable
@@ -271,6 +272,7 @@ class DataExporter(
                         modelName = m.modelName,
                         toolCallJson = m.toolCallJson,
                         attachmentMeta = m.attachmentMeta,
+                        roundUsageJson = m.roundUsageJson,
                     )
                 }
                 zip.putNextEntry(ZipEntry("conversations.json"))

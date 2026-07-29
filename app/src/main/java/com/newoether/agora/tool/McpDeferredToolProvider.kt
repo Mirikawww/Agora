@@ -60,6 +60,7 @@ class McpDeferredToolProvider(
         contextTokens: Int,
         currentText: String,
         recentTexts: List<String>,
+        recentSuccessfulToolNames: Set<String> = emptySet(),
         forcedDirectToolNames: Set<String> = emptySet(),
     ): ToolExposurePlan {
         val plan = plan(
@@ -67,6 +68,7 @@ class McpDeferredToolProvider(
             contextTokens = contextTokens,
             currentText = currentText,
             recentTexts = recentTexts,
+            recentSuccessfulToolNames = recentSuccessfulToolNames,
             forcedDirectToolNames = forcedDirectToolNames,
         )
         val broker = if (plan.deferredTools.isNotEmpty()) {
@@ -86,7 +88,8 @@ class McpDeferredToolProvider(
                 "AgoraTiming",
                 "capability route=${plan.route.mode} direct=${plan.inlineTools.size} " +
                     "broker=${broker != null} deferred=${plan.deferredTools.size}/${allTools.size} " +
-                    "schema=${plan.inlineSchemaTokens}tok ctx=$contextTokens",
+                    "inlineSchema=${plan.inlineSchemaTokens}tok " +
+                    "wireSchema=${plan.wireSchemaTokens}tok ctx=$contextTokens",
             )
         }
         return plan
@@ -322,7 +325,35 @@ class McpDeferredToolProvider(
                 errorJson("tool_not_found", "Search deferred capabilities first.")
             }
         val schema = tool.completeParameters().asJsonObject()
-        val schemaText = schema.toString()
+        val requestedSection = args.string("section")?.lowercase()
+        if (requestedSection != null && requestedSection !in INSPECT_SECTIONS) {
+            return errorJson(
+                "invalid_section",
+                "Use section=required, section=optional, or section=raw.",
+            )
+        }
+        val defaultSection = if (schema.toString().length > DEFAULT_SCHEMA_CHUNK_CHARS) {
+            INSPECT_REQUIRED
+        } else {
+            INSPECT_RAW
+        }
+        val section = requestedSection ?: defaultSection
+        val sectionedSchema = if (!canSectionSchema(schema)) {
+            null
+        } else {
+            when (section) {
+                INSPECT_REQUIRED -> requiredSection(schema)
+                INSPECT_OPTIONAL -> optionalSection(schema)
+                else -> null
+            }
+        }
+        val inspectedSchema = sectionedSchema ?: schema
+        val effectiveSection = if (section != INSPECT_RAW && sectionedSchema == null) {
+            INSPECT_RAW
+        } else {
+            section
+        }
+        val schemaText = inspectedSchema.toString()
         val cursor = args.int("cursor").coerceIn(0, schemaText.length)
         val maxChars = args.int("max_chars", DEFAULT_SCHEMA_CHUNK_CHARS)
             .coerceIn(MIN_SCHEMA_CHUNK_CHARS, MAX_SCHEMA_CHUNK_CHARS)
@@ -330,10 +361,15 @@ class McpDeferredToolProvider(
         val isCompleteObject = cursor == 0 && end == schemaText.length
         return buildJsonObject {
             put("name", tool.function.name)
-            put("description", tool.function.description)
+            put("description", tool.function.description.take(MAX_INSPECT_DESCRIPTION_CHARS))
+            if (tool.function.description.length > MAX_INSPECT_DESCRIPTION_CHARS) {
+                put("description_truncated", true)
+            }
+            put("section", effectiveSection)
             put("complete", end == schemaText.length)
+            if (effectiveSection != INSPECT_RAW) put("schema_complete", false)
             if (isCompleteObject) {
-                put("input_schema", schema)
+                put("input_schema", inspectedSchema)
             } else {
                 // A JSON string chunk keeps the outer tool result valid; blindly taking the first
                 // 100k characters would produce malformed JSON and silently lose schema suffixes.
@@ -342,6 +378,154 @@ class McpDeferredToolProvider(
                 if (end < schemaText.length) put("next_cursor", end)
             }
         }.toString()
+    }
+
+    private fun requiredSection(schema: JsonObject): JsonObject? {
+        val required = schema["required"] as? JsonArray ?: JsonArray(emptyList())
+        val requiredNames = required.mapNotNull {
+            (it as? JsonPrimitive)?.contentOrNull
+        }.distinct()
+        val properties = schema["properties"] as? JsonObject ?: JsonObject(emptyMap())
+        if (requiredNames.any { it !in properties }) return null
+        val requiredProperties = JsonObject(requiredNames.associateWith { properties.getValue(it) })
+        val closure = localDefinitionClosure(schema, requiredProperties) ?: return null
+        return buildJsonObject {
+            schema["type"]?.let { put("type", it) }
+            put("properties", requiredProperties)
+            put("required", JsonArray(requiredNames.map(::JsonPrimitive)))
+            if (closure.defs.isNotEmpty()) put("\$defs", closure.defs)
+            if (closure.legacyDefinitions.isNotEmpty()) {
+                put("definitions", closure.legacyDefinitions)
+            }
+        }
+    }
+
+    private fun canSectionSchema(schema: JsonObject): Boolean {
+        if (schema.keys.any { it !in SECTIONABLE_ROOT_KEYS }) return false
+        if (schema.keys.any { it in ROOT_COMBINATOR_KEYS }) return false
+        val availableDefs = schema["\$defs"] as? JsonObject ?: JsonObject(emptyMap())
+        val availableLegacy =
+            schema["definitions"] as? JsonObject ?: JsonObject(emptyMap())
+        var valid = true
+
+        fun visit(element: JsonElement) {
+            if (!valid) return
+            when (element) {
+                is JsonObject -> {
+                    val refElement = element["\$ref"]
+                    if (refElement != null) {
+                        val ref = (refElement as? JsonPrimitive)?.contentOrNull ?: run {
+                            valid = false
+                            return
+                        }
+                        val (container, name) = localDefinitionTarget(ref) ?: run {
+                            valid = false
+                            return
+                        }
+                        val available =
+                            if (container == "\$defs") availableDefs else availableLegacy
+                        if (name !in available) {
+                            valid = false
+                            return
+                        }
+                    }
+                    element.values.forEach(::visit)
+                }
+                is JsonArray -> element.forEach(::visit)
+                else -> Unit
+            }
+        }
+
+        visit(schema)
+        return valid
+    }
+
+    private data class LocalDefinitionClosure(
+        val defs: JsonObject,
+        val legacyDefinitions: JsonObject,
+    )
+
+    private fun localDefinitionClosure(
+        schema: JsonObject,
+        roots: JsonElement,
+    ): LocalDefinitionClosure? {
+        val availableDefs = schema["\$defs"] as? JsonObject ?: JsonObject(emptyMap())
+        val availableLegacy =
+            schema["definitions"] as? JsonObject ?: JsonObject(emptyMap())
+        val pending = java.util.ArrayDeque<Pair<String, String>>()
+        var unsupportedRef = false
+
+        fun collectRefs(element: JsonElement) {
+            when (element) {
+                is JsonObject -> {
+                    val refElement = element["\$ref"]
+                    if (refElement != null) {
+                        val ref = (refElement as? JsonPrimitive)?.contentOrNull ?: run {
+                            unsupportedRef = true
+                            return
+                        }
+                        val target = localDefinitionTarget(ref)
+                        if (target == null) {
+                            unsupportedRef = true
+                        } else {
+                            pending.addLast(target)
+                        }
+                    }
+                    element.values.forEach(::collectRefs)
+                }
+                is JsonArray -> element.forEach(::collectRefs)
+                else -> Unit
+            }
+        }
+
+        collectRefs(roots)
+        if (unsupportedRef) return null
+        val resolvedDefs = linkedMapOf<String, JsonElement>()
+        val resolvedLegacy = linkedMapOf<String, JsonElement>()
+        while (pending.isNotEmpty()) {
+            val (container, name) = pending.removeFirst()
+            val resolved = if (container == "\$defs") resolvedDefs else resolvedLegacy
+            if (name in resolved) continue
+            val available = if (container == "\$defs") availableDefs else availableLegacy
+            val definition = available[name] ?: return null
+            resolved[name] = definition
+            collectRefs(definition)
+            if (unsupportedRef) return null
+        }
+        return LocalDefinitionClosure(
+            defs = JsonObject(resolvedDefs),
+            legacyDefinitions = JsonObject(resolvedLegacy),
+        )
+    }
+
+    private fun localDefinitionTarget(ref: String): Pair<String, String>? {
+        val container = when {
+            ref.startsWith("#/\$defs/") -> "\$defs"
+            ref.startsWith("#/definitions/") -> "definitions"
+            else -> return null
+        }
+        val rawName = ref.removePrefix("#/$container/").substringBefore('/')
+        val name = rawName.replace("~1", "/").replace("~0", "~")
+        return name.takeIf(String::isNotBlank)?.let { container to it }
+    }
+
+    private fun optionalSection(schema: JsonObject): JsonObject? {
+        val required = (schema["required"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+            ?.toSet()
+            .orEmpty()
+        val properties = schema["properties"] as? JsonObject ?: JsonObject(emptyMap())
+        val optionalProperties = JsonObject(properties.filterKeys { it !in required })
+        val closure = localDefinitionClosure(schema, optionalProperties) ?: return null
+        return buildJsonObject {
+            schema["type"]?.let { put("type", it) }
+            put("properties", optionalProperties)
+            put("required", JsonArray(emptyList()))
+            if (closure.defs.isNotEmpty()) put("\$defs", closure.defs)
+            if (closure.legacyDefinitions.isNotEmpty()) {
+                put("definitions", closure.legacyDefinitions)
+            }
+        }
     }
 
     private suspend fun handleInvoke(
@@ -372,8 +556,27 @@ class McpDeferredToolProvider(
         /** Pools at or above this size use Top-K + broker even when every schema is terse. */
         const val LARGE_REGISTRY_TOOLS = 12
 
-        /** Absolute schema budget for a direct pool; context-window size does not change upload. */
+        /** Full-schema cost that switches a registry from all-direct to routed exposure. */
+        const val ROUTING_TRIGGER_SCHEMA_TOKENS = 1_500
+
+        /**
+         * Final budget for complete schemas placed directly on the wire.
+         *
+         * The broker schema is tracked separately in [ToolExposurePlan.brokerSchemaTokens].
+         */
         const val MAX_INLINE_SCHEMA_TOKENS = 1_500
+
+        /** Absolute fail-safe for tokenizer edge cases and pathological schema string values. */
+        const val MAX_INLINE_SCHEMA_CHARS = 6_000
+
+        /**
+         * Final provider-neutral cap for the serialized tool surface, including the broker and
+         * JSON envelope. The 1,500-token complete-inline budget is enforced independently.
+         */
+        const val MAX_WIRE_SCHEMA_TOKENS = 2_500
+
+        /** Serialized provider-envelope fail-safe, independent of the approximate tokenizer. */
+        const val MAX_WIRE_SCHEMA_CHARS = 10_000
 
         const val TOP_K_DIRECT_TOOLS = 6
         private const val DEFAULT_SEARCH_RESULTS = 6
@@ -391,9 +594,16 @@ class McpDeferredToolProvider(
         private const val MAX_HINT_ENUM_CHARS = 160
         private const val MAX_CATALOG_MCP_NAMES = 16
         private const val MAX_CATALOG_MCP_NAME_CHARS = 40
-        private const val DEFAULT_SCHEMA_CHUNK_CHARS = 30_000
+        // The complete broker result must stay under GenerationManager's 16k per-result cap.
+        // A schema chunk is embedded as a JSON string and can nearly double through escaping.
+        private const val DEFAULT_SCHEMA_CHUNK_CHARS = 6_000
         private const val MIN_SCHEMA_CHUNK_CHARS = 1_000
-        private const val MAX_SCHEMA_CHUNK_CHARS = 40_000
+        private const val MAX_SCHEMA_CHUNK_CHARS = 6_000
+        private const val MAX_INSPECT_DESCRIPTION_CHARS = 256
+        private const val INSPECT_REQUIRED = "required"
+        private const val INSPECT_OPTIONAL = "optional"
+        private const val INSPECT_RAW = "raw"
+        private val INSPECT_SECTIONS = setOf(INSPECT_REQUIRED, INSPECT_OPTIONAL, INSPECT_RAW)
         private val COMPLEX_SCHEMA_KEYS = setOf(
             "oneOf",
             "anyOf",
@@ -405,6 +615,25 @@ class McpDeferredToolProvider(
             "if",
             "then",
             "else",
+        )
+        private val ROOT_COMBINATOR_KEYS = setOf(
+            "oneOf",
+            "anyOf",
+            "allOf",
+            "if",
+            "then",
+            "else",
+            "not",
+        )
+        private val SECTIONABLE_ROOT_KEYS = setOf(
+            "type",
+            "properties",
+            "required",
+            "title",
+            "description",
+            "\$schema",
+            "\$defs",
+            "definitions",
         )
         private val SIMPLE_ROOT_HINT_KEYS = setOf(
             "type",
@@ -449,11 +678,136 @@ class McpDeferredToolProvider(
                 TokenEstimator.estimate(tool.function.parameters.asJsonObject().toString())
         }
 
+        fun estimateSchemaChars(tools: List<ToolDefinition>): Int = tools.sumOf { tool ->
+            tool.function.name.length +
+                tool.function.description.length +
+                tool.function.parameters.asJsonObject().toString().length
+        }
+
+        /**
+         * Conservative provider-neutral estimate of the actual serialized tool surface.
+         *
+         * The component sum above deliberately measures schema content. It omits keys such as
+         * `type`, `function`, `input_schema`, and `functionDeclarations`; with many small tools
+         * that wrapper can cost more than the schemas themselves. This estimate takes the maximum
+         * of the OpenAI/Ollama, Anthropic, and Gemini request shapes.
+         */
+        private fun wireSchemaEnvelopes(tools: List<ToolDefinition>): List<JsonObject> {
+            if (tools.isEmpty()) return emptyList()
+            val forcedName = tools.maxByOrNull { it.function.name.length }
+                ?.function
+                ?.name
+                .orEmpty()
+
+            val openAi = buildJsonObject {
+                putJsonArray("tools") {
+                    tools.forEach { tool ->
+                        add(buildJsonObject {
+                            put("type", "function")
+                            put("function", buildJsonObject {
+                                put("name", tool.function.name)
+                                put("description", tool.function.description)
+                                put("parameters", tool.function.parameters.asJsonObject())
+                            })
+                        })
+                    }
+                }
+                put("tool_choice", buildJsonObject {
+                    put("type", "function")
+                    put("function", buildJsonObject { put("name", forcedName) })
+                })
+            }
+            val anthropic = buildJsonObject {
+                putJsonArray("tools") {
+                    tools.forEachIndexed { index, tool ->
+                        add(buildJsonObject {
+                            put("name", tool.function.name)
+                            put("description", tool.function.description)
+                            put("input_schema", tool.function.parameters.asJsonObject())
+                            if (index == tools.lastIndex) {
+                                put(
+                                    "cache_control",
+                                    buildJsonObject { put("type", "ephemeral") },
+                                )
+                            }
+                        })
+                    }
+                }
+                put("tool_choice", buildJsonObject {
+                    put("type", "tool")
+                    put("name", forcedName)
+                })
+                put("cache_control", buildJsonObject { put("type", "ephemeral") })
+            }
+            val gemini = buildJsonObject {
+                putJsonArray("tools") {
+                    add(buildJsonObject { put("code_execution", buildJsonObject {}) })
+                    add(buildJsonObject { put("google_search", buildJsonObject {}) })
+                    add(buildJsonObject {
+                        putJsonArray("function_declarations") {
+                            tools.forEach { tool ->
+                                add(buildJsonObject {
+                                    put("name", tool.function.name)
+                                    put("description", tool.function.description)
+                                    // The exact-schema key is the longest of Gemini's two variants.
+                                    put(
+                                        "parametersJsonSchema",
+                                        tool.function.parameters.asJsonObject(),
+                                    )
+                                })
+                            }
+                        }
+                    })
+                }
+                put("toolConfig", buildJsonObject {
+                    put("includeServerSideToolInvocations", true)
+                    put("functionCallingConfig", buildJsonObject {
+                        put("mode", "ANY")
+                        putJsonArray("allowedFunctionNames") {
+                            add(JsonPrimitive(forcedName))
+                        }
+                    })
+                })
+            }
+            return listOf(openAi, anthropic, gemini)
+        }
+
+        fun estimateWireSchemaTokens(tools: List<ToolDefinition>): Int =
+            wireSchemaEnvelopes(tools)
+                .maxOfOrNull { TokenEstimator.estimate(it.toString()) }
+                ?: 0
+
+        fun estimateWireSchemaChars(tools: List<ToolDefinition>): Int =
+            wireSchemaEnvelopes(tools)
+                .maxOfOrNull { it.toString().length }
+                ?: 0
+
+        /** Gemini-native tool objects exist even when no function definition is present. */
+        fun estimateNativeToolEnvelopeTokens(
+            codeExecutionEnabled: Boolean,
+            googleSearchEnabled: Boolean,
+        ): Int {
+            if (!codeExecutionEnabled && !googleSearchEnabled) return 0
+            return TokenEstimator.estimate(
+                buildJsonObject {
+                    putJsonArray("tools") {
+                        if (codeExecutionEnabled) {
+                            add(buildJsonObject { put("code_execution", buildJsonObject {}) })
+                        }
+                        if (googleSearchEnabled) {
+                            add(buildJsonObject { put("google_search", buildJsonObject {}) })
+                        }
+                    }
+                }.toString(),
+            )
+        }
+
         fun plan(
             tools: List<ToolDefinition>,
             contextTokens: Int,
             currentText: String,
             recentTexts: List<String> = emptyList(),
+            recentSuccessfulToolNames: Set<String> = emptySet(),
             forcedDirectToolNames: Set<String> = emptySet(),
         ): ToolExposurePlan {
             if (tools.isEmpty()) {
@@ -470,11 +824,17 @@ class McpDeferredToolProvider(
                 .sortedBy { it.function.name }
             val directComplete = directEligible.map { it.withCompleteSchema() }
             val totalSchemaTokens = estimateSchemaTokens(directComplete)
+            val totalSchemaChars = estimateSchemaChars(directComplete)
+            val directWireSchemaTokens = estimateWireSchemaTokens(directComplete)
+            val directWireSchemaChars = estimateWireSchemaChars(directComplete)
             val mustRoute = tools.any { it.defer == DeferPolicy.ALWAYS } ||
                 (trivialNoToolTurn && tools.any { it.defer == DeferPolicy.EAGER }) ||
                 directEligible.size >= LARGE_REGISTRY_TOOLS ||
                 directEligible.size > MAX_WIRE_TOOLS ||
-                totalSchemaTokens > MAX_INLINE_SCHEMA_TOKENS
+                totalSchemaTokens > ROUTING_TRIGGER_SCHEMA_TOKENS ||
+                totalSchemaChars > MAX_INLINE_SCHEMA_CHARS ||
+                directWireSchemaTokens > MAX_WIRE_SCHEMA_TOKENS ||
+                directWireSchemaChars > MAX_WIRE_SCHEMA_CHARS
 
             if (!mustRoute) {
                 val route = CapabilityRoute(
@@ -492,6 +852,7 @@ class McpDeferredToolProvider(
                     inlineSchemaTokens = estimateSchemaTokens(
                         directComplete,
                     ),
+                    wireSchemaTokens = directWireSchemaTokens,
                 )
             }
 
@@ -500,6 +861,7 @@ class McpDeferredToolProvider(
                 recentTexts = recentTexts,
                 tools = tools.filter { it.defer == DeferPolicy.AUTO },
                 topK = TOP_K_DIRECT_TOOLS,
+                recentSuccessfulToolNames = recentSuccessfulToolNames,
             )
             val mandatory = tools
                 .filter { it.defer == DeferPolicy.NEVER }
@@ -512,16 +874,22 @@ class McpDeferredToolProvider(
                     .sortedBy { it.function.name }
             }
             val forced = tools
-                .filter { it.function.name in forcedDirectToolNames }
+                .filter {
+                    it.defer != DeferPolicy.ALWAYS &&
+                        it.function.name in forcedDirectToolNames
+                }
                 .sortedBy { it.function.name }
-            val protected = (mandatory + eager + forced).distinctBy { it.function.name }
+            // NEVER and explicitly forced tools cannot be silently deferred. EAGER tools are
+            // preferred during packing, but remain safely broker-reachable when their complete
+            // schemas do not fit.
+            val protected = (mandatory + forced).distinctBy { it.function.name }
             val protectedNames = protected.mapTo(mutableSetOf()) { it.function.name }
             val hasUnprotectedTools = tools.any { it.function.name !in protectedNames }
             require(
                 protected.size <= MAX_WIRE_TOOLS &&
                     !(protected.size == MAX_WIRE_TOOLS && hasUnprotectedTools)
             ) {
-                "Cannot expose ${protected.size} NEVER-deferred/EAGER tools plus the capability broker " +
+                "Cannot expose ${protected.size} NEVER-deferred/forced tools plus the capability broker " +
                     "within the $MAX_WIRE_TOOLS-tool provider limit."
             }
             val selected = route.selectedToolsFrom(tools)
@@ -529,17 +897,139 @@ class McpDeferredToolProvider(
             // Reserve one of the provider's 64 slots for the broker. If an impossible registry
             // contains too many protected items, fail explicitly instead of silently hiding one.
             val inlineLimit = if (hasUnprotectedTools) MAX_WIRE_TOOLS - 1 else MAX_WIRE_TOOLS
-            val inline = (protected + selected)
-                .distinctBy { it.function.name }
+            fun wireTokensFor(inlineTools: List<ToolDefinition>): Int {
+                val inlineNames = inlineTools.mapTo(mutableSetOf()) { it.function.name }
+                val remaining = tools.filter { it.function.name !in inlineNames }
+                val wireTools = if (remaining.isEmpty()) {
+                    inlineTools
+                } else {
+                    inlineTools + brokerDefinition(remaining)
+                }
+                return estimateWireSchemaTokens(wireTools)
+            }
+            fun wireCharsFor(inlineTools: List<ToolDefinition>): Int {
+                val inlineNames = inlineTools.mapTo(mutableSetOf()) { it.function.name }
+                val remaining = tools.filter { it.function.name !in inlineNames }
+                val wireTools = if (remaining.isEmpty()) {
+                    inlineTools
+                } else {
+                    inlineTools + brokerDefinition(remaining)
+                }
+                return estimateWireSchemaChars(wireTools)
+            }
+
+            val protectedComplete = protected
                 .take(inlineLimit)
                 .map { it.withCompleteSchema() }
+            var inlineSchemaTokens = estimateSchemaTokens(protectedComplete)
+            var inlineSchemaChars = estimateSchemaChars(protectedComplete)
+            require(inlineSchemaTokens <= MAX_INLINE_SCHEMA_TOKENS) {
+                "Required direct tool schemas cost $inlineSchemaTokens tokens, exceeding the " +
+                    "$MAX_INLINE_SCHEMA_TOKENS-token final inline budget."
+            }
+            require(inlineSchemaChars <= MAX_INLINE_SCHEMA_CHARS) {
+                "Required direct tool schemas serialize to $inlineSchemaChars characters, " +
+                    "exceeding the $MAX_INLINE_SCHEMA_CHARS-character final inline budget."
+            }
+            val protectedWireSchemaTokens = wireTokensFor(protectedComplete)
+            require(protectedWireSchemaTokens <= MAX_WIRE_SCHEMA_TOKENS) {
+                "Required direct tools plus the capability broker cost " +
+                    "$protectedWireSchemaTokens serialized tokens, exceeding the " +
+                    "$MAX_WIRE_SCHEMA_TOKENS-token final wire budget."
+            }
+            val protectedWireSchemaChars = wireCharsFor(protectedComplete)
+            require(protectedWireSchemaChars <= MAX_WIRE_SCHEMA_CHARS) {
+                "Required direct tools plus the capability broker serialize to " +
+                    "$protectedWireSchemaChars characters, exceeding the " +
+                    "$MAX_WIRE_SCHEMA_CHARS-character final wire budget."
+            }
+            val admittedWithinBudget = buildList {
+                (eager + selected)
+                    .distinctBy { it.function.name }
+                    .asSequence()
+                    .filter { candidate ->
+                        protectedComplete.none {
+                            it.function.name == candidate.function.name
+                        }
+                    }
+                    .map { it.withCompleteSchema() }
+                    .forEach { candidate ->
+                        if (protectedComplete.size + size >= inlineLimit) return@forEach
+                        val candidateTokens = estimateSchemaTokens(listOf(candidate))
+                        val candidateInlineTokens = inlineSchemaTokens + candidateTokens
+                        val candidateChars = estimateSchemaChars(listOf(candidate))
+                        val candidateInlineChars = inlineSchemaChars + candidateChars
+                        val candidateWireTokens =
+                            wireTokensFor(protectedComplete + toList() + candidate)
+                        val candidateWireChars =
+                            wireCharsFor(protectedComplete + toList() + candidate)
+                        if (
+                            candidateInlineTokens <= MAX_INLINE_SCHEMA_TOKENS &&
+                            candidateInlineChars <= MAX_INLINE_SCHEMA_CHARS &&
+                            candidateWireTokens <= MAX_WIRE_SCHEMA_TOKENS &&
+                            candidateWireChars <= MAX_WIRE_SCHEMA_CHARS
+                        ) {
+                            add(candidate)
+                            inlineSchemaTokens = candidateInlineTokens
+                            inlineSchemaChars = candidateInlineChars
+                        }
+                    }
+            }
+            val inline = protectedComplete + admittedWithinBudget
             val inlineNames = inline.map { it.function.name }.toSet()
             val deferred = tools.filter { it.function.name !in inlineNames }
+            val admittedAutoNames = admittedWithinBudget
+                .filter { it.defer == DeferPolicy.AUTO }
+                .map { it.function.name }
+            val effectiveMode = when {
+                trivialNoToolTurn && route.mode == CapabilityRouteMode.NO_TOOL ->
+                    CapabilityRouteMode.NO_TOOL
+                deferred.isEmpty() -> CapabilityRouteMode.DIRECT
+                admittedAutoNames.isNotEmpty() -> route.mode
+                inline.isEmpty() -> CapabilityRouteMode.BROKER
+                else -> CapabilityRouteMode.MIXED
+            }
+            val finalBroker = deferred.takeIf { it.isNotEmpty() }
+                ?.let(::brokerDefinition)
+            val brokerSchemaTokens = if (finalBroker == null) {
+                0
+            } else {
+                estimateSchemaTokens(listOf(finalBroker))
+            }
+            val wireSchemaTokens = estimateWireSchemaTokens(
+                if (finalBroker == null) inline else inline + finalBroker,
+            )
+            check(wireSchemaTokens <= MAX_WIRE_SCHEMA_TOKENS) {
+                "Final serialized tool surface costs $wireSchemaTokens tokens, exceeding the " +
+                    "$MAX_WIRE_SCHEMA_TOKENS-token wire budget."
+            }
+            val wireSchemaChars = estimateWireSchemaChars(
+                if (finalBroker == null) inline else inline + finalBroker,
+            )
+            check(wireSchemaChars <= MAX_WIRE_SCHEMA_CHARS) {
+                "Final serialized tool surface is $wireSchemaChars characters, exceeding the " +
+                    "$MAX_WIRE_SCHEMA_CHARS-character wire budget."
+            }
             return ToolExposurePlan(
-                route = route.copy(requiresBroker = deferred.isNotEmpty()),
+                route = route.copy(
+                    mode = effectiveMode,
+                    selectedToolNames = admittedAutoNames,
+                    reason = if (admittedAutoNames.size < selected.size) {
+                        "Selected ${admittedAutoNames.size} relevant schema(s) within the final " +
+                            "$MAX_INLINE_SCHEMA_TOKENS-token inline / " +
+                            "$MAX_WIRE_SCHEMA_TOKENS-token wire budgets; oversized matches remain " +
+                            "broker-reachable."
+                    } else {
+                        route.reason
+                    },
+                    schemaTokenEstimate = inlineSchemaTokens,
+                    requiresBroker = deferred.isNotEmpty(),
+                ),
                 inlineTools = inline,
                 deferredTools = deferred,
-                inlineSchemaTokens = estimateSchemaTokens(inline),
+                inlineSchemaTokens = inlineSchemaTokens,
+                brokerSchemaTokens = brokerSchemaTokens,
+                wireSchemaTokens = wireSchemaTokens,
             )
         }
 
@@ -566,7 +1056,9 @@ class McpDeferredToolProvider(
                         "($catalog). Never search for a tool whose schema is already available. Search " +
                         "once by user intent, then invoke directly when input_hint says required constraints " +
                         "are complete. Inspect only when required constraints are flagged, or when you need " +
-                        "omitted optional fields. Results are cursor-paginated across all deferred tools; " +
+                        "omitted optional fields. Large safe schemas inspect required fields by default; use " +
+                        "section=optional for optional fields or section=raw for lossless schema pages. " +
+                        "Results are cursor-paginated across all deferred tools; " +
                         "never claim one unavailable before exhausting relevant search.",
                     parameters = ToolParameters(
                         properties = mapOf(
@@ -576,7 +1068,8 @@ class McpDeferredToolProvider(
                             "arguments" to ToolProperty("object", "For invoke: arguments matching input_hint or the inspected schema."),
                             "cursor" to ToolProperty("integer", "For paginated search/inspect: next_cursor."),
                             "limit" to ToolProperty("integer", "For search: summaries per page, 1-20."),
-                            "max_chars" to ToolProperty("integer", "For inspect: schema chunk size, 1000-40000."),
+                            "max_chars" to ToolProperty("integer", "For inspect: section or raw chunk size, 1000-6000."),
+                            "section" to ToolProperty("string", "For inspect: required, optional, or raw."),
                         ),
                         required = listOf("action"),
                         rawSchema = buildJsonObject {
@@ -612,7 +1105,16 @@ class McpDeferredToolProvider(
                                 })
                                 put("max_chars", buildJsonObject {
                                     put("type", "integer")
-                                    put("description", "Inspect chunk size from 1000 to 40000 characters.")
+                                    put("description", "Inspect section or raw chunk size from 1000 to 6000 characters.")
+                                })
+                                put("section", buildJsonObject {
+                                    put("type", "string")
+                                    put("description", "Inspect required fields, optional fields, or bounded raw schema.")
+                                    put("enum", buildJsonArray {
+                                        add(JsonPrimitive(INSPECT_REQUIRED))
+                                        add(JsonPrimitive(INSPECT_OPTIONAL))
+                                        add(JsonPrimitive(INSPECT_RAW))
+                                    })
                                 })
                             })
                             putJsonArray("required") { add(JsonPrimitive("action")) }
@@ -686,6 +1188,9 @@ data class ToolExposurePlan(
     val inlineTools: List<ToolDefinition>,
     val deferredTools: List<ToolDefinition>,
     val inlineSchemaTokens: Int,
+    val brokerSchemaTokens: Int = 0,
+    /** Maximum estimated serialized cost across all supported native tool request shapes. */
+    val wireSchemaTokens: Int = inlineSchemaTokens + brokerSchemaTokens,
 ) {
     val usesBroker: Boolean get() = deferredTools.isNotEmpty()
     val wireToolCount: Int get() = inlineTools.size + if (usesBroker) 1 else 0

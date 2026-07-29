@@ -10,6 +10,7 @@ import com.newoether.agora.sandbox.SandboxManagerFactory
 import com.newoether.agora.util.ShellClient
 import com.newoether.agora.util.SshClient
 import com.newoether.agora.viewmodel.GenerationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -144,6 +145,8 @@ class ShellToolProvider(
                     else { put("exit_code", exitCode ?: -1) }
                     put("output", output.toString().trimEnd())
                 }.toString()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 jsonError("execute_shell_command", e.message ?: "Unknown error", server = deviceName, command = cmd)
             } finally { handle.close() }
@@ -197,6 +200,8 @@ class ShellToolProvider(
                     put("exit_code", result.exitCode)
                     put("output", (result.stdout + if (result.stderr.isNotBlank()) "\n${result.stderr}" else "").trimEnd())
                 }.toString()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 jsonError("execute_shell_command", e.message ?: "Unknown error", server = deviceName, command = cmd)
             }
@@ -209,6 +214,8 @@ class ShellToolProvider(
                     put("type", "file_read"); put("server", deviceName); put("path", path)
                     put("content", content); put("lines", content.lines().size)
                 }.toString()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 jsonError("file_read", "SFTP read failed: ${e.message}", server = deviceName)
             }
@@ -240,6 +247,8 @@ class ShellToolProvider(
                     put("exit_code", result.exitCode)
                     put("output", (result.stdout + if (result.stderr.isNotBlank()) "\n${result.stderr}" else "").trimEnd())
                 }.toString()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 jsonError("execute_shell_command", e.message ?: "Unknown error", server = "Local Sandbox", command = cmd)
             }
@@ -252,6 +261,8 @@ class ShellToolProvider(
                     put("type", "file_read"); put("server", "Local Sandbox"); put("path", path)
                     put("content", content); put("lines", content.lines().size)
                 }.toString()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 jsonError("file_read", e.message ?: "Read failed", server = "Local Sandbox")
             }
@@ -540,6 +551,8 @@ class ShellToolProvider(
             // Read the file
             val rawContent = try {
                 backend.fileRead(path, 0, 0)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 return jsonError("file_edit", "read error: ${e.message}")
             }

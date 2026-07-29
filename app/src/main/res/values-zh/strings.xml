@@ -689,6 +689,14 @@
     <string name="input_tokens_cached_with_label">输入（缓存命中）：%1$d tokens</string>
     <string name="input_tokens_cache_not_reported">缓存明细：供应商未上报</string>
     <string name="output_tokens_with_label">输出：%1$d tokens</string>
+    <string name="round_usage_title">请求轮次（仅本地）</string>
+    <string name="round_usage_provider">第 %1$d 轮 · 输入 %2$d（缓存 %3$d）· 输出 %4$d · %5$d 毫秒</string>
+    <string name="round_usage_provider_cache_unavailable">第 %1$d 轮 · 输入 %2$d（供应商未上报缓存明细）· 输出 %3$d · %4$d 毫秒</string>
+    <string name="round_usage_provider_output_only">第 %1$d 轮 · 输入用量未知 · 输出 %2$d · %3$d 毫秒</string>
+    <string name="round_usage_provider_aggregate_only">第 %1$d 轮 · 总计 %2$d tokens（分项未知）· %3$d 毫秒</string>
+    <string name="round_usage_provider_unavailable">第 %1$d 轮 · 供应商未上报用量 · %2$d 毫秒</string>
+    <string name="round_usage_tools">线上工具 %1$d · Schema 估算 %2$d tokens · 注入结果 %3$d/%4$d 字符</string>
+    <string name="round_usage_tool_names">调用：%1$s</string>
     <string name="arguments_label">参数：</string>
     <string name="result_label">结果：</string>
 

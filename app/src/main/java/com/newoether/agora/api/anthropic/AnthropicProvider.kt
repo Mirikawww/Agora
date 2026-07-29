@@ -38,6 +38,7 @@ internal data class AnthropicRequest(
     val stream: Boolean = true,
     val thinking: AnthropicThinking? = null,
     @SerialName("output_config") val outputConfig: AnthropicOutputConfig? = null,
+    @SerialName("tool_choice") val toolChoice: AnthropicToolChoice? = null,
     val tools: List<AnthropicTool>? = null,
     val temperature: Float? = null,
     @SerialName("top_p") val topP: Float? = null,
@@ -52,6 +53,65 @@ internal data class AnthropicTool(
     @SerialName("input_schema") val inputSchema: JsonObject,
     @SerialName("cache_control") val cacheControl: AnthropicCacheControl? = null
 )
+
+@Serializable
+internal data class AnthropicToolChoice(
+    val type: String = "tool",
+    val name: String,
+)
+
+internal data class AnthropicThinkingCapabilities(
+    val supportsAdaptive: Boolean,
+    val supportsManual: Boolean,
+    val defaultsAdaptive: Boolean,
+    val supportsDisabled: Boolean,
+    val rejectsForcedToolChoice: Boolean,
+)
+
+/**
+ * Anthropic thinking modes are model capabilities, not a monotonic version flag. In particular,
+ * Mythos Preview still accepts manual budgets but rejects forced tool choice, whereas Mythos 5 is
+ * adaptive-only and does support forced tool choice.
+ */
+internal fun anthropicThinkingCapabilities(modelId: String): AnthropicThinkingCapabilities {
+    val normalized = modelId.lowercase().replace('.', '-').replace('_', '-')
+    val isMythosPreview = "mythos-preview" in normalized
+    val isMythos5 = !isMythosPreview && "mythos-5" in normalized
+    val isFable5 = "fable-5" in normalized
+    val isOpus5 = "opus-5" in normalized
+    val isSonnet5 = "sonnet-5" in normalized
+    val isOpus46 = "opus-4-6" in normalized
+    val isSonnet46 = "sonnet-4-6" in normalized
+    val isOpus47 = "opus-4-7" in normalized
+    val isOpus48 = "opus-4-8" in normalized
+    val adaptiveOnly =
+        isFable5 || isMythos5 || isOpus5 || isSonnet5 || isOpus47 || isOpus48
+    return AnthropicThinkingCapabilities(
+        supportsAdaptive =
+            isMythosPreview || adaptiveOnly || isOpus46 || isSonnet46,
+        supportsManual = !adaptiveOnly,
+        defaultsAdaptive =
+            isOpus5 || isSonnet5 || isFable5 || isMythos5 || isMythosPreview,
+        supportsDisabled = isOpus5 || isSonnet5,
+        rejectsForcedToolChoice = isMythosPreview,
+    )
+}
+
+internal fun ProviderConfig.toAnthropicToolChoice(
+    thinking: AnthropicThinking?,
+): AnthropicToolChoice? {
+    // Manual extended thinking cannot be combined with forced tool use. Adaptive thinking can,
+    // but Mythos Preview currently rejects forced choice regardless of thinking mode.
+    if (
+        thinking?.type == "enabled" ||
+        anthropicThinkingCapabilities(modelId).rejectsForcedToolChoice
+    ) {
+        return null
+    }
+    val forced = toolChoice as? ToolChoiceDirective.ForcedFunction ?: return null
+    if (tools.orEmpty().none { it.function.name == forced.name }) return null
+    return AnthropicToolChoice(name = forced.name)
+}
 
 @Serializable
 internal data class AnthropicCacheControl(
@@ -91,6 +151,28 @@ internal data class AnthropicThinking(
 internal data class AnthropicOutputConfig(
     val effort: String
 )
+
+internal fun ProviderConfig.toAnthropicThinking(): AnthropicThinking? {
+    val isLegacyClaude =
+        modelId == "claude-3-opus-20240229" ||
+            modelId == "claude-3-sonnet-20240229" ||
+            modelId == "claude-3-haiku-20240307"
+    if (!modelId.startsWith("claude") || isLegacyClaude) return null
+    val capabilities = anthropicThinkingCapabilities(modelId)
+    if (!thinkingEnabled) {
+        return AnthropicThinking(type = "disabled")
+            .takeIf { capabilities.defaultsAdaptive && capabilities.supportsDisabled }
+    }
+    val useAdaptive =
+        capabilities.supportsAdaptive && (!thinkingBudgetEnabled || !capabilities.supportsManual)
+    if (useAdaptive) {
+        return AnthropicThinking(type = "adaptive", display = "summarized")
+    }
+    val budget = (
+        if (thinkingBudgetEnabled) thinkingBudgetTokens else ThinkingLevels.DefaultBudgetTokens
+        ).coerceIn(1024, 128000)
+    return AnthropicThinking(type = "enabled", budgetTokens = budget, display = "summarized")
+}
 
 @Serializable
 internal data class AnthropicMessage(
@@ -224,29 +306,8 @@ class AnthropicProvider : LlmProvider {
             }
         }
 
-        // Claude thinking logic - all Claude models support thinking except the 3 legacy ones
-        val isLegacyClaude = modelName == "claude-3-opus-20240229" ||
-            modelName == "claude-3-sonnet-20240229" ||
-            modelName == "claude-3-haiku-20240307"
-        val supportsAdaptiveThinking = modelName.contains("4-6") ||
-            modelName.contains("4.6") ||
-            modelName.contains("4-7") ||
-            modelName.contains("4.7") ||
-            modelName.contains("4-8") ||
-            modelName.contains("4.8") ||
-            modelName.contains("fable", ignoreCase = true) ||
-            modelName.contains("mythos", ignoreCase = true)
-        val thinkingBudget = (
-            if (config.thinkingBudgetEnabled) config.thinkingBudgetTokens else ThinkingLevels.DefaultBudgetTokens
-        ).coerceIn(1024, 128000)
-        val thinking = if (config.thinkingEnabled && modelName.startsWith("claude") && !isLegacyClaude) {
-            if (supportsAdaptiveThinking && !config.thinkingBudgetEnabled) {
-                AnthropicThinking(type = "adaptive", display = "summarized")
-            } else {
-                AnthropicThinking(type = "enabled", budgetTokens = thinkingBudget, display = "summarized")
-            }
-        } else null
-        val outputConfig = if (config.thinkingEnabled && !config.thinkingBudgetEnabled && modelName.startsWith("claude") && !isLegacyClaude && supportsAdaptiveThinking) {
+        val thinking = config.toAnthropicThinking()
+        val outputConfig = if (thinking?.type == "adaptive") {
             AnthropicOutputConfig(effort = ThinkingLevels.anthropicEffort(config.thinkingLevel))
         } else null
 
@@ -265,6 +326,7 @@ class AnthropicProvider : LlmProvider {
             system = config.systemPrompt,
             thinking = thinking,
             outputConfig = outputConfig,
+            toolChoice = config.toAnthropicToolChoice(thinking),
             maxTokens = config.maxTokens ?: if (thinking?.budgetTokens != null) maxOf(thinking.budgetTokens + 1024, 4096) else 4096,
             tools = anthropicTools,
             temperature = config.temperature,

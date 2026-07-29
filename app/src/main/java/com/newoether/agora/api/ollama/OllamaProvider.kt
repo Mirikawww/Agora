@@ -39,7 +39,8 @@ internal data class OllamaMessage(
     val content: String = "",
     val thinking: String? = null,
     val images: List<String>? = null,
-    @SerialName("tool_calls") val toolCalls: List<OpenAiToolCall>? = null
+    @SerialName("tool_calls") val toolCalls: List<OpenAiToolCall>? = null,
+    @SerialName("tool_name") val toolName: String? = null,
 )
 
 @Serializable
@@ -61,9 +62,49 @@ internal data class OllamaModelInfo(
     val name: String
 )
 
+internal fun ChatMessage.toOllamaToolResultMessages(): List<OllamaMessage> {
+    val toolSegments = segments?.filter { it.type == "tool" }.orEmpty()
+    if (toolSegments.isNotEmpty()) {
+        return toolSegments.map { segment ->
+            OllamaMessage(
+                role = "tool",
+                content = segment.toolResult.orEmpty(),
+                toolName = segment.toolName,
+            )
+        }
+    }
+    return toolCall?.let {
+        listOf(
+            OllamaMessage(
+                role = "tool",
+                content = it.result,
+                toolName = it.toolName,
+            ),
+        )
+    }.orEmpty()
+}
+
+internal fun List<OpenAiToolCall>.toOllamaStreamToolCalls(): List<StreamEvent.ToolCallRequest> =
+    mapIndexedNotNull { index, toolCall ->
+        val name = toolCall.function?.name.orEmpty()
+        if (name.isEmpty()) return@mapIndexedNotNull null
+        val arguments = toolCall.function?.arguments?.let {
+            if (it is JsonPrimitive) it.content else it.toString()
+        }.orEmpty()
+        val id = toolCall.id ?: buildToolCallId("$name#$index", arguments)
+        StreamEvent.ToolCallRequest(id, name, arguments)
+    }
+
+internal fun OllamaStreamResponse.toUsageUpdate() = StreamEvent.UsageUpdate(
+    tokenCount = (promptEvalCount ?: 0) + (evalCount ?: 0),
+    promptTokens = promptEvalCount ?: 0,
+    completionTokens = evalCount ?: 0,
+)
+
 class OllamaProvider : LlmProvider {
     override val name: String = Constants.PROVIDER_OLLAMA
     override val defaultBaseUrl: String = ""
+    override val functionToolTransport: FunctionToolTransport = FunctionToolTransport.NATIVE_AUTO
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     override fun generateResponse(
@@ -125,20 +166,7 @@ class OllamaProvider : LlmProvider {
 
             // result_ messages carry the tool result(s)
             if (msg.id.startsWith(Constants.RESULT_MSG_PREFIX)) {
-                val toolSegs = msg.segments?.filter { it.type == "tool" }
-                if (!toolSegs.isNullOrEmpty()) {
-                    for (seg in toolSegs) {
-                        entries.add(OllamaMessage(
-                            role = "user",
-                            content = seg.toolResult ?: ""
-                        ))
-                    }
-                } else if (msg.toolCall != null) {
-                    entries.add(OllamaMessage(
-                        role = "user",
-                        content = msg.toolCall!!.result
-                    ))
-                }
+                entries += msg.toOllamaToolResultMessages()
                 return@flatMap entries
             }
 
@@ -219,12 +247,7 @@ class OllamaProvider : LlmProvider {
 
                                 // 2. Handle tool calls
                                 msg.toolCalls?.let { toolCalls ->
-                                    val calls = toolCalls.mapNotNull { tc ->
-                                        val id = tc.id ?: "${Constants.TOOL_CALL_ID_PREFIX}0"
-                                        val name = tc.function?.name ?: ""
-                                        val args = tc.function?.arguments?.let { if (it is kotlinx.serialization.json.JsonPrimitive) it.content else it.toString() } ?: ""
-                                        if (name.isNotEmpty()) StreamEvent.ToolCallRequest(id, name, args) else null
-                                    }
+                                    val calls = toolCalls.toOllamaStreamToolCalls()
                                     if (calls.size == 1) emit(calls.first())
                                     else if (calls.size > 1) emit(StreamEvent.ToolCallsRequest(calls))
                                 }
@@ -250,8 +273,7 @@ class OllamaProvider : LlmProvider {
                                     onText = { emit(StreamEvent.TextChunk(it)) },
                                     onThought = { emit(StreamEvent.ThoughtChunk(it)) }
                                 )
-                                val total = (response.promptEvalCount ?: 0) + (response.evalCount ?: 0)
-                                emit(StreamEvent.UsageUpdate(total))
+                                emit(response.toUsageUpdate())
                             }
                         } catch (e: Exception) {
                             DebugLog.e("AgoraAPI", "Parse error: ${e.message}")

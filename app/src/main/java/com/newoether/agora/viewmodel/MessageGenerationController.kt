@@ -21,6 +21,7 @@ import com.newoether.agora.model.SelectedAttachment
 import com.newoether.agora.util.Constants
 import com.newoether.agora.util.DebugLog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -112,7 +113,7 @@ class MessageGenerationController(
         val stopFinalization = if (session.isGenerating(currentId)) {
             session.stopConversation(currentId, releaseSendGate = false)
         } else {
-            null
+            session.pendingStopFinalization(currentId)
         }
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -121,60 +122,63 @@ class MessageGenerationController(
             // could resurrect the deleted row as a zombie/orphan after our DELETE.
             stopFinalization?.join()
 
-            // Recompute staleIds from the latest allMessages after join(),
-            // in case the message tree changed during finalization.
-            val allMsgs = allMessages.value
-            if (allMsgs.none { it.id == messageId }) return@launch  // already deleted during wait
-            val staleIds = linkedSetOf(messageId)
-            val queue = mutableListOf(messageId)
-            while (queue.isNotEmpty()) {
-                val pid = queue.removeAt(0)
-                allMsgs.filter { it.parentId == pid }.forEach {
-                    if (staleIds.add(it.id)) queue.add(it.id)
+            session.withInvalidatedPersistence(currentId) persistence@{
+                // Recompute staleIds from the latest allMessages after join(),
+                // in case the message tree changed during finalization.
+                val allMsgs = allMessages.value
+                if (allMsgs.none { it.id == messageId }) {
+                    return@persistence
                 }
-            }
-
-            val staleList = allMsgs.filter { it.id in staleIds }
-            convRepo.deleteMessageFiles(staleList)
-
-            // Delete embeddings for all cascaded messages
-            for (id in staleIds) {
-                convRepo.deleteEmbedding(id)
-            }
-
-            // DB delete
-            convRepo.deleteMessagesByIds(staleIds.toList())
-
-            // Update allMessages
-            allMessages.update { it.filter { m -> m.id !in staleIds } }
-
-            // Fix selectedChildren — remove entries where key or value is deleted.
-            // If a deleted message was the selected branch, switch to the next available sibling.
-            val remainingMsgs = allMessages.value
-            val newSelected = selectedChildren.value.toMutableMap()
-            var changed = false
-            for ((parentId, childId) in selectedChildren.value) {
-                // Remove entry if the parent itself was deleted
-                if (parentId != null && parentId in staleIds) {
-                    newSelected.remove(parentId)
-                    changed = true
-                    continue
-                }
-                if (childId in staleIds) {
-                    val siblings = remainingMsgs.filter {
-                        it.parentId == parentId &&
-                            !it.id.startsWith(Constants.TOOL_MSG_PREFIX) &&
-                            !it.id.startsWith(Constants.RESULT_MSG_PREFIX)
-                    }.sortedBy { it.timestamp }
-                    if (siblings.isNotEmpty()) {
-                        newSelected[parentId] = siblings.last().id
-                    } else {
-                        newSelected.remove(parentId)
+                val staleIds = linkedSetOf(messageId)
+                val queue = mutableListOf(messageId)
+                while (queue.isNotEmpty()) {
+                    val pid = queue.removeAt(0)
+                    allMsgs.filter { it.parentId == pid }.forEach {
+                        if (staleIds.add(it.id)) queue.add(it.id)
                     }
-                    changed = true
                 }
+
+                val staleList = allMsgs.filter { it.id in staleIds }
+                convRepo.deleteMessageFiles(staleList)
+
+                // Delete embeddings for all cascaded messages
+                for (id in staleIds) {
+                    convRepo.deleteEmbedding(id)
+                }
+
+                // DB delete
+                convRepo.deleteMessagesByIds(staleIds.toList())
+
+                // Update allMessages
+                allMessages.update { it.filter { m -> m.id !in staleIds } }
+
+                // Fix selectedChildren — remove entries where key or value is deleted.
+                // If a deleted message was the selected branch, switch to the next sibling.
+                val remainingMsgs = allMessages.value
+                val newSelected = selectedChildren.value.toMutableMap()
+                var changed = false
+                for ((parentId, childId) in selectedChildren.value) {
+                    if (parentId != null && parentId in staleIds) {
+                        newSelected.remove(parentId)
+                        changed = true
+                        continue
+                    }
+                    if (childId in staleIds) {
+                        val siblings = remainingMsgs.filter {
+                            it.parentId == parentId &&
+                                !it.id.startsWith(Constants.TOOL_MSG_PREFIX) &&
+                                !it.id.startsWith(Constants.RESULT_MSG_PREFIX)
+                        }.sortedBy { it.timestamp }
+                        if (siblings.isNotEmpty()) {
+                            newSelected[parentId] = siblings.last().id
+                        } else {
+                            newSelected.remove(parentId)
+                        }
+                        changed = true
+                    }
+                }
+                if (changed) selectedChildren.value = newSelected
             }
-            if (changed) selectedChildren.value = newSelected
         }
 
         return previewIds.size
@@ -224,17 +228,17 @@ class MessageGenerationController(
         isLoading.value = true
         session.markGenerating(myUiToken, currentId)
 
-        val regenJob = session.scope.launch {
+        val regenJob = session.scope.launch(start = CoroutineStart.LAZY) {
             // Register BEFORE the first suspension point. Until the job is in
             // jobsByConversation, stopConversation() cannot see it — so a Stop pressed during
             // the join below was silently ignored and this generation carried on anyway.
             // Safe to do this early: stopConversation() above already cancelled the previous
             // job, so attachJob's "cancel the one being replaced" branch is a no-op here.
             session.attachJob(currentId, coroutineContext[kotlinx.coroutines.Job]!!)
-            // Wait only for the short STOPPED DB finalization. The cancelled provider
-            // may still be unwinding, but it no longer owns the next generation path.
+            // Wait for the cancelled generation's authoritative STOPPED write so its final
+            // in-flight usage round cannot be overwritten by an older streaming snapshot.
             stopFinalization?.join()
-            val myPersistId = session.nextPersistId(currentId)
+            val myPersistId = session.beginPersistenceEpoch(currentId)
             try {
                 allMessages.value.find { it.id == parentId } ?: return@launch
 
@@ -290,6 +294,8 @@ class MessageGenerationController(
                 session.loadingChange(myUiToken, currentId, false)
             }
         }
+        session.attachJob(currentId, regenJob)
+        regenJob.start()
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -351,7 +357,10 @@ class MessageGenerationController(
                 modelName = currentActiveModel.value,
                 config = config,
                 ctx = genCtx,
-                generationJob = session.generationJob,
+                // The session's legacy last-started slot is global across conversations. Always
+                // pass this generation's own coroutine so stopping chat B cannot mark chat A as
+                // cancelled (and transcription observes the same correct owner).
+                generationJob = coroutineContext[Job],
                 callbacks = session.callbacksFor(uiToken, persistId, currentId)
             )
         } catch (e: CancellationException) {
@@ -376,12 +385,12 @@ class MessageGenerationController(
         // so the current conversation's generation gate disables per-message actions immediately.
         isLoading.value = true
         session.markGenerating(myUiToken, currentId)
-        val editJob = session.scope.launch {
+        val editJob = session.scope.launch(start = CoroutineStart.LAZY) {
             // Same as regenerate: register before the first suspension point so Stop can
             // actually reach this job while it waits.
             session.attachJob(currentId, coroutineContext[kotlinx.coroutines.Job]!!)
             stopFinalization?.join()
-            val myPersistId = session.nextPersistId(currentId)
+            val myPersistId = session.beginPersistenceEpoch(currentId)
             try {
             val messageToEdit = allMessages.value.find { it.id == messageId } ?: return@launch
             val newUserMessageId = UUID.randomUUID().toString()
@@ -432,6 +441,8 @@ class MessageGenerationController(
                 session.loadingChange(myUiToken, currentId, false)
             }
         }
+        session.attachJob(currentId, editJob)
+        editJob.start()
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -469,7 +480,9 @@ class MessageGenerationController(
             // Fresh send on an idle conversation must NOT cancel other chats.
             val stopFinalization = if (activeConv != null && session.isGenerating(activeConv)) {
                 session.stopConversation(activeConv, releaseSendGate = false)
-            } else null
+            } else {
+                activeConv?.let(session::pendingStopFinalization)
+            }
             // Set loading immediately so UI shows sending state during attachment processing
             isLoading.value = true
             val provisionalId = activeConv
@@ -486,7 +499,7 @@ class MessageGenerationController(
             }
 
             committed = true
-            val sendJob = session.scope.launch {
+            val sendJob = session.scope.launch(start = CoroutineStart.LAZY) {
                             var finishedConversationId: String? = null
                             var currentId: String? = null
                             try {
@@ -498,9 +511,9 @@ class MessageGenerationController(
                                                         if (preAttachId != null) {
                                                             session.attachJob(preAttachId, coroutineContext[Job]!!)
                                                         }
-                            // Wait only for the short STOPPED DB finalization. The cancelled provider
-                                                        // may still be unwinding, but it no longer owns the next generation path.
-                                                        stopFinalization?.join()
+                            // Wait for the cancelled generation's authoritative terminal write.
+                            // Replacement persistence ownership begins only after that job releases it.
+                                                         stopFinalization?.join()
                                                         val (allImages, attachmentMeta) = payloadBuilder.buildMessagePayload(application, images, attachments)
                                                         currentId = currentConversationId.value
                                                         val wasNewChat = isNewChatMode.value
@@ -512,13 +525,20 @@ class MessageGenerationController(
                                                             myUiToken = session.captureUiToken(newId)
                                                             session.markGenerating(myUiToken, newId)
                                                             convRepo.upsertConversation(ChatEntity(id = newId, title = appContext.getString(R.string.new_chat), modelId = currentActiveModel.value, systemPromptId = pendingSystemPromptId.value))
+                                                            // Bind the real id before publishing it
+                                                            // so an immediate Stop cannot observe
+                                                            // the id while its job registry is empty.
+                                                            session.attachJob(
+                                                                newId,
+                                                                coroutineContext[Job]!!,
+                                                            )
                                                             // Suppress the conversation-open auto-scroll BEFORE the id change triggers it.
                                                             onConversationCreatedBySend()
                                                             currentConversationId.value = newId
                                                             isNewChatMode.value = false
                                                             currentId = newId
                                                         }
-                                                        val boundConversationId = currentId!!
+                                                        val boundConversationId = currentId
                                                         finishedConversationId = boundConversationId
                                                         gateConversationId = boundConversationId
                                                         // Bind per-conversation ownership now that we have a real conversation id.
@@ -527,7 +547,7 @@ class MessageGenerationController(
                                                         }
                                                         session.markGenerating(myUiToken, boundConversationId)
                                                         session.attachJob(boundConversationId, coroutineContext[Job]!!)
-                                                        val myPersistId = session.nextPersistId(boundConversationId)
+                                                        val myPersistId = session.beginPersistenceEpoch(boundConversationId)
                                                         // Ensure drawer spinner maps to the real conversation id (new chats get id above).
                                                         session.generatingIdChange(myUiToken, boundConversationId)
                                             // Apply pending per-conversation settings if any (from Advanced dialog in new chat)
@@ -588,7 +608,7 @@ class MessageGenerationController(
                             )
 
                             val lastMsg = allMessages.value.find { it.id == modelMessageId }
-                                                        if (wasNewChat && settings.titleGenerationEnabled.value && session.generationJob?.isActive == true && lastMsg?.status != MessageStatus.ERROR) {
+                                                        if (wasNewChat && settings.titleGenerationEnabled.value && coroutineContext[Job]?.isActive == true && lastMsg?.status != MessageStatus.ERROR) {
                                                             generateTitle(boundConversationId)
                                                         }
                                                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -613,9 +633,21 @@ class MessageGenerationController(
                                                                                                                 finishedConversationId?.let { onGenerationFinished(it) }
                                                                                                             }
                                                                                                         }
-                                                    } // end launch
-                                                    // Job is already attached once the real conversation id is known (inside launch).
-                                                    // Do NOT attach again here with a provisional gateKey — that raced and cancelled.
+                                                     } // end launch
+                                                     // Register before start so Stop/delete-all can
+                                                     // cancel even before payload building or real id creation.
+                                                     if (preAttachId != null) {
+                                                         session.attachJob(preAttachId, sendJob)
+                                                     } else {
+                                                         session.attachProvisionalJob(sendJob)
+                                                     }
+                                                     sendJob.invokeOnCompletion {
+                                                         session.releaseSend(gateKey)
+                                                         if (gateConversationId != gateKey) {
+                                                             session.releaseSend(gateConversationId)
+                                                         }
+                                                     }
+                                                     sendJob.start()
         } finally {
             if (!committed) session.releaseSend(gateConversationId)
         }

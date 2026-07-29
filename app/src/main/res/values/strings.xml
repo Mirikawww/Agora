@@ -126,6 +126,14 @@
     <string name="input_tokens_cached_with_label">Input (cached): %1$d tokens</string>
     <string name="input_tokens_cache_not_reported">Cache split: Not reported by provider</string>
     <string name="output_tokens_with_label">Output: %1$d tokens</string>
+    <string name="round_usage_title">Request rounds (local only)</string>
+    <string name="round_usage_provider">Round %1$d · input %2$d (cached %3$d) · output %4$d · %5$d ms</string>
+    <string name="round_usage_provider_cache_unavailable">Round %1$d · input %2$d (cache split not reported) · output %3$d · %4$d ms</string>
+    <string name="round_usage_provider_output_only">Round %1$d · input usage unavailable · output %2$d · %3$d ms</string>
+    <string name="round_usage_provider_aggregate_only">Round %1$d · aggregate %2$d tokens (split unavailable) · %3$d ms</string>
+    <string name="round_usage_provider_unavailable">Round %1$d · provider usage unavailable · %2$d ms</string>
+    <string name="round_usage_tools">Wire tools %1$d · schema estimate %2$d tokens · result %3$d/%4$d chars injected</string>
+    <string name="round_usage_tool_names">Called: %1$s</string>
     <string name="user_tokens_with_label">Tokens: %1$d</string>
     <string name="about_ci_status">Build status</string>
     <string name="about_ci_running">Building #%1$d…</string>

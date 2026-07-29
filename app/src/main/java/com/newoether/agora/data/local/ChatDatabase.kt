@@ -112,7 +112,9 @@ data class MessageEntity(
     val thoughtTimeMs: Long? = null,
     val modelName: String? = null,
     val toolCallJson: String? = null,
-    val attachmentMeta: String? = null
+    val attachmentMeta: String? = null,
+    /** JSON list of local-only GenerationRoundUsage counters; never contains tool arguments/results. */
+    val roundUsageJson: String? = null,
 )
 
 @Dao
@@ -131,6 +133,9 @@ interface ChatDao {
 
     @Upsert
     suspend fun upsertMessage(message: MessageEntity)
+
+    @Upsert
+    suspend fun upsertMessages(messages: List<MessageEntity>)
 
     @Query("DELETE FROM conversations WHERE id = :conversationId")
     suspend fun deleteConversation(conversationId: String)
@@ -156,6 +161,28 @@ interface ChatDao {
     // Embeddings
     @Upsert
     suspend fun upsertEmbedding(embedding: EmbeddingEntity)
+
+    @Query("SELECT text FROM messages WHERE id = :messageId LIMIT 1")
+    suspend fun getMessageTextForEmbeddingGuard(messageId: String): String?
+
+    /**
+     * Atomically guards a delayed embedding write against message replacement/deletion.
+     *
+     * Embedding calculation may outlive the generation or edit that scheduled it. Keeping the
+     * source-text check and the upsert in one Room transaction prevents a delete or text update
+     * from slipping between those two operations and receiving an embedding for stale content.
+     */
+    @Transaction
+    suspend fun upsertEmbeddingIfMessageTextMatches(
+        embedding: EmbeddingEntity,
+        expectedMessageText: String,
+    ): Boolean {
+        if (getMessageTextForEmbeddingGuard(embedding.messageId) != expectedMessageText) {
+            return false
+        }
+        upsertEmbedding(embedding)
+        return true
+    }
 
     @Query("SELECT * FROM embeddings WHERE messageId = :messageId LIMIT 1")
     suspend fun getEmbedding(messageId: String): EmbeddingEntity?
@@ -210,7 +237,7 @@ abstract class ChatDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
 
     companion object {
-        const val CURRENT_VERSION = 16
+        const val CURRENT_VERSION = 17
         const val DB_NAME = "agora_db"
 
         val ALL_MIGRATIONS = listOf(
@@ -303,6 +330,11 @@ abstract class ChatDatabase : RoomDatabase() {
             object : Migration(15, 16) {
                 override fun migrate(db: SupportSQLiteDatabase) {
                     db.execSQL("ALTER TABLE messages ADD COLUMN cacheTelemetryAvailable INTEGER NOT NULL DEFAULT 0")
+                }
+            },
+            object : Migration(16, 17) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE messages ADD COLUMN roundUsageJson TEXT")
                 }
             }
         )

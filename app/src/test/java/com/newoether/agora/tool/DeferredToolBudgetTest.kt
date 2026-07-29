@@ -450,6 +450,85 @@ class DeferredToolBudgetTest {
     }
 
     @Test
+    fun `routed exact match cannot bypass final inline schema budget`() {
+        val compact = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("mode", buildJsonObject { put("type", "string") })
+            })
+        }
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("mode", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        repeat(4_000) { index -> add(JsonPrimitive("notion-mode-$index")) }
+                    })
+                })
+            })
+        }
+        val hugeNotionTool = ToolDefinition(
+            function = ToolFunction(
+                name = "notion_create_page",
+                description = "Create an exact Notion page.",
+                parameters = ToolParameters(properties = emptyMap(), rawSchema = compact),
+            ),
+            fullParameters = ToolParameters(properties = emptyMap(), rawSchema = full),
+        )
+
+        val plan = McpDeferredToolProvider.plan(
+            tools = listOf(hugeNotionTool),
+            contextTokens = 1_000_000,
+            currentText = "Create a Notion page",
+        )
+
+        assertTrue(plan.usesBroker)
+        assertTrue(plan.inlineTools.isEmpty())
+        assertEquals(CapabilityRouteMode.BROKER, plan.route.mode)
+        assertTrue(
+            "final inline schema cost=${plan.inlineSchemaTokens}",
+            plan.inlineSchemaTokens <= McpDeferredToolProvider.MAX_INLINE_SCHEMA_TOKENS,
+        )
+        assertTrue(plan.deferredTools.any { it.function.name == "notion_create_page" })
+    }
+
+    @Test
+    fun `oversized EAGER schema is preferred but remains broker reachable`() {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        repeat(4_000) { index -> add(JsonPrimitive("query-mode-$index")) }
+                    })
+                })
+            })
+        }
+        val hugeEager = ToolDefinition(
+            function = ToolFunction(
+                name = "foundational_search",
+                description = "Search a foundational source.",
+                parameters = ToolParameters(properties = emptyMap()),
+            ),
+            defer = DeferPolicy.EAGER,
+            fullParameters = ToolParameters(properties = emptyMap(), rawSchema = full),
+        )
+
+        val plan = McpDeferredToolProvider.plan(
+            tools = listOf(hugeEager),
+            contextTokens = 200_000,
+            currentText = "Research this substantive request",
+        )
+
+        assertEquals(CapabilityRouteMode.BROKER, plan.route.mode)
+        assertTrue(plan.inlineTools.isEmpty())
+        assertEquals(listOf("foundational_search"), plan.deferredTools.map { it.function.name })
+        assertTrue(plan.inlineSchemaTokens <= McpDeferredToolProvider.MAX_INLINE_SCHEMA_TOKENS)
+    }
+
+    @Test
     fun `search capsule stays bounded while inspect preserves a huge exact schema`() = runBlocking {
         val compact = buildJsonObject {
             put("type", "object")
@@ -493,7 +572,7 @@ class DeferredToolBudgetTest {
             """{"action":"search","query":"connector_huge","limit":1}""",
             ctx,
         )
-        val inspect = provider.execute(
+        var inspect = provider.execute(
             McpDeferredToolProvider.TOOL_BROKER,
             """{"action":"inspect","name":"connector_huge"}""",
             ctx,
@@ -502,7 +581,641 @@ class DeferredToolBudgetTest {
         assertTrue(search.length < 1_500)
         assertTrue(search.contains("\"inspect_for_required_constraints\":true"))
         assertFalse(search.contains("exact-mode-999"))
-        assertTrue(inspect.contains("exact-mode-999"))
+        val inspectedSchema = buildString {
+            while (true) {
+                val response = Json.parseToJsonElement(inspect).jsonObject
+                response["input_schema"]?.let {
+                    append(it)
+                    break
+                }
+                append(response.getValue("input_schema_json_chunk").jsonPrimitive.content)
+                val nextCursor = response["next_cursor"]?.jsonPrimitive?.int ?: break
+                inspect = provider.execute(
+                    McpDeferredToolProvider.TOOL_BROKER,
+                    """{"action":"inspect","name":"connector_huge","cursor":$nextCursor}""",
+                    ctx,
+                )
+            }
+        }
+        assertTrue(inspectedSchema.contains("exact-mode-999"))
+    }
+
+    @Test
+    fun `small inspect still returns the complete input schema once`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject {
+                    put("type", "string")
+                    put("minLength", 3)
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("query")) })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "small-inspect")
+        provider.prepare(
+            requestId = "small-inspect",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "small_inspect_tool",
+                        "A small exact schema.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "inspect the small tool",
+            recentTexts = emptyList(),
+        )
+
+        val inspect = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"inspect","name":"small_inspect_tool"}""",
+                ctx,
+            ),
+        ).jsonObject
+
+        assertEquals(full, inspect["input_schema"])
+        assertEquals(JsonPrimitive(true), inspect["complete"])
+        assertEquals("raw", inspect["section"]!!.jsonPrimitive.content)
+        assertFalse(inspect.containsKey("next_cursor"))
+        assertFalse(inspect.containsKey("input_schema_json_chunk"))
+    }
+
+    @Test
+    fun `large safe inspect defaults to the complete required section`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject {
+                    put("type", "string")
+                    put("format", "uri")
+                    put("pattern", "^https://")
+                })
+                put("optional_mode", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        repeat(4_000) { index -> add(JsonPrimitive("optional-mode-$index")) }
+                    })
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("query")) })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "required-section")
+        provider.prepare(
+            requestId = "required-section",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "large_safe_tool",
+                        "A large tool with a small required signature.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "use the large safe tool",
+            recentTexts = emptyList(),
+        )
+
+        val inspect = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"inspect","name":"large_safe_tool"}""",
+                ctx,
+            ),
+        ).jsonObject
+        val inspectedSchema = inspect["input_schema"]!!.jsonObject
+        val properties = inspectedSchema["properties"]!!.jsonObject
+
+        assertEquals("required", inspect["section"]!!.jsonPrimitive.content)
+        assertEquals("object", inspectedSchema["type"]!!.jsonPrimitive.content)
+        assertEquals(listOf("query"), inspectedSchema["required"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(setOf("query"), properties.keys)
+        assertEquals("uri", properties["query"]!!.jsonObject["format"]!!.jsonPrimitive.content)
+        assertEquals("^https://", properties["query"]!!.jsonObject["pattern"]!!.jsonPrimitive.content)
+        assertFalse(inspect.toString().contains("optional-mode-3999"))
+    }
+
+    @Test
+    fun `optional inspect returns only complete optional properties`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        repeat(4_000) { index -> add(JsonPrimitive("required-query-$index")) }
+                    })
+                })
+                put("limit", buildJsonObject {
+                    put("type", "integer")
+                    put("minimum", 1)
+                    put("maximum", 50)
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("query")) })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "optional-section")
+        provider.prepare(
+            requestId = "optional-section",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "large_optional_tool",
+                        "A large tool with one optional field.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "use the optional field",
+            recentTexts = emptyList(),
+        )
+
+        val inspect = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"inspect","name":"large_optional_tool","section":"optional"}""",
+                ctx,
+            ),
+        ).jsonObject
+        val inspectedSchema = inspect["input_schema"]!!.jsonObject
+        val properties = inspectedSchema["properties"]!!.jsonObject
+
+        assertEquals("optional", inspect["section"]!!.jsonPrimitive.content)
+        assertEquals(setOf("limit"), properties.keys)
+        assertEquals(1, properties["limit"]!!.jsonObject["minimum"]!!.jsonPrimitive.int)
+        assertEquals(50, properties["limit"]!!.jsonObject["maximum"]!!.jsonPrimitive.int)
+        assertFalse(inspect.toString().contains("required-query-3999"))
+    }
+
+    @Test
+    fun `optional inspect includes definitions used by optional properties`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject {
+                    put("enum", buildJsonArray {
+                        repeat(4_000) { index -> add(JsonPrimitive("required-padding-$index")) }
+                    })
+                })
+                put("filter", buildJsonObject { put("\$ref", "#/\$defs/Filter") })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("query")) })
+            put("\$defs", buildJsonObject {
+                put("Filter", buildJsonObject {
+                    put("type", "object")
+                    put("properties", buildJsonObject {
+                        put("value", buildJsonObject { put("type", "string") })
+                    })
+                })
+                put("Unused", buildJsonObject { put("const", "optional-unused") })
+            })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "optional-defs")
+        provider.prepare(
+            requestId = "optional-defs",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "optional_defs_tool",
+                        "A tool whose optional field uses a local definition.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "inspect optional definitions",
+            recentTexts = emptyList(),
+        )
+
+        val inspect = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"inspect","name":"optional_defs_tool","section":"optional"}""",
+                ctx,
+            ),
+        ).jsonObject
+        val inspectedSchema = inspect["input_schema"]!!.jsonObject
+
+        assertEquals(setOf("filter"), inspectedSchema["properties"]!!.jsonObject.keys)
+        assertEquals(setOf("Filter"), inspectedSchema["\$defs"]!!.jsonObject.keys)
+        assertFalse(inspect.toString().contains("optional-unused"))
+    }
+
+    @Test
+    fun `required inspect includes transitive local defs and omits unused defs`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("request", buildJsonObject {
+                    put("\$ref", "#/\$defs/Request")
+                })
+                put("padding", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        repeat(4_000) { index -> add(JsonPrimitive("padding-$index")) }
+                    })
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("request")) })
+            put("\$defs", buildJsonObject {
+                put("Request", buildJsonObject {
+                    put("type", "object")
+                    put("properties", buildJsonObject {
+                        put("mode", buildJsonObject {
+                            put("\$ref", "#/\$defs/Mode")
+                        })
+                    })
+                    put("required", buildJsonArray { add(JsonPrimitive("mode")) })
+                })
+                put("Mode", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        add(JsonPrimitive("safe"))
+                        add(JsonPrimitive("fast"))
+                    })
+                })
+                put("Unused", buildJsonObject {
+                    put("type", "string")
+                    put("const", "must-not-leak")
+                })
+            })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "defs-closure")
+        provider.prepare(
+            requestId = "defs-closure",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "defs_tool",
+                        "A tool whose required input uses local definitions.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "use the defs tool",
+            recentTexts = emptyList(),
+        )
+
+        val inspect = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"inspect","name":"defs_tool"}""",
+                ctx,
+            ),
+        ).jsonObject
+        val inspectedSchema = inspect["input_schema"]!!.jsonObject
+        val defs = inspectedSchema["\$defs"]!!.jsonObject
+
+        assertEquals(setOf("Request", "Mode"), defs.keys)
+        assertEquals(
+            "#/\$defs/Mode",
+            defs["Request"]!!.jsonObject["properties"]!!.jsonObject["mode"]!!
+                .jsonObject["\$ref"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            listOf("safe", "fast"),
+            defs["Mode"]!!.jsonObject["enum"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertFalse(inspect.toString().contains("must-not-leak"))
+    }
+
+    @Test
+    fun `required inspect closes legacy definitions refs`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("request", buildJsonObject { put("\$ref", "#/definitions/Request") })
+                put("padding", buildJsonObject {
+                    put("enum", buildJsonArray {
+                        repeat(4_000) { index -> add(JsonPrimitive("legacy-padding-$index")) }
+                    })
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("request")) })
+            put("definitions", buildJsonObject {
+                put("Request", buildJsonObject {
+                    put("type", "object")
+                    put("properties", buildJsonObject {
+                        put("title", buildJsonObject { put("type", "string") })
+                    })
+                    put("required", buildJsonArray { add(JsonPrimitive("title")) })
+                })
+                put("Unused", buildJsonObject { put("const", "legacy-unused") })
+            })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "definitions-closure")
+        provider.prepare(
+            requestId = "definitions-closure",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "legacy_definitions_tool",
+                        "A tool using legacy definitions.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "use legacy definitions",
+            recentTexts = emptyList(),
+        )
+
+        val inspect = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"inspect","name":"legacy_definitions_tool"}""",
+                ctx,
+            ),
+        ).jsonObject
+        val definitions = inspect["input_schema"]!!.jsonObject["definitions"]!!.jsonObject
+
+        assertEquals(setOf("Request"), definitions.keys)
+        assertEquals(
+            listOf("title"),
+            definitions["Request"]!!.jsonObject["required"]!!.jsonArray
+                .map { it.jsonPrimitive.content },
+        )
+        assertFalse(inspect.toString().contains("legacy-unused"))
+    }
+
+    @Test
+    fun `root combinators fall back to bounded raw inspect`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("oneOf", buildJsonArray {
+                add(buildJsonObject { put("required", buildJsonArray { add(JsonPrimitive("query")) }) })
+                add(buildJsonObject { put("required", buildJsonArray { add(JsonPrimitive("id")) }) })
+            })
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject { put("type", "string") })
+                put("id", buildJsonObject { put("type", "string") })
+                put("padding", buildJsonObject {
+                    put("enum", buildJsonArray {
+                        repeat(5_000) { index -> add(JsonPrimitive("combinator-padding-$index")) }
+                    })
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("query")) })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "root-combinator")
+        provider.prepare(
+            requestId = "root-combinator",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "root_combinator_tool",
+                        "A schema whose root semantics cannot be sectioned safely.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "inspect the combinator tool",
+            recentTexts = emptyList(),
+        )
+
+        val inspect = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"inspect","name":"root_combinator_tool"}""",
+                ctx,
+            ),
+        ).jsonObject
+
+        assertEquals("raw", inspect["section"]!!.jsonPrimitive.content)
+        assertTrue(inspect["input_schema_json_chunk"]!!.jsonPrimitive.content.contains("\"oneOf\""))
+        assertTrue(inspect.containsKey("next_cursor"))
+        assertFalse(inspect.containsKey("input_schema"))
+    }
+
+    @Test
+    fun `root local ref falls back to raw without an empty required schema`() = runBlocking {
+        val full = buildJsonObject {
+            put("\$ref", "#/\$defs/Input")
+            put("\$defs", buildJsonObject {
+                put("Input", buildJsonObject {
+                    put("type", "object")
+                    put("properties", buildJsonObject {
+                        put("query", buildJsonObject {
+                            put("type", "string")
+                            put("enum", buildJsonArray {
+                                repeat(2_000) { index -> add(JsonPrimitive("root-ref-$index")) }
+                            })
+                        })
+                    })
+                    put("required", buildJsonArray { add(JsonPrimitive("query")) })
+                })
+            })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "root-ref")
+        provider.prepare(
+            requestId = "root-ref",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "root_ref_tool",
+                        "A root-ref schema.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "inspect root ref",
+            recentTexts = emptyList(),
+        )
+
+        val rawResult = provider.execute(
+            McpDeferredToolProvider.TOOL_BROKER,
+            """{"action":"inspect","name":"root_ref_tool"}""",
+            ctx,
+        )
+        val inspect = Json.parseToJsonElement(rawResult).jsonObject
+
+        assertEquals("raw", inspect["section"]!!.jsonPrimitive.content)
+        assertTrue(inspect["input_schema_json_chunk"]!!.jsonPrimitive.content.contains("\"\$ref\""))
+        assertTrue(inspect.containsKey("next_cursor"))
+        assertTrue("inspect result chars=${rawResult.length}", rawResult.length < 16_000)
+    }
+
+    @Test
+    fun `external refs anywhere in a large schema fall back to raw`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject { put("type", "string") })
+                put("remote_filter", buildJsonObject {
+                    put("\$ref", "https://schemas.example.test/filter.json")
+                })
+                put("padding", buildJsonObject {
+                    put("enum", buildJsonArray {
+                        repeat(5_000) { index -> add(JsonPrimitive("external-ref-padding-$index")) }
+                    })
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("query")) })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "external-ref")
+        provider.prepare(
+            requestId = "external-ref",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "external_ref_tool",
+                        "A schema containing an external reference.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "inspect the external ref tool",
+            recentTexts = emptyList(),
+        )
+
+        val inspect = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"inspect","name":"external_ref_tool"}""",
+                ctx,
+            ),
+        ).jsonObject
+
+        assertEquals("raw", inspect["section"]!!.jsonPrimitive.content)
+        assertTrue(
+            inspect["input_schema_json_chunk"]!!.jsonPrimitive.content
+                .contains("https://schemas.example.test/filter.json"),
+        )
+        assertTrue(inspect.containsKey("next_cursor"))
+    }
+
+    @Test
+    fun `unresolved local refs in a large schema fall back to raw`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("query", buildJsonObject { put("\$ref", "#/\$defs/Missing") })
+                put("padding", buildJsonObject {
+                    put("enum", buildJsonArray {
+                        repeat(5_000) { index -> add(JsonPrimitive("missing-ref-padding-$index")) }
+                    })
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("query")) })
+            put("\$defs", buildJsonObject {
+                put("Present", buildJsonObject { put("type", "string") })
+            })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "missing-ref")
+        provider.prepare(
+            requestId = "missing-ref",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "missing_ref_tool",
+                        "A schema containing an unresolved local reference.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "inspect the missing ref tool",
+            recentTexts = emptyList(),
+        )
+
+        val inspect = Json.parseToJsonElement(
+            provider.execute(
+                McpDeferredToolProvider.TOOL_BROKER,
+                """{"action":"inspect","name":"missing_ref_tool"}""",
+                ctx,
+            ),
+        ).jsonObject
+
+        assertEquals("raw", inspect["section"]!!.jsonPrimitive.content)
+        assertTrue(
+            inspect["input_schema_json_chunk"]!!.jsonPrimitive.content
+                .contains("#/\$defs/Missing"),
+        )
+        assertTrue(inspect.containsKey("next_cursor"))
+    }
+
+    @Test
+    fun `raw inspect keeps max chars pagination valid and lossless`() = runBlocking {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("mode", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        repeat(1_000) { index -> add(JsonPrimitive("raw-mode-$index")) }
+                    })
+                })
+            })
+            put("required", buildJsonArray { add(JsonPrimitive("mode")) })
+        }
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "raw-lossless")
+        provider.prepare(
+            requestId = "raw-lossless",
+            allTools = listOf(
+                ToolDefinition(
+                    function = ToolFunction(
+                        "raw_lossless_tool",
+                        "A schema inspected through raw pages.",
+                        ToolParameters(properties = emptyMap(), rawSchema = full),
+                    ),
+                    defer = DeferPolicy.ALWAYS,
+                ),
+            ),
+            contextTokens = 200_000,
+            currentText = "inspect every raw page",
+            recentTexts = emptyList(),
+        )
+
+        val reconstructed = StringBuilder()
+        var cursor = 0
+        while (true) {
+            val page = Json.parseToJsonElement(
+                provider.execute(
+                    McpDeferredToolProvider.TOOL_BROKER,
+                    """{"action":"inspect","name":"raw_lossless_tool","section":"raw","cursor":$cursor,"max_chars":1000}""",
+                    ctx,
+                ),
+            ).jsonObject
+            val chunk = page["input_schema_json_chunk"]!!.jsonPrimitive.content
+            assertTrue(chunk.length <= 1_000)
+            assertEquals("raw", page["section"]!!.jsonPrimitive.content)
+            reconstructed.append(chunk)
+            val next = page["next_cursor"]?.jsonPrimitive?.int ?: break
+            assertTrue(next > cursor)
+            cursor = next
+        }
+
+        assertEquals(full.toString(), reconstructed.toString())
     }
 
     @Test
@@ -701,6 +1414,29 @@ class DeferredToolBudgetTest {
     }
 
     @Test
+    fun `broker inspect schema advertises every supported section`() {
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val ctx = GenerationContext(conversationId = "inspect-section-contract")
+        provider.prepare(
+            requestId = "inspect-section-contract",
+            allTools = listOf(tool("deferred_tool", defer = DeferPolicy.ALWAYS)),
+            contextTokens = 200_000,
+            currentText = "inspect the deferred tool",
+            recentTexts = emptyList(),
+        )
+
+        val brokerParameters = provider.definitions(ctx).single().function.parameters
+        val section = brokerParameters.rawSchema!!["properties"]!!
+            .jsonObject["section"]!!.jsonObject
+
+        assertTrue(brokerParameters.properties.containsKey("section"))
+        assertEquals(
+            listOf("required", "optional", "raw"),
+            section["enum"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+    }
+
+    @Test
     fun `custom MCP names keep broker manifest bounded while preserving server count`() {
         val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
         val tools = (1..100).map { index ->
@@ -761,9 +1497,176 @@ class DeferredToolBudgetTest {
     }
 
     @Test
+    fun `oversized NEVER schema fails instead of silently breaking final budget`() {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("mode", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        repeat(4_000) { index -> add(JsonPrimitive("mandatory-mode-$index")) }
+                    })
+                })
+            })
+        }
+        val mandatory = ToolDefinition(
+            function = ToolFunction(
+                name = "approval_gated",
+                description = "A native approval-gated capability.",
+                parameters = ToolParameters(properties = emptyMap()),
+            ),
+            defer = DeferPolicy.NEVER,
+            fullParameters = ToolParameters(properties = emptyMap(), rawSchema = full),
+        )
+
+        val error = try {
+            McpDeferredToolProvider.plan(
+                tools = listOf(mandatory),
+                contextTokens = 200_000,
+                currentText = "run the approval gated capability",
+            )
+            null
+        } catch (expected: IllegalArgumentException) {
+            expected
+        }
+
+        assertTrue(error?.message?.contains("final inline budget") == true)
+
+        val forcedError = try {
+            McpDeferredToolProvider.plan(
+                tools = listOf(mandatory.copy(defer = DeferPolicy.AUTO)),
+                contextTokens = 200_000,
+                currentText = "run the explicitly forced capability",
+                forcedDirectToolNames = setOf("approval_gated"),
+            )
+            null
+        } catch (expected: IllegalArgumentException) {
+            expected
+        }
+        assertTrue(forcedError?.message?.contains("final inline budget") == true)
+    }
+
+    @Test
+    fun `long numeric schema values cannot bypass final budgets`() {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("properties", buildJsonObject {
+                put("account_id", buildJsonObject {
+                    put("type", "string")
+                    put("enum", buildJsonArray {
+                        add(JsonPrimitive("9".repeat(10_000)))
+                    })
+                })
+            })
+        }
+        val numeric = ToolDefinition(
+            function = ToolFunction(
+                name = "numeric_lookup",
+                description = "Look up an exact numeric account.",
+                parameters = ToolParameters(properties = emptyMap()),
+            ),
+            fullParameters = ToolParameters(properties = emptyMap(), rawSchema = full),
+            defer = DeferPolicy.AUTO,
+        )
+
+        val plan = McpDeferredToolProvider.plan(
+            tools = listOf(numeric),
+            contextTokens = 200_000,
+            currentText = "numeric lookup",
+        )
+
+        assertTrue(plan.inlineTools.isEmpty())
+        assertEquals(listOf("numeric_lookup"), plan.deferredTools.map { it.function.name })
+        assertTrue(plan.wireSchemaTokens <= McpDeferredToolProvider.MAX_WIRE_SCHEMA_TOKENS)
+    }
+
+    @Test
+    fun `large whitespace schema value cannot bypass final character budgets`() {
+        val full = buildJsonObject {
+            put("type", "object")
+            put("description", " ".repeat(500_000))
+        }
+        val whitespace = ToolDefinition(
+            function = ToolFunction(
+                name = "whitespace_lookup",
+                description = "Look up a value.",
+                parameters = ToolParameters(properties = emptyMap()),
+            ),
+            fullParameters = ToolParameters(properties = emptyMap(), rawSchema = full),
+            defer = DeferPolicy.AUTO,
+        )
+
+        val provider = McpDeferredToolProvider { _, _, _ -> "{}" }
+        val plan = provider.prepare(
+            requestId = "request",
+            allTools = listOf(whitespace),
+            contextTokens = 200_000,
+            currentText = "whitespace lookup",
+            recentTexts = emptyList(),
+        )
+
+        assertTrue(plan.inlineTools.isEmpty())
+        assertEquals(
+            listOf("whitespace_lookup"),
+            plan.deferredTools.map { it.function.name },
+        )
+        val wireTools = plan.inlineTools + provider.definitions(
+            GenerationContext(
+                conversationId = "conversation",
+                capabilityRequestId = "request",
+            ),
+        )
+        assertTrue(
+            McpDeferredToolProvider.estimateWireSchemaChars(wireTools) <=
+                McpDeferredToolProvider.MAX_WIRE_SCHEMA_CHARS,
+        )
+    }
+
+    @Test
+    fun `forced name never overrides ALWAYS deferral`() {
+        val always = tool("always_remote", defer = DeferPolicy.ALWAYS)
+
+        val plan = McpDeferredToolProvider.plan(
+            tools = listOf(always),
+            contextTokens = 200_000,
+            currentText = "use always remote",
+            forcedDirectToolNames = setOf("always_remote"),
+        )
+
+        assertTrue(plan.inlineTools.isEmpty())
+        assertEquals(listOf("always_remote"), plan.deferredTools.map { it.function.name })
+        assertTrue(plan.usesBroker)
+    }
+
+    @Test
+    fun `MCP result pager remains directly callable in a large registry`() {
+        val plan = McpDeferredToolProvider.plan(
+            tools = (1..80).map { tool("remote_$it") } +
+                McpToolProvider.RESULT_PAGE_DEFINITION,
+            contextTokens = 200_000,
+            currentText = "hello",
+        )
+
+        assertTrue(
+            plan.inlineTools.any { it.function.name == McpToolProvider.RESULT_PAGE },
+        )
+        assertFalse(
+            plan.deferredTools.any { it.function.name == McpToolProvider.RESULT_PAGE },
+        )
+        assertTrue(plan.wireSchemaTokens <= McpDeferredToolProvider.MAX_WIRE_SCHEMA_TOKENS)
+    }
+
+    @Test
     fun `exact provider cap of protected tools fits without a broker`() {
-        val tools = (1..64).map {
-            tool("mandatory_$it", defer = DeferPolicy.NEVER)
+        val tools = (1..64).map { index ->
+            ToolDefinition(
+                function = ToolFunction(
+                    name = "m$index",
+                    description = "",
+                    parameters = ToolParameters(properties = emptyMap()),
+                ),
+                defer = DeferPolicy.NEVER,
+            )
         }
 
         val plan = McpDeferredToolProvider.plan(
@@ -776,6 +1679,8 @@ class DeferredToolBudgetTest {
         assertTrue(plan.deferredTools.isEmpty())
         assertFalse(plan.usesBroker)
         assertEquals(64, plan.wireToolCount)
+        assertTrue(plan.wireSchemaTokens > plan.inlineSchemaTokens)
+        assertTrue(plan.wireSchemaTokens <= McpDeferredToolProvider.MAX_WIRE_SCHEMA_TOKENS)
     }
 
     @Test

@@ -10,6 +10,7 @@ import com.newoether.agora.api.ToolParameters
 import com.newoether.agora.api.ToolProperty
 import com.newoether.agora.util.Constants
 import com.newoether.agora.viewmodel.GenerationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -245,6 +246,8 @@ class WebSearchToolProvider : ToolProvider {
                 put("query", query)
                 put("results", rawResults)
             }.toString()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             buildJsonObject {
                 put("type", "web_search")
@@ -279,6 +282,8 @@ class WebSearchToolProvider : ToolProvider {
                 put("truncated", fullText.length > text.length)
                 put("totalChars", fullText.length)
             }.toString()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             buildJsonObject {
                 put("type", "web_fetch")

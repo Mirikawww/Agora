@@ -11,7 +11,7 @@ import kotlin.math.ceil
  * Algorithm (per segment after splitting on whitespace/punctuation boundaries):
  *   - Pure whitespace: 0 (1 if structural: indentation / blank line)
  *   - CJK / Korean / Japanese: 1 char = 1 token
- *   - Numeric-only: always 1 token
+ *   - Numeric-only: conservatively about 3 digits per token
  *   - Short (≤3 chars): 1 token
  *   - Pure punctuation run: ceil(len / 2)
  *   - Extended Latin (German/French/Russian/etc.): ceil(len / rate)
@@ -44,6 +44,7 @@ object TokenEstimator {
     )
 
     private const val DEFAULT_CHARS_PER_TOKEN = 6.0
+    private const val NUMERIC_CHARS_PER_TOKEN = 3.0
     private const val SHORT_THRESHOLD         = 3
 
     fun estimate(text: String): Int {
@@ -70,8 +71,9 @@ object TokenEstimator {
         }
         // CJK: each code point is its own token
         if (CJK.containsMatchIn(seg)) return seg.codePointCount(0, seg.length)
-        // All digits: 1 token regardless of length
-        if (NUMERIC.matches(seg)) return 1
+        // Modern BPE vocabularies group only a few digits at a time. Treating an arbitrary-length
+        // number as one token lets numeric enum values bypass every schema budget.
+        if (NUMERIC.matches(seg)) return ceil(seg.length / NUMERIC_CHARS_PER_TOKEN).toInt()
         // Very short word
         if (seg.length <= SHORT_THRESHOLD) return 1
         // Pure punctuation run

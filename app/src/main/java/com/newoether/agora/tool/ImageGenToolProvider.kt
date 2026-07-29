@@ -9,6 +9,7 @@ import com.newoether.agora.api.ToolParameters
 import com.newoether.agora.api.ToolProperty
 import com.newoether.agora.util.DebugLog
 import com.newoether.agora.viewmodel.GenerationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -23,19 +24,33 @@ import java.util.UUID
 /**
  * Tool that generates images from a text prompt via an OpenAI-compatible
  * `/images/generations` endpoint (BYOK). The decoded image is written to
- * filesDir as `img_<uuid>.jpg` and its path is collected in [pending] so the
- * GenerationManager can attach it to the model message for inline display.
+ * filesDir as `img_<uuid>.jpg` and its path is collected per generation so the
+ * GenerationManager can attach it to the correct model message for inline display.
  */
 class ImageGenToolProvider(private val app: Application) : ToolProvider {
 
-    /** File paths of images produced since the last [drainImages]. Thread-safe. */
-    private val pending = java.util.Collections.synchronizedList(mutableListOf<String>())
+    private val pendingLock = Any()
+    private val pendingByRequest = mutableMapOf<String, MutableList<String>>()
 
-    /** Atomically take and clear the images generated so far. */
-    fun drainImages(): List<String> = synchronized(pending) {
-        val copy = pending.toList()
-        pending.clear()
-        copy
+    /** Records an image against exactly one generation. */
+    internal fun recordGeneratedImage(ctx: GenerationContext, path: String): Boolean {
+        val requestId = ctx.capabilityRequestId?.takeIf(String::isNotBlank) ?: return false
+        synchronized(pendingLock) {
+            pendingByRequest.getOrPut(requestId, ::mutableListOf).add(path)
+        }
+        return true
+    }
+
+    /** Atomically takes only the images produced by [requestId]. */
+    fun drainImages(requestId: String): List<String> = synchronized(pendingLock) {
+        pendingByRequest.remove(requestId)?.toList().orEmpty()
+    }
+
+    /** Discards any undrained results owned by a completed or cancelled generation. */
+    fun clearImages(requestId: String) {
+        synchronized(pendingLock) {
+            pendingByRequest.remove(requestId)
+        }
     }
 
     override fun definitions(ctx: GenerationContext): List<ToolDefinition> {
@@ -66,6 +81,12 @@ class ImageGenToolProvider(private val app: Application) : ToolProvider {
             ?: return err("no_prompt", null)
         val size = (args["size"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
             ?: ctx.imageGenSize.ifBlank { "1024x1024" }
+        if (ctx.capabilityRequestId.isNullOrBlank()) {
+            return err(
+                "missing_request_id",
+                "Image generation requires a generation-scoped request ID.",
+            )
+        }
 
         val apiKey = ctx.imageGenApiKey
         if (apiKey.isBlank()) return err("no_api_key", null)
@@ -131,7 +152,9 @@ class ImageGenToolProvider(private val app: Application) : ToolProvider {
                 if (!file.exists() || file.length() == 0L) {
                     return@withContext err("write_failed", "Failed to write image file.")
                 }
-                pending.add(file.absolutePath)
+                check(recordGeneratedImage(ctx, file.absolutePath)) {
+                    "Generation request ID disappeared before recording the image."
+                }
 
                 // Keep result small for the model, but explicit so UI can detect success.
                 buildJsonObject {
@@ -141,6 +164,8 @@ class ImageGenToolProvider(private val app: Application) : ToolProvider {
                     put("path", file.absolutePath)
                     put("bytes", bytes.size)
                 }.toString()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 DebugLog.e("ImageGenTool", "generate_image failed", e)
                 err("generation_error", e.message)

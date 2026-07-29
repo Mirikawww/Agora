@@ -312,14 +312,18 @@ class RagManager(
                 EmbeddingClient.computeEmbedding(toEmbed, apiKey, model.remoteModelName, baseUrl)
             }
             if (embedding != null) {
-                conversations.upsertEmbedding(EmbeddingEntity(
+                val stored = conversations.upsertEmbeddingIfMessageTextMatches(EmbeddingEntity(
                     messageId = messageId,
                     modelId = model.id,
                     embedding = EmbeddingIndexer.floatsToBytes(embedding),
                     chunkText = text.take(Constants.MAX_CHUNK_TEXT_LENGTH),
                     dimension = embedding.size
-                ))
-                DebugLog.d("AgoraVM", "RAG index: stored embedding (dim=${embedding.size}) for $messageId")
+                ), expectedMessageText = text)
+                if (stored) {
+                    DebugLog.d("AgoraVM", "RAG index: stored embedding (dim=${embedding.size}) for $messageId")
+                } else {
+                    DebugLog.d("AgoraVM", "RAG index: source changed or was deleted, dropping stale result for $messageId")
+                }
             }
         }
     }

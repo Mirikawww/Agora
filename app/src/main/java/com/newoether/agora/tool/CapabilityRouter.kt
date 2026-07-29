@@ -71,6 +71,7 @@ object CapabilityRouter {
         recentTexts: List<String>,
         tools: List<ToolDefinition>,
         topK: Int = 6,
+        recentSuccessfulToolNames: Set<String> = emptySet(),
     ): CapabilityRoute {
         if (tools.isEmpty()) {
             return CapabilityRoute(
@@ -94,7 +95,12 @@ object CapabilityRouter {
             )
         }
 
-        val ranked = rank(currentText, recentTexts, tools)
+        val ranked = rank(
+            query = currentText,
+            recentTexts = recentTexts,
+            tools = tools,
+            recentSuccessfulToolNames = recentSuccessfulToolNames,
+        )
         val selected = ranked.filter { it.score >= MIN_DIRECT_SCORE }.take(topK.coerceAtLeast(1))
         val currentLower = currentText.lowercase(Locale.ROOT)
         val matchedIntents = intentAliases.count { (_, aliases) ->
@@ -134,6 +140,7 @@ object CapabilityRouter {
         query: String,
         recentTexts: List<String>,
         tools: List<ToolDefinition>,
+        recentSuccessfulToolNames: Set<String> = emptySet(),
     ): List<RankedCapability> {
         val lowerQuery = query.lowercase(Locale.ROOT)
         val lowerRecent = recentTexts.takeLast(3).joinToString(" ").lowercase(Locale.ROOT)
@@ -160,6 +167,7 @@ object CapabilityRouter {
 
             score += queryWords.count { it.length >= 3 && haystack.contains(it) } * 2
             score += recentWords.count { it.length >= 4 && haystack.contains(it) }
+            if (tool.function.name in recentSuccessfulToolNames) score += RECENT_SUCCESS_SCORE
             RankedCapability(tool, score)
         }.sortedWith(
             compareByDescending<RankedCapability> { it.score }
@@ -184,6 +192,7 @@ object CapabilityRouter {
     }
 
     private const val MIN_DIRECT_SCORE = 4
+    private const val RECENT_SUCCESS_SCORE = 6
 }
 
 internal data class RankedCapability(

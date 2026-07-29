@@ -54,6 +54,8 @@ class ConversationRepository(
 
     suspend fun upsertMessage(entity: MessageEntity) = chatDao.upsertMessage(entity)
 
+    suspend fun upsertMessages(entities: List<MessageEntity>) = chatDao.upsertMessages(entities)
+
     suspend fun deleteMessagesByIds(ids: List<String>) = chatDao.deleteMessagesByIds(ids)
 
     suspend fun getMessagesByIds(ids: List<String>): List<MessageEntity> =
@@ -112,6 +114,11 @@ class ConversationRepository(
 
     suspend fun upsertEmbedding(entity: EmbeddingEntity) =
         chatDao.upsertEmbedding(entity)
+
+    suspend fun upsertEmbeddingIfMessageTextMatches(
+        entity: EmbeddingEntity,
+        expectedMessageText: String,
+    ): Boolean = chatDao.upsertEmbeddingIfMessageTextMatches(entity, expectedMessageText)
 
     /**
      * Wipe every conversation, message, attachment file, and embedding.

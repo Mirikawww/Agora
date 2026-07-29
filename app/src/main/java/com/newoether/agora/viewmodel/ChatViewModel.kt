@@ -43,6 +43,7 @@ import com.newoether.agora.model.AttachmentItem
 import com.newoether.agora.model.AttachmentMeta
 import com.newoether.agora.model.ChatConversation
 import com.newoether.agora.model.ChatMessage
+import com.newoether.agora.model.GenerationRoundUsage
 import com.newoether.agora.model.MessageSegment
 import com.newoether.agora.model.MessageStatus
 import com.newoether.agora.model.ModelId
@@ -640,7 +641,6 @@ class ChatViewModel(
         generatingInConversationId = _generatingInConversationId,
         allMessages = _allMessages,
         currentConversationId = _currentConversationId,
-        onIndexMessageForRag = ::indexMessageForRag,
         onCacheMessages = { cacheMessagesForModel(it, silent = true) },
     )
 
@@ -895,6 +895,13 @@ class ChatViewModel(
                                 cacheTelemetryAvailable = it.cacheTelemetryAvailable,
                                 completionTokens = it.completionTokens,
                                 ttftMs = it.ttftMs,
+                                roundUsage = it.roundUsageJson?.let { json ->
+                                    try {
+                                        Json.decodeFromString<List<GenerationRoundUsage>>(json)
+                                    } catch (_: Exception) {
+                                        emptyList()
+                                    }
+                                }.orEmpty(),
                                 status = it.status,
                                 participant = it.participant,
                                 timestamp = it.timestamp,
@@ -1338,11 +1345,16 @@ class ChatViewModel(
 
 
     fun deleteConversation(id: String) {
-        if (_currentConversationId.value == id) {
-            stopGeneration()
+        val stopFinalization = if (session.isGenerating(id)) {
+            session.stopConversation(id, releaseSendGate = false)
+        } else {
+            session.pendingStopFinalization(id)
         }
         viewModelScope.launch(Dispatchers.IO) {
-            convRepo.deleteConversation(id)
+            stopFinalization?.join()
+            session.withInvalidatedPersistence(id) {
+                convRepo.deleteConversation(id)
+            }
             if (_currentConversationId.value == id) createNewChat()
         }
     }
@@ -1355,10 +1367,14 @@ class ChatViewModel(
      * Stops any in-flight generation, wipes the chat DB, then returns UI to new-chat mode.
      */
     fun deleteAllConversations(onDone: ((Boolean) -> Unit)? = null) {
-        stopGeneration()
+        val stopFinalizations = session.stopAllConversations(releaseSendGate = false)
         viewModelScope.launch(Dispatchers.IO) {
             val ok = try {
-                convRepo.deleteAllConversations()
+                stopFinalizations.forEach { it.join() }
+                val conversationIds = convRepo.getAllConversationsList().map { it.id }
+                session.withAllInvalidatedPersistence(conversationIds) {
+                    convRepo.deleteAllConversations()
+                }
                 true
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -1439,8 +1455,7 @@ class ChatViewModel(
             return true
         }
         // Only queue when THIS conversation is already generating. Other conversations may generate in parallel.
-        val busyHere = convId != null && session.isGenerating(convId)
-        if (busyHere && convId != null) {
+        if (convId != null && session.isGenerating(convId)) {
             if (trimmed.isBlank() && attachments.isEmpty()) return false
             val item = QueuedMessage(conversationId = convId, text = trimmed, attachments = attachments)
             _messageQueues.value = messageQueueStore.enqueue(item).also { persistMessageQueues(it) }

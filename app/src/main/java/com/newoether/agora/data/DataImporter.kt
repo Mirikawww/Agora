@@ -224,7 +224,8 @@ class DataImporter(
                                 status = try { MessageStatus.valueOf(m.status) } catch (_: Exception) { MessageStatus.SUCCESS },
                                 participant = try { Participant.valueOf(m.participant) } catch (_: Exception) { Participant.MODEL },
                                 timestamp = m.timestamp, completedAt = m.completedAt, thoughtTimeMs = m.thoughtTimeMs,
-                                modelName = m.modelName, toolCallJson = m.toolCallJson, attachmentMeta = m.attachmentMeta)
+                                modelName = m.modelName, toolCallJson = m.toolCallJson,
+                                attachmentMeta = m.attachmentMeta, roundUsageJson = m.roundUsageJson)
                         }
                         // Restore image files from ZIP to app storage
                         val imagesDir = java.io.File(context.filesDir, "images")
@@ -564,7 +565,8 @@ class DataImporter(
         val thoughtTimeMs: Long? = null,
         val modelName: String? = null,
         val toolCallJson: String? = null,
-        val attachmentMeta: String? = null
+        val attachmentMeta: String? = null,
+        val roundUsageJson: String? = null,
     )
 
     @Serializable

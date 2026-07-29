@@ -145,7 +145,9 @@ class McpClientManager(
     suspend fun definitions(servers: List<McpServerConfig>): List<ToolDefinition> = coroutineScope {
         val active = servers.filter { it.enabled && it.url.isNotBlank() }
         active.forEach { desiredServers[it.id] = it }
-        closeRemoved(active.mapTo(mutableSetOf()) { it.id })
+        // The observed settings flow owns connection removal. A generation carries a request
+        // snapshot which may legitimately differ from another concurrent generation; treating
+        // that snapshot as the global desired set would close the other request's live servers.
         // Use the cached connection's tool list immediately — zero network latency on the
         // critical path before the LLM request. If a connection already exists we return
         // its known definitions right away and kick off a background refresh so the *next*
@@ -216,18 +218,29 @@ class McpClientManager(
 
     fun serverForTool(exposedName: String, servers: List<McpServerConfig>): McpServerConfig? {
         if (exposedName in BROKER_NAMES) return null
-        connections.values.firstOrNull { exposedName in it.exposedTools }?.config?.let { return it }
+        val activeServers = servers.filter { it.enabled && it.url.isNotBlank() }
+        val activeIds = activeServers.mapTo(mutableSetOf()) { it.id }
+        connections.values
+            .firstOrNull { it.config.id in activeIds && exposedName in it.exposedTools }
+            ?.config
+            ?.let { return it }
         // Built-in connectors use short stable names (todoist_add_tasks), not mcp_* hashes.
-        servers.firstOrNull { server ->
+        activeServers.firstOrNull { server ->
             server.id.startsWith("connector:") &&
                 exposedName.startsWith(sanitize(server.name).ifBlank { "connector" } + "_")
         }?.let { return it }
-        return servers.firstOrNull { exposedName.startsWith(serverPrefix(it)) }
+        return activeServers.firstOrNull { exposedName.startsWith(serverPrefix(it)) }
     }
 
     fun toolNeedsConfirmation(exposedName: String, servers: List<McpServerConfig>): Boolean {
+        val activeServers = servers.filter { it.enabled && it.url.isNotBlank() }
+        // Search all live connections regardless of current enabled state. A server can be
+        // disabled between when a generation started and when tool execution is evaluated; in
+        // that case the connection is still alive and its original requiresConfirmation setting
+        // should be honoured. Falling back to c.config when the server is no longer in
+        // activeServers (disabled mid-flight) preserves the old conservative behaviour.
         val connection = connections.values.firstOrNull { exposedName in it.exposedTools }
-        val server = connection?.let { c -> servers.firstOrNull { it.id == c.config.id } ?: c.config }
+        val server = connection?.let { c -> activeServers.firstOrNull { it.id == c.config.id } ?: c.config }
             ?: serverForTool(exposedName, servers)
             ?: return false
         // Built-in connectors are first-class tools (like github_request) — never show the
@@ -855,10 +868,6 @@ class McpClientManager(
     private fun selectServers(selector: String?, servers: List<McpServerConfig>): List<McpServerConfig> =
         selector?.let { value -> listOfNotNull(selectServer(value, servers)) } ?: servers.filter { it.enabled }
 
-    private suspend fun closeRemoved(activeIds: Set<String>) {
-        connections.keys.filter { it !in activeIds }.forEach { invalidate(it) }
-    }
-
     private fun errorJson(message: String) = buildJsonObject {
         put("isError", true)
         put("message", message)
@@ -879,10 +888,8 @@ class McpClientManager(
         private const val MAX_RECONNECT_ATTEMPTS = 5
         private const val BASE_RECONNECT_DELAY_MS = 1_000L
         private const val MAX_RECONNECT_DELAY_MS = 30_000L
-        // MCP tool schemas larger than this (chars) are stripped to top-level
-        // properties only before being sent to the LLM. Notion/Todoist schemas
-        // can reach 50 000+ chars; retaining only names/types/descriptions
-        // cuts them to <500 chars each without losing call correctness.
+        // MCP tool schemas larger than this are summarized for routing only. Any selected direct
+        // call restores the complete schema and must still pass the final wire token/character cap.
         private const val SCHEMA_TRIM_THRESHOLD = 2_000
 
         fun serverPrefix(server: McpServerConfig): String =

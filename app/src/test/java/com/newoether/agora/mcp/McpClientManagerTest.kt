@@ -4,7 +4,9 @@ import com.newoether.agora.api.ToolParameters
 import com.newoether.agora.data.McpServerConfig
 import com.newoether.agora.data.McpOAuthState
 import com.newoether.agora.data.McpToolConfig
+import com.newoether.agora.tool.McpToolProvider
 import com.newoether.agora.ui.settings.parseHeaders
+import com.newoether.agora.viewmodel.GenerationContext
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.runBlocking
@@ -17,12 +19,46 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetSocketAddress
 
 class McpClientManagerTest {
+    @Test
+    fun `MCP dispatch resolves the request server instead of a process-global definition cache`() {
+        val server = McpServerConfig(
+            id = "server-a",
+            name = "Workspace",
+            url = "https://example.com/mcp",
+        )
+        val exposedName = McpClientManager.exposedToolName(server, "search")
+        val provider = McpToolProvider(McpClientManager())
+
+        val handles = provider.handles(
+            exposedName,
+            GenerationContext(
+                conversationId = "conversation-a",
+                mcpEnabled = true,
+                mcpServers = listOf(server),
+            ),
+        )
+
+        assertTrue(handles)
+        assertFalse(
+            provider.handles(
+                exposedName,
+                GenerationContext(
+                    conversationId = "conversation-disabled",
+                    mcpEnabled = true,
+                    mcpServers = listOf(server.copy(enabled = false)),
+                ),
+            ),
+        )
+        provider.close()
+    }
+
     @Test
     fun `tool metadata does not change connection key`() {
         val server = McpServerConfig(name = "demo", url = "https://example.com/mcp")

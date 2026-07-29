@@ -25,6 +25,31 @@ data class MessageSegment(
     val durationMs: Long? = null
 )
 
+/** Local-only, text-free diagnostics for one provider request in a multi-tool generation. */
+@Serializable
+data class GenerationRoundUsage(
+    val roundIndex: Int,
+    val tokenCount: Int = 0,
+    val promptTokens: Int = 0,
+    val cachedPromptTokens: Int = 0,
+    val cacheTelemetryAvailable: Boolean = false,
+    val providerUsageReported: Boolean = false,
+    val promptUsageReported: Boolean = false,
+    val completionTokens: Int = 0,
+    val durationMs: Long = 0L,
+    val toolExecutionMs: Long = 0L,
+    val toolNames: List<String> = emptyList(),
+    val originalToolResultChars: Int = 0,
+    val injectedToolResultChars: Int = 0,
+    val brokerActions: List<String> = emptyList(),
+    val routeMode: String? = null,
+    val inlineSchemaTokens: Int = 0,
+    val brokerSchemaTokens: Int = 0,
+    /** Full provider-envelope estimate; falls back to component sums for older saved rows. */
+    val wireSchemaTokens: Int = 0,
+    val wireToolCount: Int = 0,
+)
+
 object ToolCallDisplayModes {
     const val TIMELINE = "timeline"
     const val GROUPED_TIMELINE = "grouped_timeline"
@@ -66,6 +91,8 @@ data class ChatMessage(
     val completionTokens: Int = 0,
     /** Time-to-first-token in ms (client-side). 0 = not measured. */
     val ttftMs: Long = 0L,
+    /** Per-request usage retained locally; contains counters and tool names, never arguments/results. */
+    val roundUsage: List<GenerationRoundUsage> = emptyList(),
     val status: MessageStatus = MessageStatus.SUCCESS, // Default to SUCCESS for old messages
     val participant: Participant,
     val timestamp: Long = System.currentTimeMillis(),

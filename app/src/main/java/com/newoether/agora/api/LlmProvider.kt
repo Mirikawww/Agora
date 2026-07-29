@@ -42,6 +42,11 @@ sealed class StreamEvent {
     data class Retrying(val attempt: Int, val maxAttempts: Int) : StreamEvent()
 }
 
+/** Provider-neutral request directive for native function selection. */
+sealed interface ToolChoiceDirective {
+    data class ForcedFunction(val name: String) : ToolChoiceDirective
+}
+
 data class ProviderConfig(
     val apiKey: String,
     val modelId: String,
@@ -56,6 +61,7 @@ data class ProviderConfig(
     val fastEnabled: Boolean = false,
     val baseUrl: String? = null,
     val tools: List<ToolDefinition>? = null,
+    val toolChoice: ToolChoiceDirective? = null,
     val userPrepend: String? = null,
     val userPostpend: String? = null,
     val includeImages: Boolean = true,
@@ -87,9 +93,10 @@ enum class DeferPolicy {
     NEVER,
 
     /**
-     * Inline on substantive requests even without a lexical match, but defer for a trivial chat
-     * turn such as a greeting or acknowledgement. Use for small, high-frequency tools whose
-     * discovery round costs more than their schemas.
+     * Prefer inline on substantive requests even without a lexical match, but defer for a trivial
+     * chat turn such as a greeting or acknowledgement. A complete schema that cannot fit the final
+     * wire budget remains broker-reachable instead of silently breaking that hard token bound.
+     * Use for small, high-frequency tools whose discovery round costs more than their schemas.
      */
     EAGER,
 
@@ -181,6 +188,7 @@ data class OpenAiChatRequest(
     /** OpenAI-only cache-routing fingerprint. Null for compatible providers. */
     @SerialName("prompt_cache_key") val promptCacheKey: String? = null,
     val tools: List<ToolDefinition>? = null,
+    @SerialName("tool_choice") val toolChoice: OpenAiToolChoice? = null,
     @SerialName("reasoning_effort") val reasoningEffort: String? = null,
     val reasoning: OpenAiReasoning? = null,
     val plugins: List<OpenAiPlugin>? = null,
@@ -207,6 +215,17 @@ data class OpenAiReasoning(
 @Serializable
 data class OpenAiStreamOptions(
     @SerialName("include_usage") val includeUsage: Boolean = true
+)
+
+@Serializable
+data class OpenAiToolChoice(
+    val type: String = "function",
+    val function: OpenAiToolChoiceFunction,
+)
+
+@Serializable
+data class OpenAiToolChoiceFunction(
+    val name: String,
 )
 
 @Serializable
@@ -446,9 +465,33 @@ class PendingToolCall(
     val args: StringBuilder = StringBuilder()
 )
 
+/**
+ * Maximum function-tool protocol supported by a provider family.
+ *
+ * Model-catalog support is intersected with this transport capability. Request-specific
+ * restrictions (for example Anthropic forced choice while thinking) may still downgrade it.
+ */
+enum class FunctionToolTransport {
+    /** No schema upload or native tool-call event path (on-device llama.cpp). */
+    NONE,
+
+    /** Native tool calls, but no protocol-level forced function selection (Ollama). */
+    NATIVE_AUTO,
+
+    /** Native tool calls plus a provider-level forced function directive. */
+    NATIVE_CHOICE,
+}
+
+internal fun supportsFunctionTools(
+    modelCatalogSupportsTools: Boolean,
+    transport: FunctionToolTransport,
+): Boolean = modelCatalogSupportsTools && transport != FunctionToolTransport.NONE
+
 interface LlmProvider {
     val name: String
     val defaultBaseUrl: String
+    val functionToolTransport: FunctionToolTransport
+        get() = FunctionToolTransport.NATIVE_CHOICE
 
     fun generateResponse(
         messages: List<ChatMessage>,

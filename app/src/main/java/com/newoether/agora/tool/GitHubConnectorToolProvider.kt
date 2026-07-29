@@ -7,6 +7,7 @@ import com.newoether.agora.api.ToolParameters
 import com.newoether.agora.api.ToolProperty
 import com.newoether.agora.util.DebugLog
 import com.newoether.agora.viewmodel.GenerationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -108,6 +109,8 @@ class GitHubConnectorToolProvider : ToolProvider {
                         put("body", clipped)
                     }.toString()
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 DebugLog.e("GitHubConnector", "github_request failed", e)
                 buildJsonObject {

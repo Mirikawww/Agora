@@ -1,6 +1,7 @@
 package com.newoether.agora.api.local
 
 import com.newoether.agora.api.*
+import com.newoether.agora.api.util.prepareMessages
 
 import android.content.Context
 import com.newoether.agora.R
@@ -20,6 +21,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.coroutineContext
 
+internal fun localUsageUpdate(generatedTokens: Int) = StreamEvent.UsageUpdate(
+    tokenCount = generatedTokens,
+    completionTokens = generatedTokens,
+)
+
 class LocalProvider(
     private val context: Context,
     private val settings: SettingsRepository
@@ -32,6 +38,7 @@ class LocalProvider(
 
     override val name: String = Constants.PROVIDER_LOCAL
     override val defaultBaseUrl: String = ""
+    override val functionToolTransport: FunctionToolTransport = FunctionToolTransport.NONE
 
     private var currentEngine: LlamaChatEngine? = null
     private val engineLock = Mutex()
@@ -55,7 +62,12 @@ class LocalProvider(
 
         // Build template messages, collecting images per-message with <__media__> markers
         val imagePaths = mutableListOf<String>()
-        val templateMessages = buildTemplateMessages(messages, config.systemPrompt, imagePaths)
+        val validatedMessages = prepareMessages(messages, config.maxContextWindow)
+        val templateMessages = buildTemplateMessages(
+            validatedMessages,
+            config.systemPrompt,
+            imagePaths,
+        )
         val hasImages = imagePaths.isNotEmpty()
 
         // Try native chat template first, fall back to ChatML
@@ -153,7 +165,9 @@ class LocalProvider(
             return@flow
         }
 
-        emit(StreamEvent.UsageUpdate(totalTokens))
+        // llama.cpp exposes generated-token count only. Report it as completion usage while
+        // leaving prompt/cache fields unavailable instead of presenting a misleading 0/0 split.
+        emit(localUsageUpdate(totalTokens))
     }.flowOn(Dispatchers.IO)
 
     private fun formatGenerationError(

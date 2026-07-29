@@ -38,8 +38,50 @@ internal data class ApiGenerateContentRequest(
 
 @Serializable
 internal data class ApiToolConfig(
-    @SerialName("includeServerSideToolInvocations") val includeServerSideToolInvocations: Boolean = false
+    @SerialName("includeServerSideToolInvocations")
+    val includeServerSideToolInvocations: Boolean = false,
+    @SerialName("functionCallingConfig")
+    val functionCallingConfig: ApiFunctionCallingConfig? = null,
 )
+
+@Serializable
+internal data class ApiFunctionCallingConfig(
+    val mode: String = "ANY",
+    @SerialName("allowedFunctionNames") val allowedFunctionNames: List<String>,
+)
+
+internal fun ProviderConfig.toGeminiFunctionCallingConfig(): ApiFunctionCallingConfig? {
+    val forced = toolChoice as? ToolChoiceDirective.ForcedFunction ?: return null
+    if (tools.orEmpty().none { it.function.name == forced.name }) return null
+    return ApiFunctionCallingConfig(allowedFunctionNames = listOf(forced.name))
+}
+
+internal data class GeminiToolCompatibility(
+    val codeExecutionEnabled: Boolean,
+    val googleSearchEnabled: Boolean,
+    val includeServerSideToolInvocations: Boolean,
+)
+
+/**
+ * Agora currently persists client function calls, but not Gemini's opaque server-side tool context.
+ * Prefer client functions whenever both surfaces are requested. Enabling Gemini 3 tool-context
+ * circulation without losslessly replaying every returned part/id/signature makes the next request
+ * invalid, while this deterministic degradation keeps the requested client capability usable.
+ */
+internal fun effectiveGeminiToolCompatibility(
+    modelId: String,
+    hasFunctionTools: Boolean,
+    codeExecutionEnabled: Boolean,
+    googleSearchEnabled: Boolean,
+): GeminiToolCompatibility {
+    val hasBuiltIns = codeExecutionEnabled || googleSearchEnabled
+    val keepBuiltIns = !hasFunctionTools || !hasBuiltIns
+    return GeminiToolCompatibility(
+        codeExecutionEnabled = codeExecutionEnabled && keepBuiltIns,
+        googleSearchEnabled = googleSearchEnabled && keepBuiltIns,
+        includeServerSideToolInvocations = false,
+    )
+}
 
 @Serializable
 internal data class ApiGenerationConfig(
@@ -293,12 +335,21 @@ class GeminiProvider : LlmProvider {
             ApiRequestContent(parts = listOf(ApiRequestPart(text = config.systemPrompt)))
         } else null
 
-        val tools = mutableListOf<ApiTool>()
-        if (config.codeExecutionEnabled) tools.add(ApiTool(codeExecution = JsonObject(emptyMap())))
-        if (config.googleSearchEnabled) tools.add(ApiTool(googleSearch = JsonObject(emptyMap())))
-
         // Add memory function declarations as a separate tool entry
         val functionDeclarations = config.tools?.map(ToolDefinition::toGeminiFunctionDeclaration)
+        val compatibility = effectiveGeminiToolCompatibility(
+            modelId = cleanModelName,
+            hasFunctionTools = !functionDeclarations.isNullOrEmpty(),
+            codeExecutionEnabled = config.codeExecutionEnabled,
+            googleSearchEnabled = config.googleSearchEnabled,
+        )
+        val tools = mutableListOf<ApiTool>()
+        if (compatibility.codeExecutionEnabled) {
+            tools.add(ApiTool(codeExecution = JsonObject(emptyMap())))
+        }
+        if (compatibility.googleSearchEnabled) {
+            tools.add(ApiTool(googleSearch = JsonObject(emptyMap())))
+        }
         if (!functionDeclarations.isNullOrEmpty()) {
             tools.add(ApiTool(functionDeclarations = functionDeclarations))
         }
@@ -320,10 +371,16 @@ class GeminiProvider : LlmProvider {
             else -> null
         }
 
-        val hasBuiltInTools = tools.any { it.codeExecution != null || it.googleSearch != null }
-        val hasFunctionDeclarations = tools.any { it.functionDeclarations != null }
-        val toolConfig = if (hasBuiltInTools && hasFunctionDeclarations) {
-            ApiToolConfig(includeServerSideToolInvocations = true)
+        val functionCallingConfig = config.toGeminiFunctionCallingConfig()
+        val toolConfig = if (
+            functionCallingConfig != null ||
+            compatibility.includeServerSideToolInvocations
+        ) {
+            ApiToolConfig(
+                functionCallingConfig = functionCallingConfig,
+                includeServerSideToolInvocations =
+                    compatibility.includeServerSideToolInvocations,
+            )
         } else null
 
         val hasGenParams = config.temperature != null || config.maxTokens != null || config.topP != null

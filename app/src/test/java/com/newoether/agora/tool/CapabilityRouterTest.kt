@@ -110,6 +110,24 @@ class CapabilityRouterTest {
     }
 
     @Test
+    fun `recent successful tool gives an ambiguous follow-up a deterministic soft boost`() {
+        val tools = listOf(
+            tool("todoist_add_tasks", "Create one or more Todoist tasks."),
+            tool("notion_create_page", "Create a page in Notion."),
+        )
+
+        val route = CapabilityRouter.route(
+            currentText = "再加一条",
+            recentTexts = emptyList(),
+            tools = tools,
+            recentSuccessfulToolNames = setOf("todoist_add_tasks"),
+        )
+
+        assertEquals(CapabilityRouteMode.DIRECT, route.mode)
+        assertEquals(listOf("todoist_add_tasks"), route.selectedToolNames)
+    }
+
+    @Test
     fun `acknowledgements and short emoji turns stay broker only`() {
         val tools = listOf(
             tool("web_search", "Search current information on the web."),

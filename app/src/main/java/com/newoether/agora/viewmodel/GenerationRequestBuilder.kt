@@ -5,6 +5,7 @@ package com.newoether.agora.viewmodel
 import android.content.Context
 
 import com.newoether.agora.R
+import com.newoether.agora.api.supportsFunctionTools
 
 import com.newoether.agora.data.ConversationSettings
 
@@ -270,6 +271,13 @@ class GenerationRequestBuilder(
             providerFast = settings.modelFastSupport.value[providerModelId],
 
         )
+        val functionToolsSupported = supportsFunctionTools(
+            modelCatalogSupportsTools = capabilities.tools,
+            transport = providerRegistry.getInstance(providerName).functionToolTransport,
+        )
+        val imageGenToolEnabled =
+            (settings.imageGenEnabled.value || forceSnapshot.imageGen) &&
+                settings.imageGenModel.value?.contains(":") == true
 
         val config = GenerationConfig(
 
@@ -282,12 +290,16 @@ class GenerationRequestBuilder(
 
             effectiveSystemPrompt = run {
                 var prompt = resolvedSystemPrompt.orEmpty()
-                if (forceSnapshot.webSearch) {
-                    val instr = "You MUST call the web_search tool to research before answering. Do not answer from memory alone."
+                if (forceSnapshot.webSearch && functionToolsSupported) {
+                    val instr = FORCED_WEB_SEARCH_INSTRUCTION
                     prompt = if (prompt.isBlank()) instr else prompt + "\n\n" + instr
                 }
-                if (forceSnapshot.imageGen) {
-                    val instr = "You MUST call the generate_image tool to create the requested image(s). Do not only describe the image in text."
+                if (
+                    forceSnapshot.imageGen &&
+                    functionToolsSupported &&
+                    imageGenToolEnabled
+                ) {
+                    val instr = FORCED_IMAGE_GEN_INSTRUCTION
                     prompt = if (prompt.isBlank()) instr else prompt + "\n\n" + instr
                 }
                 prompt.ifBlank { null }
@@ -325,7 +337,7 @@ class GenerationRequestBuilder(
 
             presencePenalty = effectiveSettings.presencePenalty,
 
-            toolsSupported = capabilities.tools,
+            toolsSupported = functionToolsSupported,
 
             contextTokens = capabilities.contextTokens
 
@@ -364,7 +376,7 @@ class GenerationRequestBuilder(
 
             webSearchBaseUrl = settings.webSearchBaseUrl.value,
 
-            imageGenEnabled = (settings.imageGenEnabled.value || forceSnapshot.imageGen) && settings.imageGenModel.value?.contains(":") == true,
+            imageGenEnabled = imageGenToolEnabled,
             imageGenApiKey = resolveImageGenApiKey(),
             imageGenBaseUrl = resolveImageGenBaseUrl(),
             imageGenModel = resolveImageGenModelId(),

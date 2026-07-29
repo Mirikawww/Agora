@@ -1,7 +1,10 @@
 package com.newoether.agora.tool
 
 import com.newoether.agora.viewmodel.GenerationContext
+import io.mockk.coEvery
 import io.mockk.mockk
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -78,6 +81,25 @@ class RagToolProviderTest {
         assertTrue(provider.handles("list_conversations"))
         assertTrue(provider.handles("read_conversation"))
         assertFalse(provider.handles("web_search"))
+    }
+
+    @Test
+    fun execute_whenRepositoryIsCancelled_propagatesCancellation() {
+        val repository =
+            mockk<com.newoether.agora.data.repository.ConversationRepository>()
+        coEvery { repository.getAllConversationsList() } throws
+            CancellationException("user stopped")
+        val cancellableProvider = RagToolProvider(repository)
+
+        assertThrows(CancellationException::class.java) {
+            runBlocking {
+                cancellableProvider.execute(
+                    "list_conversations",
+                    "{}",
+                    GenerationContext(accessPastConversations = true),
+                )
+            }
+        }
     }
 }
 

@@ -3,6 +3,8 @@ package com.newoether.agora.ui.chat.message
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -70,7 +72,7 @@ internal fun MessageInfoDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.message_info), fontWeight = FontWeight.Bold) },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 val bodyStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 20.sp)
                 Text(stringResource(R.string.time_with_label, dateString), style = bodyStyle)
                 if (message.participant == Participant.MODEL) {
@@ -107,6 +109,90 @@ internal fun MessageInfoDialog(
                     if (message.tokenCount > 0) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(stringResource(R.string.total_tokens, message.tokenCount), style = bodyStyle)
+                    }
+                    if (message.roundUsage.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            stringResource(R.string.round_usage_title),
+                            fontWeight = FontWeight.SemiBold,
+                            style = bodyStyle,
+                        )
+                        message.roundUsage.forEach { round ->
+                            Spacer(modifier = Modifier.height(8.dp))
+                            if (round.promptUsageReported && round.cacheTelemetryAvailable) {
+                                Text(
+                                    stringResource(
+                                        R.string.round_usage_provider,
+                                        round.roundIndex,
+                                        round.promptTokens,
+                                        round.cachedPromptTokens,
+                                        round.completionTokens,
+                                        round.durationMs,
+                                    ),
+                                    style = bodyStyle,
+                                )
+                            } else if (round.promptUsageReported) {
+                                Text(
+                                    stringResource(
+                                        R.string.round_usage_provider_cache_unavailable,
+                                        round.roundIndex,
+                                        round.promptTokens,
+                                        round.completionTokens,
+                                        round.durationMs,
+                                    ),
+                                    style = bodyStyle,
+                                )
+                            } else if (round.completionTokens > 0) {
+                                Text(
+                                    stringResource(
+                                        R.string.round_usage_provider_output_only,
+                                        round.roundIndex,
+                                        round.completionTokens,
+                                        round.durationMs,
+                                    ),
+                                    style = bodyStyle,
+                                )
+                            } else if (round.providerUsageReported) {
+                                Text(
+                                    stringResource(
+                                        R.string.round_usage_provider_aggregate_only,
+                                        round.roundIndex,
+                                        round.tokenCount,
+                                        round.durationMs,
+                                    ),
+                                    style = bodyStyle,
+                                )
+                            } else {
+                                Text(
+                                    stringResource(
+                                        R.string.round_usage_provider_unavailable,
+                                        round.roundIndex,
+                                        round.durationMs,
+                                    ),
+                                    style = bodyStyle,
+                                )
+                            }
+                            Text(
+                                stringResource(
+                                    R.string.round_usage_tools,
+                                    round.wireToolCount,
+                                    round.wireSchemaTokens.takeIf { it > 0 }
+                                        ?: (round.inlineSchemaTokens + round.brokerSchemaTokens),
+                                    round.injectedToolResultChars,
+                                    round.originalToolResultChars,
+                                ),
+                                style = bodyStyle,
+                            )
+                            if (round.toolNames.isNotEmpty()) {
+                                Text(
+                                    stringResource(
+                                        R.string.round_usage_tool_names,
+                                        round.toolNames.joinToString(", "),
+                                    ),
+                                    style = bodyStyle,
+                                )
+                            }
+                        }
                     }
                 } else if (message.participant == Participant.USER) {
                     val tokenCount = com.newoether.agora.util.TokenEstimator.estimate(message.text)

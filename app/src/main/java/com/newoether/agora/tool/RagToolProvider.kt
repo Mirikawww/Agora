@@ -14,6 +14,7 @@ import com.newoether.agora.model.Participant
 import com.newoether.agora.util.Constants
 import com.newoether.agora.util.DebugLog
 import com.newoether.agora.viewmodel.GenerationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -226,6 +227,8 @@ class RagToolProvider(
                 put("query", query)
                 put("results", resultArray)
             }.toString()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             buildJsonObject {
                 put("type", "search_conversations")
@@ -271,6 +274,8 @@ class RagToolProvider(
                     }
                 }
             }.toString()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             buildJsonObject {
                 put("type", "list_conversations")
@@ -334,6 +339,8 @@ class RagToolProvider(
                     }
                 }
             }.toString()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             buildJsonObject {
                 put("type", "read_conversation")

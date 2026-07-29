@@ -26,6 +26,15 @@ import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
+internal fun ProviderConfig.toOpenAiToolChoice(): OpenAiToolChoice? = when (val directive = toolChoice) {
+    is ToolChoiceDirective.ForcedFunction -> directive
+        .takeIf { forced -> tools.orEmpty().any { it.function.name == forced.name } }
+        ?.let { forced ->
+            OpenAiToolChoice(function = OpenAiToolChoiceFunction(forced.name))
+        }
+    null -> null
+}
+
 abstract class BaseOpenAiProvider : LlmProvider {
 
     protected val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
@@ -103,6 +112,7 @@ abstract class BaseOpenAiProvider : LlmProvider {
             stream = true,
             streamOptions = OpenAiStreamOptions(includeUsage = true),
             tools = config.tools,
+            toolChoice = config.toOpenAiToolChoice(),
             temperature = config.temperature,
             maxTokens = config.maxTokens,
             topP = config.topP,
