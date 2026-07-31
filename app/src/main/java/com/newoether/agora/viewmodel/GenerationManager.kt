@@ -2,6 +2,7 @@ package com.newoether.agora.viewmodel
 
 import android.app.Application
 import com.newoether.agora.util.DebugLog
+import com.newoether.agora.util.TimingLog
 import com.newoether.agora.util.ToolLoopBudget
 import com.newoether.agora.api.GenerationError
 import com.newoether.agora.api.FunctionToolTransport
@@ -537,7 +538,10 @@ class GenerationManager(
     ): Triple<List<ChatMessage>, ProviderConfig, ToolExposurePlan?> {
         val t_buildApiPath = System.currentTimeMillis()
         val dbMessages = conversations.getMessagesForConversationSnapshot(conversationId)
-        android.util.Log.d("AgoraTiming", "buildApiPath: getMessages took ${System.currentTimeMillis() - t_buildApiPath}ms msgs=${dbMessages.size}")
+        TimingLog.mark {
+            "buildApiPath: getMessages took ${System.currentTimeMillis() - t_buildApiPath}ms " +
+                "msgs=${dbMessages.size}"
+        }
         val pathEntities = mutableListOf<MessageEntity>()
         var currId: String? = parentId
         while (currId != null) {
@@ -641,7 +645,10 @@ class GenerationManager(
             modelCatalogSupportsTools = config.toolsSupported,
             transport = provider.functionToolTransport,
         )
-        android.util.Log.d("AgoraTiming", "buildApiPath: pathBuild took ${System.currentTimeMillis() - t_pathBuild}ms expanded=${expanded.size} path=${currentPath.size}")
+        TimingLog.mark {
+            "buildApiPath: pathBuild took ${System.currentTimeMillis() - t_pathBuild}ms " +
+                "expanded=${expanded.size} path=${currentPath.size}"
+        }
         val forcedTools = forcedDirectToolNames(ctx)
         if (!functionToolsSupported && forcedTools.isNotEmpty()) {
             // Text-only families (local llama.cpp) and tool-disabled Ollama models deliberately
@@ -669,7 +676,9 @@ class GenerationManager(
             val githubTools = githubConnectorToolProvider.definitions(ctx)
             val t0 = System.currentTimeMillis()
             mcpTools = mcpToolProvider.refresh(ctx)
-            DebugLog.d("AgoraTiming", "mcpToolProvider.refresh took ${System.currentTimeMillis() - t0}ms, tools=${mcpTools.size}")
+            TimingLog.mark {
+                "mcpToolProvider.refresh took ${System.currentTimeMillis() - t0}ms tools=${mcpTools.size}"
+            }
             builtinTools = memoryTools + webSearchTool + ragTool + imageGenTool +
                 personalizationTools + balanceTools + askTools + skillsTools + githubTools +
                 shellTool + fileTool
@@ -677,6 +686,7 @@ class GenerationManager(
             val userTexts = currentPath
                 .filter { it.participant == Participant.USER }
                 .map { it.text }
+            val t1 = System.currentTimeMillis()
             mcpDeferredToolProvider.prepare(
                 requestId = ctx.capabilityRequestId ?: conversationId,
                 allTools = toolPool,
@@ -685,7 +695,15 @@ class GenerationManager(
                 recentTexts = userTexts.dropLast(1).takeLast(3),
                 recentSuccessfulToolNames = ToolRoutingHistory.recentSuccessfulToolNames(currentPath),
                 forcedDirectToolNames = forcedTools,
-            ).let { plan ->
+            ).also { plan ->
+                // This step is pure CPU over every enabled tool schema, so it is the one most
+                // likely to regress silently as a user adds connectors.
+                TimingLog.mark {
+                    "capability prepare took ${System.currentTimeMillis() - t1}ms " +
+                        "pool=${toolPool.size} inline=${plan.inlineTools.size} " +
+                        "deferred=${plan.deferredTools.size} route=${plan.route.mode}"
+                }
+            }.let { plan ->
                 if (
                     toolPool.isEmpty() &&
                     config.providerName == Constants.PROVIDER_GOOGLE
@@ -713,14 +731,16 @@ class GenerationManager(
         } else {
             exposure.inlineTools + mcpDeferredToolProvider.definitions(ctx)
         }
-        DebugLog.d(
-            "AgoraTiming",
+        // The token estimate is deliberately computed inside the lambda: building this message
+        // eagerly tokenized the entire wire tool surface on every request, including release
+        // builds where DebugLog then discards the string.
+        DebugLog.d("AgoraTiming") {
             "tools: builtin=${builtinTools.size} mcp=${mcpTools.size} " +
                 "route=${exposure?.route?.mode ?: "unsupported"} " +
                 "deferred=${exposure?.deferredTools?.size ?: 0} " +
                 "supported=$functionToolsSupported transport=${provider.functionToolTransport} total=${allTools.size} " +
                 "(~${McpDeferredToolProvider.estimateSchemaTokens(allTools)} tok)"
-        )
+        }
         val geminiCompatibility = if (config.providerName == Constants.PROVIDER_GOOGLE) {
             effectiveGeminiToolCompatibility(
                 modelId = config.modelId,
@@ -763,6 +783,7 @@ class GenerationManager(
             // tick while the upstream keeps generating (and billing).
             streamTag = conversationId
         )
+        TimingLog.since(t_buildApiPath) { "buildApiPath: total" }
         return Triple(currentPath, providerConfig, exposure)
     }
 

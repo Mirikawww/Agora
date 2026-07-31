@@ -165,7 +165,10 @@ class McpClientManager(
                     // Slow path: must connect first (only happens once per server).
                     runCatching { refreshTools(connection(server)).let(::remoteDefinitions) }.getOrDefault(emptyList())
                 }
-                android.util.Log.d("AgoraTiming", "MCP definitions [${server.name}] took ${System.currentTimeMillis() - t}ms cached=${existing != null} tools=${defs.size}")
+                com.newoether.agora.util.TimingLog.mark {
+                    "MCP definitions [${server.name}] took ${System.currentTimeMillis() - t}ms " +
+                        "cached=${existing != null} tools=${defs.size}"
+                }
                 defs
             }
         }.awaitAll().flatten()

@@ -773,14 +773,28 @@ class McpDeferredToolProvider(
         }
 
         fun estimateWireSchemaTokens(tools: List<ToolDefinition>): Int =
-            wireSchemaEnvelopes(tools)
-                .maxOfOrNull { TokenEstimator.estimate(it.toString()) }
-                ?: 0
+            estimateWireSchema(tools).tokens
 
         fun estimateWireSchemaChars(tools: List<ToolDefinition>): Int =
-            wireSchemaEnvelopes(tools)
-                .maxOfOrNull { it.toString().length }
-                ?: 0
+            estimateWireSchema(tools).chars
+
+        /**
+         * Measures tokens and characters in one pass.
+         *
+         * The admission loop below probes every candidate against both budgets. Asking for them
+         * separately rebuilt and re-serialized all three provider envelopes twice per candidate,
+         * which is the dominant remaining cost once the tokenizer itself is cheap.
+         */
+        fun estimateWireSchema(tools: List<ToolDefinition>): WireSchemaEstimate {
+            var tokens = 0
+            var chars = 0
+            wireSchemaEnvelopes(tools).forEach { envelope ->
+                val serialized = envelope.toString()
+                tokens = maxOf(tokens, TokenEstimator.estimate(serialized))
+                chars = maxOf(chars, serialized.length)
+            }
+            return WireSchemaEstimate(tokens = tokens, chars = chars)
+        }
 
         /** Gemini-native tool objects exist even when no function definition is present. */
         fun estimateNativeToolEnvelopeTokens(
@@ -823,18 +837,26 @@ class McpDeferredToolProvider(
                 }
                 .sortedBy { it.function.name }
             val directComplete = directEligible.map { it.withCompleteSchema() }
-            val totalSchemaTokens = estimateSchemaTokens(directComplete)
-            val totalSchemaChars = estimateSchemaChars(directComplete)
-            val directWireSchemaTokens = estimateWireSchemaTokens(directComplete)
-            val directWireSchemaChars = estimateWireSchemaChars(directComplete)
+            // Measuring the complete registry is the single most expensive step in a generation's
+            // critical path: it serializes and tokenizes every full MCP schema, which for a couple
+            // of connectors is hundreds of kilobytes. Each measurement is therefore lazy, so the
+            // cheap structural predicates below can short-circuit it away entirely — a 65-tool
+            // Todoist+Notion registry is routed on a list size, never on a tokenizer pass.
+            val totalSchemaChars by lazy(LazyThreadSafetyMode.NONE) { estimateSchemaChars(directComplete) }
+            val directWireSchemaChars by lazy(LazyThreadSafetyMode.NONE) { estimateWireSchemaChars(directComplete) }
+            val totalSchemaTokens by lazy(LazyThreadSafetyMode.NONE) { estimateSchemaTokens(directComplete) }
+            val directWireSchemaTokens by lazy(LazyThreadSafetyMode.NONE) { estimateWireSchemaTokens(directComplete) }
+            // Character budgets are checked before their token equivalents. They bound the same
+            // registry an order of magnitude more cheaply, so an oversized pool never reaches the
+            // tokenizer at all. `mustRoute` is a boolean, so operand order cannot change routing.
             val mustRoute = tools.any { it.defer == DeferPolicy.ALWAYS } ||
                 (trivialNoToolTurn && tools.any { it.defer == DeferPolicy.EAGER }) ||
                 directEligible.size >= LARGE_REGISTRY_TOOLS ||
                 directEligible.size > MAX_WIRE_TOOLS ||
-                totalSchemaTokens > ROUTING_TRIGGER_SCHEMA_TOKENS ||
                 totalSchemaChars > MAX_INLINE_SCHEMA_CHARS ||
-                directWireSchemaTokens > MAX_WIRE_SCHEMA_TOKENS ||
-                directWireSchemaChars > MAX_WIRE_SCHEMA_CHARS
+                directWireSchemaChars > MAX_WIRE_SCHEMA_CHARS ||
+                totalSchemaTokens > ROUTING_TRIGGER_SCHEMA_TOKENS ||
+                directWireSchemaTokens > MAX_WIRE_SCHEMA_TOKENS
 
             if (!mustRoute) {
                 val route = CapabilityRoute(
@@ -897,7 +919,7 @@ class McpDeferredToolProvider(
             // Reserve one of the provider's 64 slots for the broker. If an impossible registry
             // contains too many protected items, fail explicitly instead of silently hiding one.
             val inlineLimit = if (hasUnprotectedTools) MAX_WIRE_TOOLS - 1 else MAX_WIRE_TOOLS
-            fun wireTokensFor(inlineTools: List<ToolDefinition>): Int {
+            fun wireEstimateFor(inlineTools: List<ToolDefinition>): WireSchemaEstimate {
                 val inlineNames = inlineTools.mapTo(mutableSetOf()) { it.function.name }
                 val remaining = tools.filter { it.function.name !in inlineNames }
                 val wireTools = if (remaining.isEmpty()) {
@@ -905,17 +927,7 @@ class McpDeferredToolProvider(
                 } else {
                     inlineTools + brokerDefinition(remaining)
                 }
-                return estimateWireSchemaTokens(wireTools)
-            }
-            fun wireCharsFor(inlineTools: List<ToolDefinition>): Int {
-                val inlineNames = inlineTools.mapTo(mutableSetOf()) { it.function.name }
-                val remaining = tools.filter { it.function.name !in inlineNames }
-                val wireTools = if (remaining.isEmpty()) {
-                    inlineTools
-                } else {
-                    inlineTools + brokerDefinition(remaining)
-                }
-                return estimateWireSchemaChars(wireTools)
+                return estimateWireSchema(wireTools)
             }
 
             val protectedComplete = protected
@@ -931,16 +943,15 @@ class McpDeferredToolProvider(
                 "Required direct tool schemas serialize to $inlineSchemaChars characters, " +
                     "exceeding the $MAX_INLINE_SCHEMA_CHARS-character final inline budget."
             }
-            val protectedWireSchemaTokens = wireTokensFor(protectedComplete)
-            require(protectedWireSchemaTokens <= MAX_WIRE_SCHEMA_TOKENS) {
+            val protectedWire = wireEstimateFor(protectedComplete)
+            require(protectedWire.tokens <= MAX_WIRE_SCHEMA_TOKENS) {
                 "Required direct tools plus the capability broker cost " +
-                    "$protectedWireSchemaTokens serialized tokens, exceeding the " +
+                    "${protectedWire.tokens} serialized tokens, exceeding the " +
                     "$MAX_WIRE_SCHEMA_TOKENS-token final wire budget."
             }
-            val protectedWireSchemaChars = wireCharsFor(protectedComplete)
-            require(protectedWireSchemaChars <= MAX_WIRE_SCHEMA_CHARS) {
+            require(protectedWire.chars <= MAX_WIRE_SCHEMA_CHARS) {
                 "Required direct tools plus the capability broker serialize to " +
-                    "$protectedWireSchemaChars characters, exceeding the " +
+                    "${protectedWire.chars} characters, exceeding the " +
                     "$MAX_WIRE_SCHEMA_CHARS-character final wire budget."
             }
             val admittedWithinBudget = buildList {
@@ -959,15 +970,19 @@ class McpDeferredToolProvider(
                         val candidateInlineTokens = inlineSchemaTokens + candidateTokens
                         val candidateChars = estimateSchemaChars(listOf(candidate))
                         val candidateInlineChars = inlineSchemaChars + candidateChars
-                        val candidateWireTokens =
-                            wireTokensFor(protectedComplete + toList() + candidate)
-                        val candidateWireChars =
-                            wireCharsFor(protectedComplete + toList() + candidate)
+                        // The wire probe is the expensive half of admission, so let the two cheap
+                        // inline budgets reject a candidate before it is ever built.
                         if (
-                            candidateInlineTokens <= MAX_INLINE_SCHEMA_TOKENS &&
-                            candidateInlineChars <= MAX_INLINE_SCHEMA_CHARS &&
-                            candidateWireTokens <= MAX_WIRE_SCHEMA_TOKENS &&
-                            candidateWireChars <= MAX_WIRE_SCHEMA_CHARS
+                            candidateInlineTokens > MAX_INLINE_SCHEMA_TOKENS ||
+                            candidateInlineChars > MAX_INLINE_SCHEMA_CHARS
+                        ) {
+                            return@forEach
+                        }
+                        val candidateWire =
+                            wireEstimateFor(protectedComplete + toList() + candidate)
+                        if (
+                            candidateWire.tokens <= MAX_WIRE_SCHEMA_TOKENS &&
+                            candidateWire.chars <= MAX_WIRE_SCHEMA_CHARS
                         ) {
                             add(candidate)
                             inlineSchemaTokens = candidateInlineTokens
@@ -996,18 +1011,16 @@ class McpDeferredToolProvider(
             } else {
                 estimateSchemaTokens(listOf(finalBroker))
             }
-            val wireSchemaTokens = estimateWireSchemaTokens(
+            val finalWire = estimateWireSchema(
                 if (finalBroker == null) inline else inline + finalBroker,
             )
+            val wireSchemaTokens = finalWire.tokens
             check(wireSchemaTokens <= MAX_WIRE_SCHEMA_TOKENS) {
                 "Final serialized tool surface costs $wireSchemaTokens tokens, exceeding the " +
                     "$MAX_WIRE_SCHEMA_TOKENS-token wire budget."
             }
-            val wireSchemaChars = estimateWireSchemaChars(
-                if (finalBroker == null) inline else inline + finalBroker,
-            )
-            check(wireSchemaChars <= MAX_WIRE_SCHEMA_CHARS) {
-                "Final serialized tool surface is $wireSchemaChars characters, exceeding the " +
+            check(finalWire.chars <= MAX_WIRE_SCHEMA_CHARS) {
+                "Final serialized tool surface is ${finalWire.chars} characters, exceeding the " +
                     "$MAX_WIRE_SCHEMA_CHARS-character wire budget."
             }
             return ToolExposurePlan(
@@ -1182,6 +1195,12 @@ class McpDeferredToolProvider(
             }.toString()
     }
 }
+
+/** Token and character cost of one serialized tool surface, measured in a single pass. */
+data class WireSchemaEstimate(
+    val tokens: Int,
+    val chars: Int,
+)
 
 data class ToolExposurePlan(
     val route: CapabilityRoute,
