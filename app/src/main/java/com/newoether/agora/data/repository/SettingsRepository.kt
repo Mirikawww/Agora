@@ -66,6 +66,7 @@ class SettingsRepository(
     val thinkingBudgetTokens: StateFlow<Int> = hot(settingsManager.thinkingBudgetTokens, 4096)
     val fastEnabled: StateFlow<Boolean> = hot(settingsManager.fastEnabled, false)
     val providerBaseUrls: StateFlow<Map<String, String>> = hot(settingsManager.providerBaseUrls, emptyMap())
+    val providerProtocols: StateFlow<Map<String, String>> = hot(settingsManager.providerProtocols, emptyMap())
     val providerBalanceConfigs: StateFlow<Map<String, ProviderBalanceConfig>> = hot(settingsManager.providerBalanceConfigs, emptyMap())
     val titleGenerationEnabled: StateFlow<Boolean> = hot(settingsManager.titleGenerationEnabled, true)
     val titleGenerationModel: StateFlow<String?> = hot(settingsManager.titleGenerationModel, null)
@@ -528,6 +529,7 @@ class SettingsRepository(
     fun setMaxContextWindow(window: Int) = scope.launch { settingsManager.saveMaxContextWindow(window) }
     fun setVisualizeContextRollout(enabled: Boolean) = scope.launch { settingsManager.saveVisualizeContextRollout(enabled) }
     fun setProviderBaseUrl(provider: String, url: String) = scope.launch { settingsManager.saveProviderBaseUrl(provider, url) }
+    fun setProviderProtocol(provider: String, protocol: String) = scope.launch { settingsManager.saveProviderProtocol(provider, protocol) }
     fun setProviderBalanceConfig(provider: String, config: ProviderBalanceConfig) = scope.launch { settingsManager.saveProviderBalanceConfig(provider, config) }
     fun setTitleGenerationEnabled(enabled: Boolean) = scope.launch { settingsManager.saveTitleGenerationEnabled(enabled) }
     fun setTitleGenerationModel(model: String?) = scope.launch { settingsManager.saveTitleGenerationModel(model) }

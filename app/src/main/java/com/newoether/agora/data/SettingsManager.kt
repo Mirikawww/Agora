@@ -37,7 +37,8 @@ data class ApiKeyEntry(
 
 @Serializable
 data class CustomProviderConfig(
-    val name: String
+    val name: String,
+    val protocol: String = "auto"  // "auto", "openai", "anthropic", "gemini", "ollama"
 )
 
 /**
@@ -217,6 +218,7 @@ class SettingsManager(private val context: Context) {
         val THINKING_BUDGET_TOKENS = intPreferencesKey("thinking_budget_tokens")
         val FAST_ENABLED = booleanPreferencesKey("fast_enabled")
         val PROVIDER_BASE_URLS = stringPreferencesKey("provider_base_urls")
+        val PROVIDER_PROTOCOLS = stringPreferencesKey("provider_protocols")
         val PROVIDER_BALANCE_CONFIGS = stringPreferencesKey("provider_balance_configs")
         val TITLE_GENERATION_ENABLED = booleanPreferencesKey("title_generation_enabled")
         val TITLE_GENERATION_MODEL = stringPreferencesKey("title_generation_model")
@@ -345,6 +347,12 @@ class SettingsManager(private val context: Context) {
     val providerBaseUrls: Flow<Map<String, String>> = safeData.map { pref ->
         val jsonStr = pref[PROVIDER_BASE_URLS] ?: "{}"
         try { json.decodeFromString<Map<String, String>>(jsonStr) } catch (e: Exception) { DebugLog.e("SettingsManager", "Failed to decode providerBaseUrls", e); emptyMap() }
+    }
+
+    /** Provider name → protocol type ("auto", "openai", "anthropic", "gemini", "ollama"). */
+    val providerProtocols: Flow<Map<String, String>> = safeData.map { pref ->
+        val jsonStr = pref[PROVIDER_PROTOCOLS] ?: "{}"
+        try { json.decodeFromString<Map<String, String>>(jsonStr) } catch (e: Exception) { DebugLog.e("SettingsManager", "Failed to decode providerProtocols", e); emptyMap() }
     }
 
     /** Provider name → its account-balance probe. Absent = never configured. */
@@ -586,6 +594,19 @@ class SettingsManager(private val context: Context) {
             val map = try { json.decodeFromString<MutableMap<String, String>>(current) } catch (e: Exception) { mutableMapOf() }
             map[provider] = url
             prefs[PROVIDER_BASE_URLS] = json.encodeToString(map)
+        }
+    }
+
+    suspend fun saveProviderProtocol(provider: String, protocol: String) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[PROVIDER_PROTOCOLS] ?: "{}"
+            val map = try { json.decodeFromString<MutableMap<String, String>>(current) } catch (e: Exception) { mutableMapOf() }
+            if (protocol == "auto") {
+                map.remove(provider)  // 自动协议不需要存储
+            } else {
+                map[provider] = protocol
+            }
+            prefs[PROVIDER_PROTOCOLS] = json.encodeToString(map)
         }
     }
 

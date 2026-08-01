@@ -145,6 +145,7 @@ fun SettingsProviderDetailPage(
     val apiKeys by viewModel.settings.apiKeys.collectAsState()
     val activeApiKeyIds by viewModel.settings.activeApiKeyIds.collectAsState()
     val providerBaseUrls by viewModel.settings.providerBaseUrls.collectAsState()
+    val providerProtocols by viewModel.settings.providerProtocols.collectAsState()
     val customProviders by viewModel.settings.customProviders.collectAsState()
     val localChatModels by viewModel.settings.localChatModels.collectAsState()
     val disabledProviders by viewModel.settings.disabledProviders.collectAsState()
@@ -384,6 +385,40 @@ fun SettingsProviderDetailPage(
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+                )
+            }
+
+            // Protocol selection (non-Local only)
+            if (!isLocal) {
+                val currentProtocol = providerProtocols[providerName] ?: "auto"
+                val protocolOptions = listOf(
+                    "auto" to "自动",
+                    "openai" to "OpenAI",
+                    "anthropic" to "Anthropic",
+                    "gemini" to "Google Gemini",
+                    "ollama" to "Ollama"
+                )
+
+                SettingsGroup(
+                    title = "API 协议",
+                    items = listOf {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            protocolOptions.forEach { (value, label) ->
+                                SettingsItem(
+                                    headlineContent = { Text(label) },
+                                    trailingContent = {
+                                        RadioButton(
+                                            selected = currentProtocol == value,
+                                            onClick = { viewModel.settings.setProviderProtocol(providerName, value) }
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .heightIn(min = 56.dp)
+                                        .clickable { viewModel.settings.setProviderProtocol(providerName, value) }
+                                )
                             }
                         }
                     }
