@@ -45,7 +45,7 @@ internal fun toolConnectorIconRes(toolName: String?): Int? {
     val raw = toolName.orEmpty()
     return when {
         raw == "github_request" || raw.startsWith("github_") -> R.drawable.ic_github_mark
-        raw.startsWith("todoist_") -> R.drawable.ic_todoist_mark
+        raw.startsWith("todoist_") -> R.drawable.ic_todoist_color
         raw.startsWith("notion_") -> R.drawable.ic_notion_mark
         else -> null
     }

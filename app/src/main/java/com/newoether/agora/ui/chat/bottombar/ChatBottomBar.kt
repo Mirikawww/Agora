@@ -249,10 +249,9 @@ private fun AttachmentMenuButton(
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_todoist_mark),
+                                painter = painterResource(R.drawable.ic_todoist_color),
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.onSurface,
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(stringResource(R.string.force_todoist))
@@ -645,10 +644,9 @@ fun ChatBottomBar(
                                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                                                 ) {
                                                     Icon(
-                                                        painter = painterResource(R.drawable.ic_todoist_mark),
+                                                        painter = painterResource(R.drawable.ic_todoist_color),
                                                         contentDescription = null,
                                                         modifier = Modifier.size(18.dp),
-                                                        tint = if (isMono) actionBadgeContent else MaterialTheme.colorScheme.onSecondaryContainer,
                                                     )
                                                     Spacer(modifier = Modifier.width(6.dp))
                                                     Text(

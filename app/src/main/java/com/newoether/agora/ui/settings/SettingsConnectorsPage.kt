@@ -77,7 +77,7 @@ fun SettingsConnectorsPage(
                             supportingContent = { Text(stringResource(R.string.connector_todoist_desc)) },
                             leadingContent = {
                                 Image(
-                                    painter = painterResource(R.drawable.ic_todoist_mark),
+                                    painter = painterResource(R.drawable.ic_todoist_color),
                                     contentDescription = null,
                                     modifier = Modifier.size(24.dp),
                                 )
@@ -205,7 +205,7 @@ fun SettingsTodoistConnectorDetailPage(viewModel: ChatViewModel, onBack: () -> U
                             supportingContent = { Text(stringResource(R.string.connector_todoist_desc)) },
                             leadingContent = {
                                 Image(
-                                    painter = painterResource(R.drawable.ic_todoist_mark),
+                                    painter = painterResource(R.drawable.ic_todoist_color),
                                     contentDescription = null,
                                     modifier = Modifier.size(24.dp),
                                 )
