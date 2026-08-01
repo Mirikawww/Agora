@@ -7,6 +7,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -60,12 +61,13 @@ internal fun ToolTypeIcon(
 ) {
     val tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
     val res = toolConnectorIconRes(toolName)
+    val preservesBrandColors = toolName.orEmpty().startsWith("todoist_")
     if (res != null) {
         Icon(
             painter = painterResource(res),
             contentDescription = null,
             modifier = modifier.size(size),
-            tint = tint,
+            tint = if (preservesBrandColors) Color.Unspecified else tint,
         )
     } else {
         Icon(

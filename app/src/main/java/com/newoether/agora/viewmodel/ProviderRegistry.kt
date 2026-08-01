@@ -74,6 +74,18 @@ class ProviderRegistry(
 
     fun getInstance(name: String): LlmProvider = providers[name] ?: GeminiProvider()
 
+    private fun customProvider(
+        name: String,
+        baseUrl: String,
+        protocol: String,
+    ): LlmProvider = when (protocol) {
+        "anthropic" -> AnthropicProvider(name = name, defaultBaseUrl = baseUrl)
+        "gemini" -> GeminiProvider(name = name, defaultBaseUrl = baseUrl)
+        "ollama" -> OllamaProvider(name = name, defaultBaseUrl = baseUrl)
+        // "auto" defaults to the OpenAI-compatible transport for custom endpoints.
+        else -> CustomOpenAiProvider(name, baseUrl)
+    }
+
     fun getEffectiveBaseUrl(providerName: String): String? {
         val saved = settings.providerBaseUrls.value[providerName]
         if (!saved.isNullOrBlank()) return saved
@@ -162,12 +174,16 @@ class ProviderRegistry(
         settings.deleteCustomProvider(name) { providers.remove(it) }
     }
 
-    /** Registers any persisted custom provider not yet present in the live map. */
+    /** Refreshes persisted custom providers in the live map before an immediate operation. */
     fun ensureCustomProvidersRegistered() {
+        val baseUrls = settings.providerBaseUrls.value
+        val protocols = settings.providerProtocols.value
         settings.customProviders.value.forEach { config ->
-            if (config.name !in providers) {
-                providers[config.name] = CustomOpenAiProvider(config.name, settings.providerBaseUrls.value[config.name] ?: "")
-            }
+            providers[config.name] = customProvider(
+                name = config.name,
+                baseUrl = baseUrls[config.name].orEmpty(),
+                protocol = protocols[config.name] ?: config.protocol,
+            )
         }
     }
 
@@ -328,21 +344,30 @@ class ProviderRegistry(
     fun computeFingerprint(): String = providers.map { (name, _) ->
         val keyIds = settings.activeApiKeyIds.value[name].orEmpty().sorted().joinToString("+")
         val url = settings.providerBaseUrls.value[name] ?: ""
+        val protocol = settings.providerProtocols.value[name] ?: "auto"
         val enabled = if (settings.isProviderEnabled(name)) "1" else "0"
-        "$name|$keyIds|$url|$enabled|catalog=$MODEL_CATALOG_SCHEMA_VERSION"
+        "$name|$keyIds|$url|$protocol|$enabled|catalog=$MODEL_CATALOG_SCHEMA_VERSION"
     }.sorted().joinToString(",").hashCode().toString()
 
     /** Starts the long-lived collectors that keep the provider map and caches consistent. */
     fun launchSyncJobs() {
-        // Sync custom providers into the live map whenever the persisted set changes.
+        // Keep each custom provider's runtime implementation in sync with its transport.
         scope.launch {
-            settings.customProviders.collect { custom ->
-                providers.keys.filter { !isBuiltIn(it) }.forEach { providers.remove(it) }
-                val baseUrls = settings.getProviderBaseUrls()
-                custom.forEach { config ->
-                    providers[config.name] = CustomOpenAiProvider(config.name, baseUrls[config.name] ?: "")
+            combine(
+                settings.customProviders,
+                settings.providerProtocols,
+                settings.providerBaseUrls,
+            ) { custom, protocols, baseUrls -> Triple(custom, protocols, baseUrls) }
+                .collect { (custom, protocols, baseUrls) ->
+                    providers.keys.filter { !isBuiltIn(it) }.forEach { providers.remove(it) }
+                    custom.forEach { config ->
+                        providers[config.name] = customProvider(
+                            name = config.name,
+                            baseUrl = baseUrls[config.name].orEmpty(),
+                            protocol = protocols[config.name] ?: config.protocol,
+                        )
+                    }
                 }
-            }
         }
         // Auto-clear cached available models when a provider loses its credentials /
         // enabled keys (including custom providers that only had a base URL before).

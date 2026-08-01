@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
@@ -170,6 +171,7 @@ fun SettingsProviderDetailPage(
     var showRenameProvider by remember { mutableStateOf(false) }
     var showDeleteProvider by remember { mutableStateOf(false) }
     var providerMenuExpanded by remember { mutableStateOf(false) }
+    var protocolMenuExpanded by remember { mutableStateOf(false) }
 
     // ── Account balance ──────────────────────────────────────────────────────
     // Declared here (not inside the group) because the readings are rendered twice:
@@ -331,7 +333,9 @@ fun SettingsProviderDetailPage(
                 if (!isLocal) {
                 val providerInstance = viewModel.getProviderInstance(providerName)
                 val defaultUrl = providerInstance.defaultBaseUrl
-                val savedUrl = providerBaseUrls[providerName]
+                // A cleared override is stored as an empty string. Treat it as absent so
+                // built-in providers keep showing their default URL as the field value.
+                val savedUrl = providerBaseUrls[providerName]?.takeIf { it.isNotBlank() }
 
                 // 使用保存的 URL，如果没有则使用默认 URL
                 val effectiveUrl = savedUrl ?: defaultUrl
@@ -391,34 +395,62 @@ fun SettingsProviderDetailPage(
                 )
             }
 
-            // Protocol selection (non-Local only)
-            if (!isLocal) {
+            // Built-in providers always use their native protocol. Custom endpoints can choose
+            // the transport that their API actually implements.
+            if (isCustom) {
                 val currentProtocol = providerProtocols[providerName] ?: "auto"
                 val protocolOptions = listOf(
-                    "auto" to "自动",
-                    "openai" to "OpenAI",
-                    "anthropic" to "Anthropic",
-                    "gemini" to "Google Gemini",
-                    "ollama" to "Ollama"
+                    "auto" to "自动（提供商默认）",
+                    "openai" to "OpenAI Chat Completions",
+                    "anthropic" to "Anthropic Messages",
+                    "gemini" to "Google Gemini GenerateContent",
+                    "ollama" to "Ollama Chat"
                 )
+                val selectedProtocol = protocolOptions.firstOrNull { it.first == currentProtocol }
+                    ?: protocolOptions.first()
 
                 SettingsGroup(
                     title = "API 协议",
                     items = listOf {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            protocolOptions.forEach { (value, label) ->
-                                SettingsItem(
-                                    headlineContent = { Text(label) },
-                                    trailingContent = {
-                                        RadioButton(
-                                            selected = currentProtocol == value,
-                                            onClick = { viewModel.settings.setProviderProtocol(providerName, value) }
-                                        )
-                                    },
-                                    modifier = Modifier
-                                        .heightIn(min = 56.dp)
-                                        .clickable { viewModel.settings.setProviderProtocol(providerName, value) }
-                                )
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            SettingsItem(
+                                headlineContent = { Text(selectedProtocol.second) },
+                                trailingContent = {
+                                    Icon(
+                                        Icons.Default.ExpandMore,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                modifier = Modifier.clickable { protocolMenuExpanded = true }
+                            )
+                            DropdownMenu(
+                                expanded = protocolMenuExpanded,
+                                onDismissRequest = { protocolMenuExpanded = false },
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                tonalElevation = 16.dp,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                protocolOptions.forEach { (value, label) ->
+                                    val selected = currentProtocol == value
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = label,
+                                                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal
+                                            )
+                                        },
+                                        trailingIcon = {
+                                            if (selected) {
+                                                Icon(Icons.Default.Check, contentDescription = null)
+                                            }
+                                        },
+                                        onClick = {
+                                            viewModel.settings.setProviderProtocol(providerName, value)
+                                            protocolMenuExpanded = false
+                                        }
+                                    )
+                                }
                             }
                         }
                     }

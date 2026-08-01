@@ -15,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -102,24 +103,20 @@ fun SettingsProviderPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                             )
                                         },
                                         leadingContent = {
-                                            val useColorIcon = activeLook && hasColorIcon(name)
-                                            val iconRes = providerIcon(name, useColorIcon)
-                                            if (useColorIcon) {
-                                                // 彩色图标，不应用 tint
-                                                Icon(
-                                                    painterResource(iconRes),
-                                                    null,
-                                                    modifier = Modifier.size(24.dp)
-                                                )
-                                            } else {
-                                                // 单色图标，应用 tint
-                                                Icon(
-                                                    painterResource(iconRes),
-                                                    null,
-                                                    tint = if (activeLook) MaterialTheme.colorScheme.primary else muted,
-                                                    modifier = Modifier.size(24.dp)
-                                                )
-                                            }
+                                            val useBrandColor = activeLook && hasColorIcon(name)
+                                            val iconRes = providerIcon(name, useBrandColor)
+                                            Icon(
+                                                painterResource(iconRes),
+                                                null,
+                                                // Color.Unspecified preserves fills in the colored SVG-derived vectors.
+                                                // Providers without a color asset remain monochrome when enabled.
+                                                tint = when {
+                                                    useBrandColor -> Color.Unspecified
+                                                    activeLook -> MaterialTheme.colorScheme.onSurface
+                                                    else -> muted
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            )
                                         },
                                         trailingContent = {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {

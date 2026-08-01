@@ -256,9 +256,10 @@ internal fun AnthropicUsage.toUsageUpdate(outputTokens: Int = this.outputTokens 
     )
 }
 
-class AnthropicProvider : LlmProvider {
-    override val name: String = Constants.PROVIDER_ANTHROPIC
-    override val defaultBaseUrl: String = "https://api.anthropic.com/v1"
+class AnthropicProvider(
+    override val name: String = Constants.PROVIDER_ANTHROPIC,
+    override val defaultBaseUrl: String = "https://api.anthropic.com/v1",
+) : LlmProvider {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     override fun generateResponse(

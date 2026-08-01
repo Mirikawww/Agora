@@ -20,7 +20,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.input.*
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
 import androidx.compose.foundation.text.contextmenu.modifier.appendTextContextMenuComponents
+import androidx.compose.foundation.text.contextmenu.modifier.filterTextContextMenuComponents
 import androidx.compose.foundation.text.contextmenu.builder.item
 import androidx.compose.material.icons.Icons
 
@@ -49,6 +51,7 @@ import com.newoether.agora.ui.theme.ChatType
 import com.newoether.agora.ui.theme.LocalIsMonochrome
 import com.newoether.agora.util.noOpBringIntoView
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
@@ -252,6 +255,7 @@ private fun AttachmentMenuButton(
                                 painter = painterResource(R.drawable.ic_todoist_color),
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp),
+                                tint = Color.Unspecified,
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(stringResource(R.string.force_todoist))
@@ -363,13 +367,14 @@ fun ChatBottomBar(
     val scrollState = rememberScrollState()
     BackHandler(enabled = isExpanded) { onCollapse() }
     val isModelValid = selectedModel.isNotBlank() && enabledModels.contains(selectedModel)
+    val context = LocalContext.current
     val fullscreenInputLabel = stringResource(R.string.composer_fullscreen_input)
+    val clipboardManager = LocalClipboardManager.current
+    val pasteLabel = context.getString(android.R.string.paste)
 
     // No-op bring-into-view to prevent auto-scrolling on text field focus
 
     val composer = rememberChatComposerState()
-
-    val context = LocalContext.current
 
     // Restore PDF dialog after viewer closes
     LaunchedEffect(fullScreenViewerUrls) {
@@ -434,11 +439,27 @@ fun ChatBottomBar(
                             .fillMaxWidth()
                             .then(if (isExpanded) Modifier.fillMaxHeight() else Modifier)
                             .focusRequester(focusRequester)
-                            // When the expand button is hidden, inject "Fullscreen input"
-                            // into the text selection / long-press action menu.
-                            .then(
+                            .appendTextContextMenuComponents {
+                                // Compose may omit Paste before text has been selected. Provide it
+                                // explicitly so a long-press at an insertion cursor can paste too.
+                                if (clipboardManager.hasText()) {
+                                    item(
+                                        key = "agora_paste",
+                                        label = pasteLabel,
+                                    ) {
+                                        clipboardManager.getText()?.let { clipboardText ->
+                                            textFieldState.edit {
+                                                replace(
+                                                    selection.min,
+                                                    selection.max,
+                                                    clipboardText.text,
+                                                )
+                                            }
+                                        }
+                                        close()
+                                    }
+                                }
                                 if (!showExpandButton && !isExpanded) {
-                                    Modifier.appendTextContextMenuComponents {
                                         separator()
                                         item(
                                             key = "agora_fullscreen_input",
@@ -449,8 +470,9 @@ fun ChatBottomBar(
                                             if (!isExpandAnimating) onExpand()
                                         }
                                     }
-                                } else Modifier
-                            )
+                            }
+                            // The explicit item above replaces Compose's unreliable Paste entry.
+                            .filterTextContextMenuComponents { it.key != TextContextMenuKeys.PasteKey }
                             .verticalScrollbar(scrollState, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
                         placeholder = {
                             Text(
@@ -647,6 +669,7 @@ fun ChatBottomBar(
                                                         painter = painterResource(R.drawable.ic_todoist_color),
                                                         contentDescription = null,
                                                         modifier = Modifier.size(18.dp),
+                                                        tint = Color.Unspecified,
                                                     )
                                                     Spacer(modifier = Modifier.width(6.dp))
                                                     Text(

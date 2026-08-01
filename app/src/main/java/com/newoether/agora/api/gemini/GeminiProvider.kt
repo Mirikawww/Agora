@@ -225,9 +225,10 @@ internal data class ModelListResponse(val models: List<ModelInfo>)
 @Serializable
 internal data class ModelInfo(val name: String, val displayName: String, val supportedGenerationMethods: List<String>)
 
-class GeminiProvider : LlmProvider {
-    override val name: String = Constants.PROVIDER_GOOGLE
-    override val defaultBaseUrl: String = "https://generativelanguage.googleapis.com/v1beta"
+class GeminiProvider(
+    override val name: String = Constants.PROVIDER_GOOGLE,
+    override val defaultBaseUrl: String = "https://generativelanguage.googleapis.com/v1beta",
+) : LlmProvider {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     override fun generateResponse(

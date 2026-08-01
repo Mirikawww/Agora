@@ -472,6 +472,10 @@ class SettingsRepository(
                 settingsManager.saveCustomProviders(updated)
                 settingsManager.saveProviderBaseUrl(oldName, "")
                 settingsManager.saveProviderBaseUrl(newName, url)
+                providerProtocols.value[oldName]?.let { protocol ->
+                    settingsManager.saveProviderProtocol(newName, protocol)
+                    settingsManager.saveProviderProtocol(oldName, "auto")
+                }
                 val models = availableModels.value.toMutableMap()
                 models[newName] = models.remove(oldName) ?: emptyList()
                 val movedFastSupport = modelFastSupport.value
@@ -509,6 +513,7 @@ class SettingsRepository(
             settingsManager.saveEnabledModels(enabledModels.value.filter { !it.startsWith("$name:") }.toSet())
             settingsManager.saveModelAliases(modelAliases.value.filterKeys { !it.startsWith("$name:") })
             settingsManager.saveProviderBaseUrl(name, "")
+            settingsManager.saveProviderProtocol(name, "auto")
             settingsManager.saveApiKeys(apiKeys.value.filter { it.provider != name })
             settingsManager.setActiveApiKeyIds(name, emptyList())
             settingsManager.saveDisabledProviders(disabledProviders.value - name)

@@ -7,15 +7,16 @@ import com.newoether.agora.R
  * Returns 0 for unknown / custom providers (callers fall back to a generic Cloud icon).
  *
  * @param name Provider name
- * @param color If true, returns the colored icon (when available); if false, returns monochrome
+ * @param color If true, returns the colored brand icon when one is available; otherwise returns
+ * the monochrome asset so callers can apply their active-state tint.
  */
 fun providerIcon(name: String, color: Boolean = false): Int = when (name.lowercase()) {
     "google" -> if (color) R.drawable.provider_google_color else R.drawable.provider_google
-    "openai" -> R.drawable.provider_openai  // OpenAI is always monochrome
-    "anthropic" -> R.drawable.provider_anthropic  // Anthropic is always monochrome
+    "openai" -> R.drawable.provider_openai
+    "anthropic" -> R.drawable.provider_anthropic
     "deepseek" -> if (color) R.drawable.provider_deepseek_color else R.drawable.provider_deepseek
     "qwen" -> if (color) R.drawable.provider_qwen_color else R.drawable.provider_qwen
-    "ollama" -> R.drawable.provider_ollama  // Ollama is always monochrome
+    "ollama" -> R.drawable.provider_ollama
     "open router" -> if (color) R.drawable.provider_openrouter_color else R.drawable.provider_openrouter
     else -> 0
 }

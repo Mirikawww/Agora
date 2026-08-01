@@ -101,9 +101,10 @@ internal fun OllamaStreamResponse.toUsageUpdate() = StreamEvent.UsageUpdate(
     completionTokens = evalCount ?: 0,
 )
 
-class OllamaProvider : LlmProvider {
-    override val name: String = Constants.PROVIDER_OLLAMA
-    override val defaultBaseUrl: String = ""
+class OllamaProvider(
+    override val name: String = Constants.PROVIDER_OLLAMA,
+    override val defaultBaseUrl: String = "",
+) : LlmProvider {
     override val functionToolTransport: FunctionToolTransport = FunctionToolTransport.NATIVE_AUTO
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
