@@ -375,8 +375,8 @@ fun SettingsProviderDetailPage(
                                     Box(modifier = Modifier.noOpBringIntoView().padding(top = 8.dp)) {
                                         OutlinedTextField(
                                             state = baseUrlState,
-                                            supportingText = if (defaultUrl.isNotEmpty()) {
-                                                { Text("默认: $defaultUrl", style = MaterialTheme.typography.bodySmall) }
+                                            placeholder = if (defaultUrl.isNotEmpty()) {
+                                                { Text(defaultUrl, style = MaterialTheme.typography.bodyMedium) }
                                             } else null,
                                             shape = RoundedCornerShape(16.dp),
                                             modifier = Modifier.fillMaxWidth(),
