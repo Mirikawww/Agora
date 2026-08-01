@@ -35,6 +35,7 @@ import com.newoether.agora.tool.GitHubConnectorToolProvider
 import com.newoether.agora.tool.ImageGenToolProvider
 import com.newoether.agora.tool.McpDeferredToolProvider
 import com.newoether.agora.tool.McpToolProvider
+import com.newoether.agora.tool.DeviceInfoToolProvider
 import com.newoether.agora.tool.MemoryToolProvider
 import com.newoether.agora.tool.PersonalizationToolProvider
 import com.newoether.agora.tool.ProviderBalanceToolProvider
@@ -424,11 +425,12 @@ class GenerationManager(
     private val mcpDeferredToolProvider = McpDeferredToolProvider(
         deferredExecute = { name: String, arguments: String, ctx: GenerationContext -> executeTool(name, arguments, ctx) }
     )
+    private val deviceInfoToolProvider = DeviceInfoToolProvider(context.applicationContext)
     private val toolProviders: List<ToolProvider> = listOf(
         memoryToolProvider, webSearchToolProvider, ragToolProvider, imageGenToolProvider,
         personalizationToolProvider, providerBalanceToolProvider, askToolProvider,
         skillsToolProvider, githubConnectorToolProvider, shellToolProvider, mcpToolProvider,
-        mcpDeferredToolProvider,
+        mcpDeferredToolProvider, deviceInfoToolProvider,
     )
 
     fun buildImageGenTool(ctx: GenerationContext): List<ToolDefinition> =
