@@ -323,7 +323,10 @@ class OllamaProvider : LlmProvider {
     override suspend fun fetchModelCatalog(apiKey: String, baseUrl: String?): List<FetchedModel> = kotlinx.coroutines.withContext(Dispatchers.IO) {
         try {
             val effectiveBaseUrl = baseUrl?.trimEnd('/') ?: "http://localhost:11434"
-            val responseText = HttpClient.fetchModels("$effectiveBaseUrl/api/tags") ?: run {
+            val responseText = HttpClient.fetchModelsCancellable(
+                "$effectiveBaseUrl/api/tags",
+                timeoutMs = Constants.MODEL_FETCH_TIMEOUT_MS,
+            ) ?: run {
                 DebugLog.e("AgoraAPI", "Failed to fetch Ollama models: empty response")
                 return@withContext emptyList()
             }

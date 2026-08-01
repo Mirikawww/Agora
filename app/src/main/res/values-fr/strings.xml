@@ -42,8 +42,10 @@
     <string name="tool_conversation_search_no_result">Aucune correspondance trouvée pour \'%1$s\'</string>
     <string name="tool_conversation_search_error">Erreur lors de la recherche de \'%1$s\' dans les conversations</string>
     <string name="tool_web_search_done">%1$d résultats trouvés pour \"%2$s\"</string>
+    <string name="tool_web_search_done_query">Recherche de \"%1$s\" effectuée sur le web</string>
     <string name="tool_web_search_done_default">Recherche effectuée sur le web</string>
     <string name="tool_conversation_search_done_for">%1$d conversations trouvées pour \"%2$s\"</string>
+    <string name="tool_conversation_search_done_query">Recherche de \"%1$s\" effectuée dans les conversations</string>
     <string name="tool_list_shells">Lister les shells</string>
     <string name="tool_shell_listing">Liste des shells disponibles</string>
     <string name="tool_shell_list_done">Liste des shells terminée</string>

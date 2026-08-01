@@ -271,6 +271,36 @@ internal fun brokerAction(toolName: String, arguments: String): String? = when (
 
 private const val MAX_RECORDED_ORIGINAL_RESULT_CHARS = 1_000_000
 
+/**
+ * Resolves the capability a tool call actually exercised.
+ *
+ * A broker invoke arrives on the wire as `agora_capabilities`, with the concrete capability named
+ * inside its arguments. Promotion has to key off the concrete name — keying off the wire name
+ * would only ever promote the broker itself, which is already direct.
+ *
+ * Search and inspect return null: browsing a catalogue is not evidence that a capability is
+ * needed, and promoting on it would put a schema on the wire the model never called.
+ */
+internal fun invokedCapabilityName(toolName: String, arguments: String): String? {
+    if (toolName !in McpDeferredToolProvider.META_TOOL_NAMES) {
+        return toolName.takeIf(String::isNotBlank)
+    }
+    if (toolName == McpDeferredToolProvider.TOOL_BROKER &&
+        brokerAction(toolName, arguments) != McpDeferredToolProvider.ACTION_INVOKE
+    ) {
+        return null
+    }
+    if (toolName == McpDeferredToolProvider.LEGACY_SEARCH ||
+        toolName == McpDeferredToolProvider.LEGACY_INSPECT
+    ) {
+        return null
+    }
+    return runCatching {
+        val parsed = Json.parseToJsonElement(arguments) as? JsonObject
+        (parsed?.get("name") as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotBlank)
+    }.getOrNull()
+}
+
 /** Reads only the pager's numeric size metadata; raw tool text is never retained in telemetry. */
 internal fun originalToolResultChars(toolName: String, value: String): Int {
     val pagerMetadata = runCatching {
@@ -1007,6 +1037,9 @@ class GenerationManager(
             var answeredAfterLastTool = false
             val roundToolSegments = mutableListOf<MessageSegment>()
             val completedToolNames = mutableSetOf<String>()
+            // Concrete capabilities exercised this turn, including those reached through the
+            // broker. Drives promotion so a repeat call skips the search/invoke detour.
+            val invokedCapabilityNames = mutableSetOf<String>()
             val toolLoopBudget = ToolLoopBudget()
             var futureToolExecutionBlock: String? = null
             var continuationReservedForProviderRound = false
@@ -1385,6 +1418,7 @@ class GenerationManager(
                                 (System.currentTimeMillis() - toolStartedAt).coerceAtLeast(0L)
                         }
                         completedToolNames += event.name
+                        invokedCapabilityName(event.name, args)?.let(invokedCapabilityNames::add)
                         roundOriginalToolResultChars +=
                             originalToolResultChars(event.name, result)
                         generatedImages.addAll(
@@ -1537,6 +1571,8 @@ class GenerationManager(
                                             .coerceAtLeast(0L)
                                 }
                                 completedToolNames += call.name
+                                invokedCapabilityName(call.name, args)
+                                    ?.let(invokedCapabilityNames::add)
                                 roundOriginalToolResultChars +=
                                     originalToolResultChars(call.name, result)
                                 generatedImages.addAll(
@@ -1670,6 +1706,20 @@ class GenerationManager(
                     config = activeProviderConfig,
                     completedToolNames = completedToolNames,
                 )
+                // The exposure plan was built before the model spoke, so anything it reached
+                // through the broker is still deferred. Put those capabilities directly on the
+                // wire now that an actual invocation has proven them relevant — otherwise calling
+                // the same connector twice pays for a second search/invoke round trip.
+                mcpDeferredToolProvider
+                    .promoteInvoked(capabilityRequestId, invokedCapabilityNames)
+                    ?.let { promotedTools ->
+                        activeProviderConfig =
+                            activeProviderConfig.copy(tools = promotedTools.ifEmpty { null })
+                        TimingLog.mark {
+                            "capability promote: wire=${promotedTools.size} " +
+                                "invoked=${invokedCapabilityNames.size}"
+                        }
+                    }
                 val continuationConfig = activeProviderConfig
                 val projectedToolPath = projectAssistantImagesToLatestUserMessage(
                     toolPath,

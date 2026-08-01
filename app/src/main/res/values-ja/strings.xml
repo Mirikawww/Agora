@@ -42,8 +42,10 @@
     <string name="tool_conversation_search_no_result">\'%1$s\' に一致するものが見つかりませんでした</string>
     <string name="tool_conversation_search_error">会話での \'%1$s\' の検索でエラーが発生しました</string>
     <string name="tool_web_search_done">\"%2$s\" の結果が %1$d 件見つかりました</string>
+    <string name="tool_web_search_done_query">\"%1$s\" をウェブで検索しました</string>
     <string name="tool_web_search_done_default">ウェブを検索しました</string>
     <string name="tool_conversation_search_done_for">\"%2$s\" の会話が %1$d 件見つかりました</string>
+    <string name="tool_conversation_search_done_query">\"%1$s\" を会話から検索しました</string>
     <string name="tool_list_shells">シェル一覧</string>
     <string name="tool_shell_listing">利用可能なシェルを一覧表示中</string>
     <string name="tool_shell_list_done">シェル一覧が完了しました</string>

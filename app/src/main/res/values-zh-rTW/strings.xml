@@ -41,8 +41,10 @@
     <string name="tool_conversation_search_no_result">未找到 \'%1$s\' 的對話匹配</string>
     <string name="tool_conversation_search_error">搜尋對話 \'%1$s\' 時發生錯誤</string>
     <string name="tool_web_search_done">搜尋 \"%2$s\" 找到 %1$d 筆結果</string>
+    <string name="tool_web_search_done_query">已搜尋網頁 \"%1$s\"</string>
     <string name="tool_web_search_done_default">已搜尋網頁</string>
     <string name="tool_conversation_search_done_for">搜尋 \"%2$s\" 找到 %1$d 則對話</string>
+    <string name="tool_conversation_search_done_query">已搜尋對話 \"%1$s\"</string>
     <string name="tool_list_shells">列出終端機</string>
     <string name="tool_shell_listing">正在列出可用終端機</string>
     <string name="tool_shell_list_done">終端機列表完成</string>

@@ -19,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.newoether.agora.model.ChatMessage
 import com.newoether.agora.model.MessageStatus
@@ -26,6 +27,14 @@ import com.newoether.agora.model.Participant
 import com.newoether.agora.model.ToolCallDisplayModes
 import com.newoether.agora.ui.chat.message.MessageItem
 import com.newoether.agora.util.Constants
+
+/** Statuses that mean the model is still producing this message. */
+private val STREAMING_STATUSES = setOf(
+    MessageStatus.SENDING,
+    MessageStatus.THINKING,
+    MessageStatus.TOOL_CALLING,
+    MessageStatus.TRANSCRIBING,
+)
 
 @Composable
 fun MessageList(
@@ -41,7 +50,7 @@ fun MessageList(
     toolCallDisplayMode: String = ToolCallDisplayModes.DEFAULT,
     maxContextWindow: Int = 20,
     modelAliases: Map<String, String> = emptyMap(),
-    bottomBarHeight: androidx.compose.ui.unit.Dp = 0.dp,
+    bottomBarHeight: Dp = 0.dp,
     viewportHeight: Int = 0,
     messageHeights: SnapshotStateMap<String, Int> = remember { mutableStateMapOf() },
     onEditMessage: (String, String) -> Unit = { _, _ -> },
@@ -74,19 +83,34 @@ fun MessageList(
             .mapValues { (_, v) -> v.sortedBy { it.timestamp } }
     }
 
+    // Cushion that lets the newest user message sit ~140dp from the top while its reply is still
+    // short. It shrinks as the reply grows, and must never grow back: a reply's *reported* height
+    // dips after the fact (MessageItem re-reports 50ms after the terminal status, and the thought
+    // block's collapsed height is only captured 500ms after it settles). Each dip would widen this
+    // spacer, pushing the anchored content upward — the jump seen right after a reply finishes,
+    // and again on every later correction. Clamping the cushion to non-increasing makes those
+    // corrections inert while keeping the shrink-as-you-grow behaviour the anchor depends on.
+    //
+    // The running minimum is held in a plain remembered box rather than snapshot state: it is
+    // derived from `messageHeights`, which already invalidates this composable, so making it
+    // observable would only add a redundant recomposition per height report. A composition that
+    // is discarded can still have lowered the floor, which at worst leaves the cushion slightly
+    // smaller than ideal — the same direction this fix wants, and never a jump.
+    val cushion = remember(messages.lastOrNull()?.id, viewportHeight, bottomBarHeight) {
+        object { var floorDp: Float = Float.MAX_VALUE }
+    }
     val extraPadding = if (lastUserMessageIndex == -1 || viewportHeight == 0) {
         0.dp
     } else {
         with(density) {
-            val vDp = viewportHeight.toDp()
-            val targetTopDp = 140.dp
-            val availableSpaceDp = vDp - targetTopDp - (bottomBarHeight + 8.dp)
+            val availableSpaceDp = viewportHeight.toDp() - 140.dp - (bottomBarHeight + 8.dp)
             var contentHeightPx = 0
             for (i in lastUserMessageIndex until messages.size) {
                 contentHeightPx += messageHeights[messages[i].id] ?: 0
             }
-            val contentHeightDp = contentHeightPx.toDp()
-            (availableSpaceDp - contentHeightDp).coerceAtLeast(0.dp)
+            val live = (availableSpaceDp - contentHeightPx.toDp()).coerceAtLeast(0.dp)
+            cushion.floorDp = minOf(cushion.floorDp, live.value)
+            cushion.floorDp.dp
         }
     }
 
@@ -116,7 +140,7 @@ fun MessageList(
                     },
                     // isStreaming driven by message status, not isLoading flag
                     isStreaming = isLastMessage && message.participant == Participant.MODEL
-                        && message.status in setOf(MessageStatus.SENDING, MessageStatus.THINKING, MessageStatus.TOOL_CALLING, MessageStatus.TRANSCRIBING),
+                        && message.status in STREAMING_STATUSES,
                     isLoading = isLoading,
                     isEditingAllowed = (editingMessageId == null || editingMessageId == message.id) && !isLoading,
                     isEditing = false,

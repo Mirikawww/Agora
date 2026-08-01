@@ -42,8 +42,10 @@
     <string name="tool_conversation_search_no_result">\'%1$s\'에 대한 일치 항목을 찾을 수 없습니다</string>
     <string name="tool_conversation_search_error">대화에서 \'%1$s\' 검색 중 오류 발생</string>
     <string name="tool_web_search_done">\"%2$s\"에 대해 %1$d개의 결과를 찾았습니다</string>
+    <string name="tool_web_search_done_query">웹에서 \"%1$s\"을(를) 검색했습니다</string>
     <string name="tool_web_search_done_default">웹을 검색했습니다</string>
     <string name="tool_conversation_search_done_for">\"%2$s\"에 대해 %1$d개의 대화를 찾았습니다</string>
+    <string name="tool_conversation_search_done_query">대화에서 \"%1$s\"을(를) 검색했습니다</string>
     <string name="tool_list_shells">셸 목록</string>
     <string name="tool_shell_listing">사용 가능한 셸 목록 표시 중</string>
     <string name="tool_shell_list_done">셸 목록 완료</string>

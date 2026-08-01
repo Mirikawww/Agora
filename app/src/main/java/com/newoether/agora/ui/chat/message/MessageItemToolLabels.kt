@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.newoether.agora.R
 import com.newoether.agora.model.MessageSegment
+import com.newoether.agora.util.ToolResultPayload
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonArray
@@ -217,11 +218,13 @@ internal fun toolSummary(seg: MessageSegment): String {
             if (isError) stringResource(R.string.tool_lookup_failed)
             else if (content.isBlank()) stringResource(R.string.tool_looking_up_memories)
             else {
-                val fileCount = try {
-                    Json.parseToJsonElement(content).jsonObject["files"]?.jsonArray?.size ?: 0
-                } catch (_: Exception) { 0 }
-                if (fileCount > 0) stringResource(R.string.tool_lookup_count, fileCount)
-                else stringResource(R.string.tool_lookup_default)
+                // Already neutral when the count is unknown, but the accounting stays in one place.
+                val fileCount = ToolResultPayload.countArray(content, "files")
+                if (fileCount is ToolResultPayload.Count.Known && fileCount.size > 0) {
+                    stringResource(R.string.tool_lookup_count, fileCount.size)
+                } else {
+                    stringResource(R.string.tool_lookup_default)
+                }
             }
         }
         "update_active_memory" -> {
@@ -231,6 +234,7 @@ internal fun toolSummary(seg: MessageSegment): String {
         }
         "web_search" -> {
             val query = argsJson?.get("query")?.let { (it as? JsonPrimitive)?.content }
+                ?: ToolResultPayload.stringField(content, "query")
             if (isError) {
                 if (query != null) stringResource(R.string.tool_web_search_error, query)
                 else stringResource(R.string.tool_search_failed)
@@ -238,12 +242,24 @@ internal fun toolSummary(seg: MessageSegment): String {
                 if (query != null) stringResource(R.string.tool_searching_web, query)
                 else stringResource(R.string.tool_web_search_done_default)
             } else {
-                val resultCount = try {
-                    Json.parseToJsonElement(content).jsonObject["results"]?.jsonArray?.size ?: 0
-                } catch (_: Exception) { 0 }
-                if (resultCount > 0 && query != null) stringResource(R.string.tool_web_search_done, resultCount, query)
-                else if (query != null) stringResource(R.string.tool_web_search_no_result, query)
-                else stringResource(R.string.tool_web_search_done_default)
+                // A large successful result is stored already clipped by ResultBudget, which
+                // replaces the payload with a head/tail envelope. Its `results` array is gone, so
+                // counting it yielded 0 and a 40-result search rendered as "no results found".
+                when (val count = ToolResultPayload.countArray(content, "results")) {
+                    is ToolResultPayload.Count.Known ->
+                        if (count.size > 0 && query != null) {
+                            stringResource(R.string.tool_web_search_done, count.size, query)
+                        } else if (query != null) {
+                            stringResource(R.string.tool_web_search_no_result, query)
+                        } else {
+                            stringResource(R.string.tool_web_search_done_default)
+                        }
+                    // The search succeeded but its size is unrecoverable: report completion
+                    // without asserting a count in either direction.
+                    ToolResultPayload.Count.Unknown ->
+                        if (query != null) stringResource(R.string.tool_web_search_done_query, query)
+                        else stringResource(R.string.tool_web_search_done_default)
+                }
             }
         }
         "web_fetch" -> {
@@ -262,23 +278,34 @@ internal fun toolSummary(seg: MessageSegment): String {
                 if (query != null) stringResource(R.string.tool_searching_for, query)
                 else stringResource(R.string.tool_searching_conversations_default)
             } else {
-                val convCount = try {
-                    Json.parseToJsonElement(content).jsonObject["results"]?.jsonArray?.size ?: 0
-                } catch (_: Exception) { 0 }
-                if (convCount > 0 && query != null) stringResource(R.string.tool_conversation_search_done_for, convCount, query)
-                else if (query != null) stringResource(R.string.tool_conversation_search_no_result, query)
-                else stringResource(R.string.tool_searching_conversations_default)
+                when (val count = ToolResultPayload.countArray(content, "results")) {
+                    is ToolResultPayload.Count.Known ->
+                        if (count.size > 0 && query != null) {
+                            stringResource(R.string.tool_conversation_search_done_for, count.size, query)
+                        } else if (query != null) {
+                            stringResource(R.string.tool_conversation_search_no_result, query)
+                        } else {
+                            stringResource(R.string.tool_searching_conversations_default)
+                        }
+                    ToolResultPayload.Count.Unknown ->
+                        if (query != null) {
+                            stringResource(R.string.tool_conversation_search_done_query, query)
+                        } else {
+                            stringResource(R.string.tool_searching_conversations_default)
+                        }
+                }
             }
         }
         "list_shells" -> {
             if (isError) stringResource(R.string.tool_shell_listing)
             else if (content.isBlank()) stringResource(R.string.tool_listing_shells)
             else {
-                val deviceCount = try {
-                    Json.parseToJsonElement(content).jsonObject["devices"]?.jsonArray?.size ?: 0
-                } catch (_: Exception) { 0 }
-                if (deviceCount > 0) stringResource(R.string.tool_shell_list_count, deviceCount)
-                else stringResource(R.string.tool_shell_list_done)
+                val deviceCount = ToolResultPayload.countArray(content, "devices")
+                if (deviceCount is ToolResultPayload.Count.Known && deviceCount.size > 0) {
+                    stringResource(R.string.tool_shell_list_count, deviceCount.size)
+                } else {
+                    stringResource(R.string.tool_shell_list_done)
+                }
             }
         }
         "execute_shell_command" -> {

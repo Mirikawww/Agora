@@ -67,6 +67,8 @@ import com.newoether.agora.util.UpdateInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
@@ -81,6 +83,9 @@ import java.util.UUID
 
 
 
+
+/** Per-provider result of one model-sync pass. */
+private enum class SyncOutcome { SUCCESS, FAILED, SKIPPED }
 
 class ChatViewModel(
     application: Application,
@@ -1665,8 +1670,7 @@ class ChatViewModel(
 
     fun fetchAvailableModels() {
         viewModelScope.launch {
-            if (_isSyncingModels.value) return@launch
-            _isSyncingModels.value = true
+            if (!_isSyncingModels.compareAndSet(expect = false, update = true)) return@launch
             val successProviders = mutableListOf<String>()
             val failedProviders = mutableListOf<String>()
             var skippedCount = 0
@@ -1674,41 +1678,51 @@ class ChatViewModel(
 
 
 
-            // Ensure custom providers are loaded into the providers map before iterating
-            providerRegistry.ensureCustomProvidersRegistered()
-
-
-
-
             val message = try {
-                providerRegistry.all.forEach { (name, _) ->
-                    if (name == Constants.PROVIDER_LOCAL) return@forEach
-                    if (!settings.isProviderEnabled(name)) {
-                        skippedCount++
-                        return@forEach
+                // Inside the guarded block: this reads DataStore, and when it threw here the
+                // `finally` below never ran, so `isSyncingModels` stayed true and the sync button
+                // was permanently unclickable until the app was restarted.
+                providerRegistry.ensureCustomProvidersRegistered()
+                // Providers are probed concurrently. Serially, one unreachable endpoint delayed
+                // every provider behind it by its full timeout, so a sync across several providers
+                // could sit silent for minutes and read as "nothing happened". DataStore edits are
+                // atomic read-modify-writes, so per-provider persistence is safe in parallel.
+                val outcomes = providerRegistry.all.keys
+                    .filter { it != Constants.PROVIDER_LOCAL }
+                    .map { name ->
+                        async {
+                            if (!settings.isProviderEnabled(name)) return@async name to SyncOutcome.SKIPPED
+                            try {
+                                if (!providerRegistry.isConfigured(
+                                        name,
+                                        settings.resolveActiveKey(name) ?: "",
+                                    )
+                                ) {
+                                    settings.saveAvailableModels(name, emptyList())
+                                    return@async name to SyncOutcome.SKIPPED
+                                }
+                                val models = providerRegistry.fetchModelsForProvider(name)
+                                name to if (models.isNotEmpty()) {
+                                    SyncOutcome.SUCCESS
+                                } else {
+                                    SyncOutcome.FAILED
+                                }
+                            } catch (e: CancellationException) {
+                                // On the JVM CancellationException extends IllegalStateException, so
+                                // a bare `catch (Exception)` would swallow the cancel signal and let
+                                // a stopped sync report a bogus result.
+                                throw e
+                            } catch (e: Exception) {
+                                name to SyncOutcome.FAILED
+                            }
+                        }
                     }
-
-
-
-
-                    try {
-                        if (!providerRegistry.isConfigured(name, settings.resolveActiveKey(name) ?: "")) {
-                            skippedCount++
-                            settings.saveAvailableModels(name, emptyList())
-                            return@forEach
-                        }
-
-
-
-
-                        val models = providerRegistry.fetchModelsForProvider(name)
-                        if (models.isNotEmpty()) {
-                            successProviders.add(name)
-                        } else {
-                            failedProviders.add(name)
-                        }
-                    } catch (e: Exception) {
-                        failedProviders.add(name)
+                    .awaitAll()
+                outcomes.forEach { (name, outcome) ->
+                    when (outcome) {
+                        SyncOutcome.SUCCESS -> successProviders.add(name)
+                        SyncOutcome.FAILED -> failedProviders.add(name)
+                        SyncOutcome.SKIPPED -> skippedCount++
                     }
                 }
 
@@ -1722,8 +1736,12 @@ class ChatViewModel(
 
 
 
-                // Save fingerprint on any successful fetch so we don't re-fetch on next visit
-                settings.saveLastModelsFetchFingerprint(computeProviderFingerprint())
+                // Save the fingerprint only when nothing failed. Storing it after a partial sync
+                // marked the current configuration as "already fetched", so re-entering the page
+                // skipped the auto-sync and the failed provider stayed missing until a manual retry.
+                if (failedProviders.isEmpty()) {
+                    settings.saveLastModelsFetchFingerprint(computeProviderFingerprint())
+                }
 
 
 
@@ -1737,6 +1755,11 @@ class ChatViewModel(
                         appContext.getString(R.string.sync_failed_providers, failedProviders.joinToString())
                     else -> if (skippedCount > 0) appContext.getString(R.string.sync_no_providers) else appContext.getString(R.string.sync_completed)
                 }
+            } catch (e: CancellationException) {
+                // Must precede the generic handler: on the JVM CancellationException extends
+                // IllegalStateException, so `catch (Exception)` swallowed the cancel signal and
+                // reported a bogus "sync failed" for a sync the user had simply navigated away from.
+                throw e
             } catch (e: Exception) {
                 appContext.getString(R.string.sync_failed_providers, e.message ?: appContext.getString(R.string.unknown_error))
             } finally {

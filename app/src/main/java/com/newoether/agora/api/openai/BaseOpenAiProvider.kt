@@ -2,6 +2,7 @@ package com.newoether.agora.api.openai
 
 import com.newoether.agora.api.*
 
+import com.newoether.agora.util.Constants
 import com.newoether.agora.util.DebugLog
 import com.newoether.agora.api.util.StreamingThinkTagParser
 import com.newoether.agora.api.util.buildToolCallId
@@ -538,7 +539,11 @@ abstract class BaseOpenAiProvider : LlmProvider {
             var lastParseError: Exception? = null
 
             for ((index, endpointUrl) in endpointUrls.withIndex()) {
-                val responseText = HttpClient.fetchModels(endpointUrl, headers)
+                val responseText = HttpClient.fetchModelsCancellable(
+                    endpointUrl,
+                    headers,
+                    timeoutMs = Constants.MODEL_FETCH_TIMEOUT_MS,
+                )
                 if (responseText == null) {
                     if (index < endpointUrls.lastIndex) {
                         DebugLog.w("AgoraAPI", "Failed to fetch $name models from $endpointUrl; retrying ${endpointUrls[index + 1]}")

@@ -590,9 +590,10 @@ class GeminiProvider : LlmProvider {
                 "$effectiveBaseUrl/v1beta/models"
             }
 
-            val responseText = HttpClient.fetchModels(
+            val responseText = HttpClient.fetchModelsCancellable(
                 finalUrlString,
-                mapOf("x-goog-api-key" to apiKey)
+                mapOf("x-goog-api-key" to apiKey),
+                timeoutMs = Constants.MODEL_FETCH_TIMEOUT_MS,
             ) ?: run {
                 DebugLog.e("AgoraAPI", "Failed to fetch Gemini models: empty response")
                 return@withContext emptyList()

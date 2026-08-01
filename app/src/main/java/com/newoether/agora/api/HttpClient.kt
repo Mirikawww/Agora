@@ -5,8 +5,10 @@ import com.newoether.agora.util.DebugLog
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okio.BufferedSource
 import java.io.IOException
+import kotlin.coroutines.resume
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -266,6 +268,14 @@ object HttpClient {
         }
     }
 
+    /**
+     * Blocking catalog GET. Prefer [fetchModelsCancellable] from a coroutine.
+     *
+     * `execute()` parks the calling thread inside OkHttp and is invisible to structured
+     * concurrency: `withTimeout` around it cannot fire, because a timeout can only be delivered at
+     * a suspension point. With [client]'s 5-minute read timeout a silent endpoint therefore holds
+     * the caller for five minutes regardless of any coroutine deadline.
+     */
     fun fetchModels(url: String, headers: Map<String, String> = emptyMap()): String? {
         guardCleartextCredentials(url, headers)
         val requestBuilder = Request.Builder().url(url).get()
@@ -273,6 +283,48 @@ object HttpClient {
         val response = client.newCall(requestBuilder.build()).execute()
         return response.use {
             if (it.isSuccessful) it.body?.string() else null
+        }
+    }
+
+    /**
+     * Catalog GET that honours coroutine cancellation, including `withTimeout`.
+     *
+     * Model sync fans out over every configured provider and must be bounded: a provider whose
+     * endpoint accepts the connection and then never answers used to pin the whole sync for
+     * OkHttp's 5-minute read timeout, long after the caller's own deadline had passed. The call is
+     * enqueued rather than executed so cancellation can abort the socket instead of merely
+     * abandoning a thread that still holds it.
+     *
+     * [timeoutMs] is applied by OkHttp itself as a whole-call deadline (connect + write + read),
+     * so the bound holds even for a body that dribbles in slowly. Returns null on any failure.
+     */
+    suspend fun fetchModelsCancellable(
+        url: String,
+        headers: Map<String, String> = emptyMap(),
+        timeoutMs: Long,
+    ): String? {
+        guardCleartextCredentials(url, headers)
+        val requestBuilder = Request.Builder().url(url).get()
+        headers.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
+        val call = client.newBuilder()
+            .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+            .build()
+            .newCall(requestBuilder.build())
+        return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { runCatching { call.cancel() } }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                    // A cancelled call reports failure too; the continuation is already resumed.
+                    if (continuation.isActive) continuation.resume(null)
+                }
+
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    val body = response.use {
+                        runCatching { if (it.isSuccessful) it.body?.string() else null }.getOrNull()
+                    }
+                    if (continuation.isActive) continuation.resume(body)
+                }
+            })
         }
     }
 

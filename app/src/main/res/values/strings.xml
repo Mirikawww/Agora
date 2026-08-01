@@ -42,8 +42,10 @@
     <string name="tool_conversation_search_no_result">No match found for \'%1$s\'</string>
     <string name="tool_conversation_search_error">Error searching conversations for \'%1$s\'</string>
     <string name="tool_web_search_done">Found %1$d results for \"%2$s\"</string>
+    <string name="tool_web_search_done_query">Searched the web for \"%1$s\"</string>
     <string name="tool_web_search_done_default">Searched the web</string>
     <string name="tool_conversation_search_done_for">Found %1$d conversations for \"%2$s\"</string>
+    <string name="tool_conversation_search_done_query">Searched conversations for \"%1$s\"</string>
     <string name="tool_list_shells">List Shells</string>
     <string name="tool_shell_listing">Listing available shells</string>
     <string name="tool_shell_list_done">Shell list done</string>
@@ -142,6 +144,7 @@
     <string name="about_ci_failed">Build #%1$d failed</string>
     <string name="about_ci_cancelled">Build #%1$d cancelled</string>
     <string name="about_ci_unavailable">Build status unavailable</string>
+    <string name="about_ci_refresh_hint">Long press to refresh</string>
     <string name="cancel">Cancel</string>
     <string name="copy">Copy</string>
     <string name="edit">Edit</string>

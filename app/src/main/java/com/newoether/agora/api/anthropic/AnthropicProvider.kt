@@ -550,9 +550,10 @@ class AnthropicProvider : LlmProvider {
     override suspend fun fetchModelCatalog(apiKey: String, baseUrl: String?): List<FetchedModel> = kotlinx.coroutines.withContext(Dispatchers.IO) {
         try {
             val effectiveBaseUrl = baseUrl?.trimEnd('/') ?: "https://api.anthropic.com/v1"
-            val responseText = HttpClient.fetchModels(
+            val responseText = HttpClient.fetchModelsCancellable(
                 "$effectiveBaseUrl/models",
-                mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01")
+                mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01"),
+                timeoutMs = Constants.MODEL_FETCH_TIMEOUT_MS,
             ) ?: run {
                 DebugLog.e("AgoraAPI", "Failed to fetch Anthropic models: empty response")
                 return@withContext emptyList()

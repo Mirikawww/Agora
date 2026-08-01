@@ -215,6 +215,10 @@ class ProviderRegistry(
         val keyBySecret = keyEntries.associateBy { it.key }
         val nicknameByKey = keyEntries.associate { it.key to it.name }
 
+        // A network failure must not be mistaken for "this provider has no models". The
+        // no-catalog path below deletes the cached catalog, drops enabled models, and can even
+        // reassign the selected model — destroying good state because one request timed out.
+        var sawTransportFailure = false
         for (candidate in candidates) {
             val merged = linkedMapOf<String, Boolean?>()
             val nicknamesByModel = linkedMapOf<String, LinkedHashSet<String>>()
@@ -226,9 +230,11 @@ class ProviderRegistry(
                         provider.fetchModelCatalog(key, candidate)
                     }
                 } catch (_: TimeoutCancellationException) {
+                    sawTransportFailure = true
                     emptyList()
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
+                    sawTransportFailure = true
                     emptyList()
                 }
                 val entry = keyBySecret[key]
@@ -281,8 +287,10 @@ class ProviderRegistry(
             )
             return prefixed
         }
-        // No catalog from any candidate — drop stale models so the UI doesn't keep
-        // showing models for disabled/broken keys.
+        // No catalog from any candidate. Only treat that as authoritative when every request
+        // actually completed: dropping the cache after a timeout is what made a working provider
+        // lose its whole model list and silently disable the user's enabled models.
+        if (sawTransportFailure) return emptyList()
         clearProviderModelCache(name)
         return emptyList()
     }

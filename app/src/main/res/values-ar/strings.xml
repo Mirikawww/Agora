@@ -42,8 +42,10 @@
     <string name="tool_conversation_search_no_result">لم يتم العثور على تطابق لـ \'%1$s\'</string>
     <string name="tool_conversation_search_error">خطأ أثناء البحث عن \'%1$s\' في المحادثات</string>
     <string name="tool_web_search_done">تم العثور على %1$d نتيجة لـ \"%2$s\"</string>
+    <string name="tool_web_search_done_query">تم البحث عن \"%1$s\" في الويب</string>
     <string name="tool_web_search_done_default">تم البحث في الويب</string>
     <string name="tool_conversation_search_done_for">تم العثور على %1$d محادثة لـ \"%2$s\"</string>
+    <string name="tool_conversation_search_done_query">تم البحث عن \"%1$s\" في المحادثات</string>
     <string name="tool_list_shells">سرد الأصداف</string>
     <string name="tool_shell_listing">جارٍ سرد الأصداف المتاحة</string>
     <string name="tool_shell_list_done">اكتمل سرد الأصداف</string>

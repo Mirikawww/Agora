@@ -229,6 +229,9 @@ dependencies {
     testImplementation("io.mockk:mockk:1.13.12")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("androidx.arch.core:core-testing:2.2.0")
+    // Bounds/cancellation tests for model-catalog fetches need a real socket that can accept a
+    // connection and then stay silent; that behaviour cannot be faked with a mocked OkHttp client.
+    testImplementation(libs.okhttp.mockwebserver)
 }
 
 tasks.whenTaskAdded {

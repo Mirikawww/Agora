@@ -42,8 +42,10 @@
     <string name="tool_conversation_search_no_result">Совпадений по \'%1$s\' не найдено</string>
     <string name="tool_conversation_search_error">Ошибка поиска \'%1$s\' в беседах</string>
     <string name="tool_web_search_done">Найдено %1$d результатов по \"%2$s\"</string>
+    <string name="tool_web_search_done_query">Выполнен поиск \"%1$s\" в сети</string>
     <string name="tool_web_search_done_default">Выполнен поиск в сети</string>
     <string name="tool_conversation_search_done_for">Найдено %1$d бесед по \"%2$s\"</string>
+    <string name="tool_conversation_search_done_query">Выполнен поиск \"%1$s\" в беседах</string>
     <string name="tool_list_shells">Список оболочек</string>
     <string name="tool_shell_listing">Получение списка доступных оболочек</string>
     <string name="tool_shell_list_done">Список оболочек получен</string>

@@ -3,6 +3,7 @@ package com.newoether.agora.ui.settings
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,17 +44,30 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
     var changelog by remember { mutableStateOf<List<com.newoether.agora.util.ReleaseNotes>>(emptyList()) }
     var changelogError by remember { mutableStateOf<String?>(null) }
     var ciStatus by remember { mutableStateOf<com.newoether.agora.util.UpdateChecker.CiRunStatus?>(null) }
+    // Bumped by a long press to force an immediate poll. Restarting the loop rather than firing a
+    // one-off fetch also resets the backoff, so a manual refresh while a build is settled does not
+    // leave the next automatic poll up to 60s away.
+    var ciRefreshTrigger by remember { mutableIntStateOf(0) }
+    var isRefreshingCi by remember { mutableStateOf(false) }
+    val haptics = com.newoether.agora.ui.common.LocalAgoraHaptics.current
     val scope = rememberCoroutineScope()
 
     // Poll the live CI status. A running build is polled every 15s so the row
     // reflects progress without a manual refresh; once the run settles the poll
     // backs off to 60s (a new push is the only thing that can change it).
-    LaunchedEffect(Unit) {
+    LaunchedEffect(ciRefreshTrigger) {
+        // Only a manual refresh shows the spinner: flagging every automatic poll would blink the
+        // icon every 15s for no user-initiated reason.
+        var manual = ciRefreshTrigger > 0
         while (true) {
             val fresh = withContext(Dispatchers.IO) {
                 com.newoether.agora.util.UpdateChecker.fetchCiStatus()
             }
             ciStatus = fresh
+            if (manual) {
+                isRefreshingCi = false
+                manual = false
+            }
             kotlinx.coroutines.delay(if (fresh?.isRunning == true) 15_000L else 60_000L)
         }
     }
@@ -207,11 +221,18 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                         s.conclusion == "cancelled" -> stringResource(R.string.about_ci_cancelled, s.run_number)
                                         s.isFailure -> stringResource(R.string.about_ci_failed, s.run_number)
                                         else -> stringResource(R.string.about_ci_unavailable)
-                                    } + if (s != null && s.title.isNotBlank()) "\n${s.title}" else ""
+                                    } + if (s != null && s.title.isNotBlank()) {
+                                        "\n${s.title}"
+                                    } else if (s == null) {
+                                        // Surface the gesture exactly where it is needed: an
+                                        // unavailable status is the one case with nothing else to
+                                        // say and the one case a user wants to retry.
+                                        "\n" + stringResource(R.string.about_ci_refresh_hint)
+                                    } else ""
                                 )
                             },
                             leadingContent = {
-                                if (s?.isRunning == true) {
+                                if (s?.isRunning == true || isRefreshingCi) {
                                     CircularProgressIndicator(
                                         modifier = Modifier.size(20.dp),
                                         strokeWidth = 2.dp,
@@ -240,9 +261,19 @@ fun SettingsAboutPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                     Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
                                 }
                             },
-                            modifier = if (s != null && s.html_url.isNotBlank()) {
-                                Modifier.clickable { openUrl(s.html_url) }
-                            } else Modifier,
+                            // Long press refreshes. It stays enabled when the status is null,
+                            // because an unavailable status is exactly when a retry is wanted —
+                            // gating the gesture on `s != null` would disable it when it matters.
+                            modifier = Modifier.combinedClickable(
+                                onClick = {
+                                    if (s != null && s.html_url.isNotBlank()) openUrl(s.html_url)
+                                },
+                                onLongClick = {
+                                    haptics.longPress()
+                                    isRefreshingCi = true
+                                    ciRefreshTrigger++
+                                },
+                            ),
                         )
                     }
                 }

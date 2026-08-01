@@ -101,6 +101,62 @@ class McpDeferredToolProvider(
     fun isDeferred(requestId: String): Boolean =
         states[requestId]?.deferredTools?.isNotEmpty() == true
 
+    /**
+     * Moves capabilities the model has already invoked onto the wire for the rest of the turn.
+     *
+     * The exposure plan is computed once per turn, before the model has said anything. A tool it
+     * then discovers through the broker stays deferred for every following round, so calling the
+     * same connector twice costs two extra broker searches — the second one re-deriving a schema
+     * the model just used. Promotion removes that repeat: once a capability is proven relevant by
+     * an actual invocation, its complete schema is worth the wire budget it occupies.
+     *
+     * The promoted tool is dropped from the deferred pool and the broker is rebuilt without it, so
+     * the model cannot see one capability in both places. Promotion is skipped when the complete
+     * schema does not fit the same inline and wire budgets [plan] enforces — an oversized schema
+     * remains broker-reachable rather than silently blowing the request past its cap.
+     *
+     * Returns the tool surface for the next round, or null when nothing changed.
+     */
+    fun promoteInvoked(requestId: String, invokedNames: Set<String>): List<ToolDefinition>? {
+        if (invokedNames.isEmpty()) return null
+        val state = states[requestId] ?: return null
+        val promotable = state.deferredTools.filter { it.function.name in invokedNames }
+        if (promotable.isEmpty()) return null
+
+        var inline = state.inlineTools
+        var deferred = state.deferredTools
+        var promotedAny = false
+        // Admit one at a time against the live budget: two promoted connector schemas may fit
+        // individually but not together, and the first one proven relevant should win.
+        for (candidate in promotable.sortedBy { it.function.name }) {
+            val complete = candidate.withCompleteSchema()
+            val nextInline = inline + complete
+            val nextDeferred = deferred.filterNot { it.function.name == candidate.function.name }
+            val inlineLimit = if (nextDeferred.isEmpty()) MAX_WIRE_TOOLS else MAX_WIRE_TOOLS - 1
+            if (nextInline.size > inlineLimit) continue
+            if (estimateSchemaTokens(nextInline) > MAX_INLINE_SCHEMA_TOKENS) continue
+            if (estimateSchemaChars(nextInline) > MAX_INLINE_SCHEMA_CHARS) continue
+            val nextBroker = nextDeferred.takeIf { it.isNotEmpty() }?.let(::brokerDefinition)
+            val wire = estimateWireSchema(
+                if (nextBroker == null) nextInline else nextInline + nextBroker,
+            )
+            if (wire.tokens > MAX_WIRE_SCHEMA_TOKENS) continue
+            if (wire.chars > MAX_WIRE_SCHEMA_CHARS) continue
+            inline = nextInline
+            deferred = nextDeferred
+            promotedAny = true
+        }
+        if (!promotedAny) return null
+
+        val broker = deferred.takeIf { it.isNotEmpty() }?.let(::brokerDefinition)
+        states[requestId] = state.copy(
+            inlineTools = inline,
+            deferredTools = deferred,
+            brokerDefinition = broker,
+        )
+        return if (broker == null) inline else inline + broker
+    }
+
     fun clear(requestId: String) {
         states.remove(requestId)
     }
