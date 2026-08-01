@@ -74,9 +74,14 @@ class ProviderRegistry(
 
     fun getInstance(name: String): LlmProvider = providers[name] ?: GeminiProvider()
 
-    fun getEffectiveBaseUrl(providerName: String): String? =
-        settings.providerBaseUrls.value[providerName]
-            ?: if (!isBuiltIn(providerName)) getInstance(providerName).defaultBaseUrl else null
+    fun getEffectiveBaseUrl(providerName: String): String? {
+        val saved = settings.providerBaseUrls.value[providerName]
+        if (!saved.isNullOrBlank()) return saved
+
+        // 对于内置提供商和自定义提供商，返回其 defaultBaseUrl（如果非空）
+        val defaultUrl = getInstance(providerName).defaultBaseUrl
+        return defaultUrl.takeIf { it.isNotEmpty() }
+    }
 
     fun isConfigured(providerName: String, activeKey: String): Boolean = when {
         providerName == Constants.PROVIDER_UNKNOWN -> false

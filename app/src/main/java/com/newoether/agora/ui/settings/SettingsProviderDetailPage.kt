@@ -329,22 +329,39 @@ fun SettingsProviderDetailPage(
                 // Base URL (non-Local only)
                 if (!isLocal) {
                 val providerInstance = viewModel.getProviderInstance(providerName)
+                val defaultUrl = providerInstance.defaultBaseUrl
                 val savedUrl = providerBaseUrls[providerName]
+
+                // 使用保存的 URL，如果没有则使用默认 URL
+                val effectiveUrl = savedUrl ?: defaultUrl
+
                 // Don't key remember on savedUrl — that causes TextFieldState to be recreated
                 // every time the debounced save writes back to DataStore, overwriting user input.
-                val baseUrlState = remember { TextFieldState(savedUrl ?: "") }
+                val baseUrlState = remember { TextFieldState(effectiveUrl) }
+
                 // Sync external changes (e.g. import) back into the text field.
                 LaunchedEffect(savedUrl) {
-                    val ext = savedUrl ?: ""
+                    val ext = savedUrl ?: defaultUrl
                     val cur = baseUrlState.text.toString()
                     if (ext.isNotEmpty() && ext != cur) {
                         baseUrlState.edit { replace(0, length, ext) }
                     }
                 }
+
                 // Save user input with 500ms debounce.
+                // 只有当用户输入与默认值不同时才保存
                 LaunchedEffect(baseUrlState.text) {
                     delay(500)
-                    viewModel.settings.setProviderBaseUrl(providerName, baseUrlState.text.toString())
+                    val text = baseUrlState.text.toString()
+                    // 如果输入是默认 URL 或为空，清除保存的值（使用默认）
+                    if (text == defaultUrl || text.isEmpty()) {
+                        if (savedUrl != null) {
+                            viewModel.settings.setProviderBaseUrl(providerName, "")
+                        }
+                    } else {
+                        // 用户输入了自定义 URL，保存它
+                        viewModel.settings.setProviderBaseUrl(providerName, text)
+                    }
                 }
                 SettingsGroup(
                     title = stringResource(R.string.provider_base_url),
@@ -358,7 +375,9 @@ fun SettingsProviderDetailPage(
                                     Box(modifier = Modifier.noOpBringIntoView().padding(top = 8.dp)) {
                                         OutlinedTextField(
                                             state = baseUrlState,
-                                            placeholder = { Text(providerInstance.defaultBaseUrl, style = MaterialTheme.typography.bodyMedium) },
+                                            supportingText = if (defaultUrl.isNotEmpty()) {
+                                                { Text("默认: $defaultUrl", style = MaterialTheme.typography.bodySmall) }
+                                            } else null,
                                             shape = RoundedCornerShape(16.dp),
                                             modifier = Modifier.fillMaxWidth(),
                                             textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)

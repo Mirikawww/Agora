@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.newoether.agora.R
 import com.newoether.agora.ui.components.clearFocusOnTap
+import com.newoether.agora.ui.components.hasColorIcon
 import com.newoether.agora.ui.components.providerIcon
 import com.newoether.agora.util.Constants
 import com.newoether.agora.viewmodel.ChatViewModel
@@ -101,12 +102,24 @@ fun SettingsProviderPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                             )
                                         },
                                         leadingContent = {
-                                            Icon(
-                                                painterResource(providerIcon(name)),
-                                                null,
-                                                tint = if (activeLook) MaterialTheme.colorScheme.primary else muted,
-                                                modifier = Modifier.size(24.dp)
-                                            )
+                                            val useColorIcon = activeLook && hasColorIcon(name)
+                                            val iconRes = providerIcon(name, useColorIcon)
+                                            if (useColorIcon) {
+                                                // 彩色图标，不应用 tint
+                                                Icon(
+                                                    painterResource(iconRes),
+                                                    null,
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                            } else {
+                                                // 单色图标，应用 tint
+                                                Icon(
+                                                    painterResource(iconRes),
+                                                    null,
+                                                    tint = if (activeLook) MaterialTheme.colorScheme.primary else muted,
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                            }
                                         },
                                         trailingContent = {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
