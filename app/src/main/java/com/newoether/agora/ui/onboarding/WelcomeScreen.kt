@@ -95,6 +95,7 @@ import com.newoether.agora.R
 import com.newoether.agora.data.LocalChatModelConfig
 import com.newoether.agora.ui.components.clearFocusOnTap
 import com.newoether.agora.ui.components.providerIcon
+import com.newoether.agora.ui.components.providerIconTint
 import com.newoether.agora.model.apiModelName
 import com.newoether.agora.util.Constants
 import com.newoether.agora.viewmodel.ChatViewModel
@@ -521,7 +522,7 @@ private fun ProviderPage(providers: List<String>, selected: String?, onSelect: (
                     RadioButton(selected = selected == p, onClick = { onSelect(p) })
                     Spacer(Modifier.width(8.dp))
                     when {
-                        iconRes != 0 -> Icon(painterResource(iconRes), null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
+                        iconRes != 0 -> Icon(painterResource(iconRes), null, tint = providerIconTint(p, MaterialTheme.colorScheme.onSurface), modifier = Modifier.size(20.dp))
                         p == Constants.PROVIDER_LOCAL -> Icon(Icons.Filled.AutoAwesome, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
                         p == "Custom" -> Icon(Icons.Filled.Tune, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
                         else -> Icon(Icons.Filled.Cloud, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
@@ -569,7 +570,7 @@ private fun ApiKeyPage(
                 val iconRes = providerIcon(provider)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (iconRes != 0) {
-                        Icon(painterResource(iconRes), null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(36.dp))
+                        Icon(painterResource(iconRes), null, tint = providerIconTint(provider, MaterialTheme.colorScheme.onSurface), modifier = Modifier.size(36.dp))
                     } else {
                         Icon(Icons.Filled.Cloud, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(36.dp))
                     }
@@ -614,7 +615,7 @@ private fun ApiKeyPage(
                 val iconRes = providerIcon(provider)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (iconRes != 0) {
-                        Icon(painterResource(iconRes), null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(36.dp))
+                        Icon(painterResource(iconRes), null, tint = providerIconTint(provider, MaterialTheme.colorScheme.onSurface), modifier = Modifier.size(36.dp))
                     } else {
                         Icon(Icons.Filled.Cloud, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(36.dp))
                     }

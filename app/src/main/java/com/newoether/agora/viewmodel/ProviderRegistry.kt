@@ -78,11 +78,12 @@ class ProviderRegistry(
         name: String,
         baseUrl: String,
         protocol: String,
+        autoProvider: LlmProvider? = null,
     ): LlmProvider = when (protocol) {
+        "auto" -> autoProvider ?: CustomOpenAiProvider(name, baseUrl)
         "anthropic" -> AnthropicProvider(name = name, defaultBaseUrl = baseUrl)
         "gemini" -> GeminiProvider(name = name, defaultBaseUrl = baseUrl)
         "ollama" -> OllamaProvider(name = name, defaultBaseUrl = baseUrl)
-        // "auto" defaults to the OpenAI-compatible transport for custom endpoints.
         else -> CustomOpenAiProvider(name, baseUrl)
     }
 
@@ -351,7 +352,7 @@ class ProviderRegistry(
 
     /** Starts the long-lived collectors that keep the provider map and caches consistent. */
     fun launchSyncJobs() {
-        // Keep each custom provider's runtime implementation in sync with its transport.
+        // Keep every remote provider's runtime implementation in sync with its transport.
         scope.launch {
             combine(
                 settings.customProviders,
@@ -359,6 +360,16 @@ class ProviderRegistry(
                 settings.providerBaseUrls,
             ) { custom, protocols, baseUrls -> Triple(custom, protocols, baseUrls) }
                 .collect { (custom, protocols, baseUrls) ->
+                    builtInProviders.forEach { (name, provider) ->
+                        if (name != Constants.PROVIDER_LOCAL) {
+                            providers[name] = customProvider(
+                                name = name,
+                                baseUrl = baseUrls[name] ?: provider.defaultBaseUrl,
+                                protocol = protocols[name] ?: "auto",
+                                autoProvider = provider,
+                            )
+                        }
+                    }
                     providers.keys.filter { !isBuiltIn(it) }.forEach { providers.remove(it) }
                     custom.forEach { config ->
                         providers[config.name] = customProvider(

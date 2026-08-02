@@ -332,39 +332,33 @@ fun SettingsProviderDetailPage(
                 // Base URL (non-Local only)
                 if (!isLocal) {
                 val providerInstance = viewModel.getProviderInstance(providerName)
-                val defaultUrl = providerInstance.defaultBaseUrl
-                // A cleared override is stored as an empty string. Treat it as absent so
-                // built-in providers keep showing their default URL as the field value.
+                // Custom providers have no fallback endpoint: their saved URL is the value.
+                // Built-in defaults remain a placeholder so they cannot be mistaken for an
+                // edited override or be accidentally persisted on first composition.
+                val defaultUrl = if (isCustom) "" else providerInstance.defaultBaseUrl
                 val savedUrl = providerBaseUrls[providerName]?.takeIf { it.isNotBlank() }
 
-                // 使用保存的 URL，如果没有则使用默认 URL
-                val effectiveUrl = savedUrl ?: defaultUrl
+                // Only an explicit override belongs in the field. The default endpoint is
+                // deliberately rendered as placeholder text with the subdued placeholder color.
+                val baseUrlState = remember { TextFieldState() }
+                var syncedBaseUrl by remember { mutableStateOf<String?>(null) }
 
-                // Don't key remember on savedUrl — that causes TextFieldState to be recreated
-                // every time the debounced save writes back to DataStore, overwriting user input.
-                val baseUrlState = remember { TextFieldState(effectiveUrl) }
-
-                // Sync external changes (e.g. import) back into the text field.
+                // Sync external changes (e.g. import) without treating the state update as a
+                // user edit. This prevents the initial debounce from clearing custom URLs.
                 LaunchedEffect(savedUrl) {
-                    val ext = savedUrl ?: defaultUrl
+                    val ext = savedUrl.orEmpty()
                     val cur = baseUrlState.text.toString()
-                    if (ext.isNotEmpty() && ext != cur) {
+                    if (ext != cur) {
                         baseUrlState.edit { replace(0, length, ext) }
                     }
+                    syncedBaseUrl = ext
                 }
 
                 // Save user input with 500ms debounce.
-                // 只有当用户输入与默认值不同时才保存
                 LaunchedEffect(baseUrlState.text) {
                     delay(500)
                     val text = baseUrlState.text.toString()
-                    // 如果输入是默认 URL 或为空，清除保存的值（使用默认）
-                    if (text == defaultUrl || text.isEmpty()) {
-                        if (savedUrl != null) {
-                            viewModel.settings.setProviderBaseUrl(providerName, "")
-                        }
-                    } else {
-                        // 用户输入了自定义 URL，保存它
+                    if (text != syncedBaseUrl) {
                         viewModel.settings.setProviderBaseUrl(providerName, text)
                     }
                 }
@@ -385,7 +379,7 @@ fun SettingsProviderDetailPage(
                                             } else null,
                                             shape = RoundedCornerShape(16.dp),
                                             modifier = Modifier.fillMaxWidth(),
-                                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface)
                                         )
                                     }
                                 }
@@ -395,9 +389,9 @@ fun SettingsProviderDetailPage(
                 )
             }
 
-            // Built-in providers always use their native protocol. Custom endpoints can choose
-            // the transport that their API actually implements.
-            if (isCustom) {
+            // A provider may point at a compatible relay, so both built-in and custom remote
+            // providers can choose the transport that their endpoint actually implements.
+            if (!isLocal) {
                 val currentProtocol = providerProtocols[providerName] ?: "auto"
                 val protocolOptions = listOf(
                     "auto" to "自动（提供商默认）",
@@ -412,44 +406,41 @@ fun SettingsProviderDetailPage(
                 SettingsGroup(
                     title = "API 协议",
                     items = listOf {
-                        Box(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
                             SettingsItem(
                                 headlineContent = { Text(selectedProtocol.second) },
                                 trailingContent = {
                                     Icon(
-                                        Icons.Default.ExpandMore,
+                                        if (protocolMenuExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                                         contentDescription = null,
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 },
-                                modifier = Modifier.clickable { protocolMenuExpanded = true }
+                                modifier = Modifier.clickable { protocolMenuExpanded = !protocolMenuExpanded }
                             )
-                            DropdownMenu(
-                                expanded = protocolMenuExpanded,
-                                onDismissRequest = { protocolMenuExpanded = false },
-                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                                tonalElevation = 16.dp,
-                                shape = RoundedCornerShape(12.dp)
+                            AnimatedVisibility(
+                                visible = protocolMenuExpanded,
+                                enter = expandVertically(),
+                                exit = shrinkVertically()
                             ) {
-                                protocolOptions.forEach { (value, label) ->
-                                    val selected = currentProtocol == value
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                text = label,
-                                                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal
-                                            )
-                                        },
-                                        trailingIcon = {
-                                            if (selected) {
-                                                Icon(Icons.Default.Check, contentDescription = null)
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    protocolOptions.forEach { (value, label) ->
+                                        val selected = currentProtocol == value
+                                        SettingsItem(
+                                            headlineContent = {
+                                                Text(text = label, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal)
+                                            },
+                                            leadingContent = {
+                                                RadioButton(
+                                                    selected = selected,
+                                                    onClick = null
+                                                )
+                                            },
+                                            modifier = Modifier.clickable {
+                                                viewModel.settings.setProviderProtocol(providerName, value)
                                             }
-                                        },
-                                        onClick = {
-                                            viewModel.settings.setProviderProtocol(providerName, value)
-                                            protocolMenuExpanded = false
-                                        }
-                                    )
+                                        )
+                                    }
                                 }
                             }
                         }

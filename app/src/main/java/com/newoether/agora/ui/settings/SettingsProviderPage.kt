@@ -103,7 +103,7 @@ fun SettingsProviderPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                             )
                                         },
                                         leadingContent = {
-                                            val useBrandColor = activeLook && hasColorIcon(name)
+                                            val useBrandColor = hasColorIcon(name)
                                             val iconRes = providerIcon(name, useBrandColor)
                                             Icon(
                                                 painterResource(iconRes),
