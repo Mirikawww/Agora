@@ -36,7 +36,6 @@ import com.newoether.agora.R
 import com.newoether.agora.model.apiModelName
 import com.newoether.agora.ui.components.clearFocusOnTap
 import com.newoether.agora.ui.components.providerIcon
-import com.newoether.agora.ui.components.providerIconTint
 import com.newoether.agora.ui.theme.LocalIsMonochrome
 import com.newoether.agora.util.Constants
 import com.newoether.agora.util.noOpBringIntoView
@@ -185,11 +184,10 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                         } else null,
                         leadingContent = {
                             val tint = if (hasEnabledModels) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                            val providerTint = if (hasEnabledModels) MaterialTheme.colorScheme.onSurface else tint
                             when {
                                 !hasEnabledModels -> Icon(Icons.Default.Chat, null, tint = tint, modifier = Modifier.size(24.dp))
                                 isActiveLocal -> Icon(Icons.Default.AutoAwesome, null, tint = tint, modifier = Modifier.size(24.dp))
-                                activeIconRes != 0 -> Icon(painterResource(activeIconRes), null, tint = providerIconTint(providerName, providerTint), modifier = Modifier.size(24.dp))
+                                activeIconRes != 0 -> Icon(painterResource(activeIconRes), null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
                                 else -> Icon(Icons.Default.Chat, null, tint = tint, modifier = Modifier.size(24.dp))
                             }
                         },
@@ -265,7 +263,7 @@ fun SettingsModelsPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                             leadingContent = {
                                 when {
                                     isLocalHeader -> Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-                                    headerIconRes != 0 -> Icon(painterResource(headerIconRes), null, tint = providerIconTint(name, MaterialTheme.colorScheme.onSurface), modifier = Modifier.size(24.dp))
+                                    headerIconRes != 0 -> Icon(painterResource(headerIconRes), null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
                                     else -> Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                                 }
                             },

@@ -23,7 +23,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.newoether.agora.R
 import com.newoether.agora.ui.components.providerIcon
-import com.newoether.agora.ui.components.providerIconTint
 import com.newoether.agora.model.apiModelName
 import com.newoether.agora.util.Constants
 import com.newoether.agora.viewmodel.ChatViewModel
@@ -76,7 +75,7 @@ fun SettingsTranscriptionPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                 when {
                                     transcriptionModel == null -> Icon(Icons.Default.Chat, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
                                     isSelectedLocal -> Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-                                    selectedIconRes != 0 -> Icon(painterResource(selectedIconRes), null, tint = providerIconTint(selectedProvider.orEmpty(), MaterialTheme.colorScheme.onSurface), modifier = Modifier.size(24.dp))
+                                    selectedIconRes != 0 -> Icon(painterResource(selectedIconRes), null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
                                     else -> Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                                 }
                             },
@@ -113,7 +112,7 @@ fun SettingsTranscriptionPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                     leadingContent = {
                                         when {
                                             isLocal -> Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-                                            iconRes != 0 -> Icon(painterResource(iconRes), null, tint = providerIconTint(providerName, MaterialTheme.colorScheme.onSurface), modifier = Modifier.size(24.dp))
+                                            iconRes != 0 -> Icon(painterResource(iconRes), null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
                                             else -> Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                                         }
                                     },
